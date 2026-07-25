@@ -232,8 +232,11 @@ final class SettingsStore: ObservableObject {
         let keysChanged = profiles.count != previous.count
             || zip(profiles, previous).contains { $0.apiKey != $1.apiKey }
         if keysChanged {
-            pendingKeychainKeys = profiles.enumerated().reduce(into: [Int: String]()) {
-                $0[$1.offset] = $1.element.apiKey
+            // Merge into existing pending dict instead of replacing: rapid edits to both
+            // slots (within the debounce window) would otherwise lose the first slot's key.
+            if pendingKeychainKeys == nil { pendingKeychainKeys = [:] }
+            for (offset, profile) in profiles.enumerated() {
+                pendingKeychainKeys?[offset] = profile.apiKey
             }
             scheduleKeychainSave()
         }
@@ -267,7 +270,7 @@ final class SettingsStore: ObservableObject {
         guard let keys = pendingKeychainKeys else { return }
         keychainSaveTask = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 250_000_000)
+                try await Task.sleep(for: .milliseconds(250))
             } catch {
                 return
             }
