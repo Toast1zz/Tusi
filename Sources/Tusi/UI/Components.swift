@@ -89,6 +89,7 @@ struct BarIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityLabel(LocalizedStringKey(help))
         // `help` arrives as a plain, untranslated String from every call site — wrapping
         // it in LocalizedStringKey here (once) sends it through the same table lookup a
         // literal `.help("...")` would get, without repeating that at each call site.
@@ -225,6 +226,7 @@ struct CopyButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityLabel(copied ? "已复制" : "复制")
         .animation(.snappy(duration: 0.22), value: copied)
         .animation(.snappy(duration: 0.15), value: hovering)
     }

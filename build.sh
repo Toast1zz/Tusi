@@ -9,6 +9,24 @@ cd "$(dirname "$0")"
 
 ARCH_MODE="${TUSI_ARCH:-native}"
 
+# VERSION contains the short version and build number, separated by whitespace.
+# Environment variables override it for CI/nightly builds.
+DEFAULT_VERSION="1.0.0"
+DEFAULT_BUILD_NUMBER="1"
+if [[ -f VERSION ]]; then
+    read -r DEFAULT_VERSION DEFAULT_BUILD_NUMBER < VERSION
+fi
+VERSION="${TUSI_VERSION:-${DEFAULT_VERSION:-1.0.0}}"
+BUILD_NUMBER="${TUSI_BUILD_NUMBER:-${DEFAULT_BUILD_NUMBER:-1}}"
+if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+    echo "无效版本号: $VERSION" >&2
+    exit 1
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "无效构建号: $BUILD_NUMBER" >&2
+    exit 1
+fi
+
 APP="build/Tusi.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -22,18 +40,27 @@ case "$ARCH_MODE" in
     native)
         swift build -c release
         cp "$(swift build -c release --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
+        chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     arm64)
         swift build -c release --arch arm64
         cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
+        chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     universal)
+        arm64_slice="$(mktemp -t tusi-arm64)"
+        x86_64_slice="$(mktemp -t tusi-x86_64)"
+        cleanup_slices() {
+            rm -f "${arm64_slice:-}" "${x86_64_slice:-}"
+        }
+        trap cleanup_slices EXIT
+
         swift build -c release --arch arm64
-        cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" /tmp/tusi-arm64-slice
+        cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$arm64_slice"
         swift build -c release --arch x86_64
-        cp "$(swift build -c release --arch x86_64 --show-bin-path)/Tusi" /tmp/tusi-x86_64-slice
-        lipo -create /tmp/tusi-arm64-slice /tmp/tusi-x86_64-slice -output "$APP/Contents/MacOS/Tusi"
-        rm -f /tmp/tusi-arm64-slice /tmp/tusi-x86_64-slice
+        cp "$(swift build -c release --arch x86_64 --show-bin-path)/Tusi" "$x86_64_slice"
+        lipo -create "$arm64_slice" "$x86_64_slice" -output "$APP/Contents/MacOS/Tusi"
+        chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     *)
         echo "未知 TUSI_ARCH: $ARCH_MODE（可选 native / arm64 / universal）" >&2
@@ -50,7 +77,7 @@ for lproj in Sources/Tusi/Resources/*.lproj; do
     [ -d "$lproj" ] && cp -R "$lproj" "$APP/Contents/Resources/"
 done
 
-cat > "$APP/Contents/Info.plist" <<'EOF'
+cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,9 +102,9 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
         <string>en</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.4.2</string>
+    <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>11</string>
+    <string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -98,12 +125,13 @@ EOF
 # Anyone building this from a clone just falls through to ad-hoc: no certificate needed,
 # and the result works exactly as before.
 IDENTITY="${TUSI_SIGN_IDENTITY:-Spotoast Local Dev}"
-if security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
+AVAILABLE_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+if grep -F "\"$IDENTITY\"" >/dev/null <<< "$AVAILABLE_IDENTITIES"; then
     codesign --force --sign "$IDENTITY" "$APP"
-    echo "✓ 已用「$IDENTITY」签名"
+    echo "✓ 已用「${IDENTITY}」签名"
 else
     codesign --force --sign - "$APP"
-    echo "✓ 已用 ad-hoc 签名（未找到「$IDENTITY」证书）"
+    echo "✓ 已用 ad-hoc 签名（未找到「${IDENTITY}」证书）"
 fi
 
 echo "✓ 已生成 $APP"

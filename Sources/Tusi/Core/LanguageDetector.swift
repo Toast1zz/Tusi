@@ -53,6 +53,11 @@ enum Tone: String, CaseIterable, Identifiable {
 }
 
 enum LanguageDetector {
+    private static let recognizer: NLLanguageRecognizer = {
+        // NLLanguageRecognizer is designed for reuse — create once, reset() between uses.
+        NLLanguageRecognizer()
+    }()
+
     /// Decides the translation direction: Chinese input → English, anything else → Chinese.
     /// Returns the target language plus a short label for the detected source language.
     ///
@@ -78,7 +83,7 @@ enum LanguageDetector {
             return (.english, "中")
         }
 
-        let recognizer = NLLanguageRecognizer()
+        recognizer.reset()
         recognizer.processString(sample)
         guard let language = recognizer.dominantLanguage else { return (.chinese, "文A") }
         return (.chinese, shortLabel(for: language))

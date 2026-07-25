@@ -7,14 +7,14 @@ struct APIConfig: Equatable {
     var apiKey: String
     var model: String
     /// Comma/whitespace-separated backend names (e.g. "novita, together") sent as
-    /// OpenRouter's `provider.order` routing hint. Ignored by gateways that don't
-    /// understand the field, so it's safe to leave set when switching profiles.
+    /// OpenRouter's `provider.order` routing hint. It is sent only to OpenRouter hosts;
+    /// strict gateways must not receive this provider-specific top-level field.
     var providerOrder: String = ""
 
     var isUsable: Bool {
-        !baseURL.trimmingCharacters(in: .whitespaces).isEmpty
-            && !apiKey.isEmpty
-            && !model.trimmingCharacters(in: .whitespaces).isEmpty
+        !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Host of the base URL, used as a display name for the slot ("api.deepseek.com").
@@ -55,11 +55,22 @@ final class SettingsStore: ObservableObject {
     private let isPreview: Bool
 
     /// Exactly two slots: index 0 and index 1.
-    @Published var profiles: [APIProfile] = [APIProfile(), APIProfile()] {
+    @Published var profiles: [APIProfile] {
         didSet { persistProfiles(previous: oldValue) }
     }
 
-    /// Which slot is tried first. The other one is the fallback.
+    /// Set when a Keychain write failed. The pending snapshot is retained so a later
+    /// edit or application shutdown can retry it instead of silently losing the key.
+    @Published private(set) var keychainError: String?
+
+    private var keychainSaveTask: Task<Void, Never>?
+    private var pendingKeychainKeys: [Int: String]?
+    private var profileSaveTask: Task<Void, Never>?
+    private var pendingProfiles: [APIProfile]?
+
+    @Published var panelWidth: CGFloat = 470 {
+        didSet { defaults.set(Double(panelWidth), forKey: "panelWidth") }
+    }
     @Published var primaryIndex: Int {
         didSet { defaults.set(primaryIndex, forKey: "primaryIndex") }
     }
@@ -109,8 +120,8 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    init() {
-        isPreview = ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil
+    init(preview: Bool? = nil) {
+        isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         if isPreview {
             let suite = "com.tusi.preview.scratch"
             UserDefaults.standard.removePersistentDomain(forName: suite)
@@ -124,6 +135,10 @@ final class SettingsStore: ObservableObject {
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
+        let storedWidth = defaults.double(forKey: "panelWidth")
+        if storedWidth > 0 {
+            panelWidth = min(max(CGFloat(storedWidth), 470), 700)
+        }
         extraInstruction = defaults.string(forKey: "extraInstruction") ?? ""
         shortcuts = Self.loadShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -202,19 +217,88 @@ final class SettingsStore: ObservableObject {
 
     private func persistProfiles(previous: [APIProfile]) {
         guard !isPreview else { return }
-        for index in profiles.indices {
-            let profile = profiles[index]
+
+        let preferencesChanged = profiles.count != previous.count
+            || zip(profiles, previous).contains {
+                $0.baseURL != $1.baseURL
+                    || $0.model != $1.model
+                    || $0.providerOrder != $1.providerOrder
+            }
+        if preferencesChanged {
+            pendingProfiles = profiles
+            scheduleProfileSave()
+        }
+
+        let keysChanged = profiles.count != previous.count
+            || zip(profiles, previous).contains { $0.apiKey != $1.apiKey }
+        if keysChanged {
+            pendingKeychainKeys = profiles.enumerated().reduce(into: [Int: String]()) {
+                $0[$1.offset] = $1.element.apiKey
+            }
+            scheduleKeychainSave()
+        }
+    }
+
+    private func scheduleProfileSave() {
+        profileSaveTask?.cancel()
+        guard let profiles = pendingProfiles else { return }
+        profileSaveTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.saveProfiles(profiles)
+        }
+    }
+
+    private func saveProfiles(_ profiles: [APIProfile]) {
+        for (index, profile) in profiles.enumerated() {
             defaults.set(profile.baseURL, forKey: "baseURL.\(index)")
             defaults.set(profile.model, forKey: "model.\(index)")
             defaults.set(profile.providerOrder, forKey: "providerOrder.\(index)")
         }
+        pendingProfiles = nil
+    }
 
-        let keysChanged = zip(profiles, previous).contains { $0.apiKey != $1.apiKey }
-            || profiles.count != previous.count
-        guard keysChanged else { return }
-        Keychain.saveKeys(
-            profiles.enumerated().reduce(into: [Int: String]()) { $0[$1.offset] = $1.element.apiKey }
-        )
+    private func scheduleKeychainSave() {
+        keychainSaveTask?.cancel()
+        guard let keys = pendingKeychainKeys else { return }
+        keychainSaveTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.saveKeychain(keys)
+        }
+    }
+
+    private func saveKeychain(_ keys: [Int: String]) {
+        do {
+            try Keychain.saveKeys(keys)
+            pendingKeychainKeys = nil
+            keychainError = nil
+        } catch {
+            keychainError = error.localizedDescription
+        }
+    }
+
+    /// Flushes debounced profile and Keychain writes before the app exits.
+    func flushPendingSaves() {
+        profileSaveTask?.cancel()
+        profileSaveTask = nil
+        if let profiles = pendingProfiles {
+            saveProfiles(profiles)
+        }
+
+        keychainSaveTask?.cancel()
+        keychainSaveTask = nil
+        if let keys = pendingKeychainKeys {
+            saveKeychain(keys)
+        }
     }
 
     // MARK: - Resolution

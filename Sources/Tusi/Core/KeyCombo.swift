@@ -27,7 +27,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     var defaultCombo: KeyCombo {
         switch self {
         case .summon:
-            return KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags([.command, .shift]).rawValue, display: "⇧⌘Space")
+            return KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags([.option]).rawValue, display: "⌥Space")
         case .translate:
             return KeyCombo(keyCode: 36, modifiers: 0, display: "⏎")
         case .newline:

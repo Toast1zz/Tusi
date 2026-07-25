@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct ResultHeightKey: PreferenceKey {
@@ -31,8 +32,7 @@ struct TranslatorView: View {
     private var maxInputHeight: CGFloat { height(lines: 6) }
     private var maxResultHeight: CGFloat { height(lines: 14) }
 
-    // Panel width minus horizontal padding (16 × 2) and NSTextView's line fragment padding (5 × 2).
-    private let editorTextWidth: CGFloat = PanelController.panelWidth - 32 - 10
+    private var editorTextWidth: CGFloat { panelState.panelWidth - 32 - 10 }
 
     /// Measures the input's natural height with AppKit metrics so it matches
     /// TextEditor's actual NSTextView layout (SwiftUI Text metrics differ for CJK).
@@ -58,7 +58,15 @@ struct TranslatorView: View {
                 .padding(.top, 16)
                 .padding(.horizontal, 16)
 
-            if engine.hasResultSection {
+            if panelState.showHistory {
+                SoftDivider()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+
+                historyList
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+            } else if engine.hasResultSection {
                 SoftDivider()
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
@@ -74,7 +82,7 @@ struct TranslatorView: View {
             // the whole panel instead of the bottom row sitting 4pt closer to the edge.
             bottomBar
                 .padding(.horizontal, 16)
-                .padding(.top, engine.hasResultSection ? 12 : 10)
+                .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
                 .padding(.bottom, 10)
         }
         .overlay(alignment: .bottom) {
@@ -90,8 +98,15 @@ struct TranslatorView: View {
         }
         .animation(.snappy(duration: 0.25), value: engine.hasResultSection)
         .animation(.snappy(duration: 0.25), value: engine.toast)
-        .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { _ in
+        .animation(.snappy(duration: 0.25), value: panelState.showHistory)
+        .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
+            let selectAll = notification.object as? Bool == true
             inputFocused = true
+            guard selectAll else { return }
+            Task { @MainActor in
+                await Task.yield()
+                (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectAll(nil)
+            }
         }
         // Switching tone is a request to see the text in that tone, so re-run it —
         // but only when there's already a result the change would apply to.
@@ -166,6 +181,75 @@ struct TranslatorView: View {
 
     // MARK: - Bottom bar
 
+    // MARK: - History
+    private var historyViewportHeight: CGFloat {
+        guard !engine.history.isEmpty else { return 112 }
+        return min(320, 28 + CGFloat(engine.history.count) * 86)
+    }
+    private var historyList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Text("翻译历史")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(engine.history.count)")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.primary.opacity(0.055)))
+                Spacer(minLength: 4)
+                if !engine.history.isEmpty {
+                    Button("清空历史") {
+                        engine.clearHistory()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.bottom, 9)
+
+            if engine.history.isEmpty {
+                VStack(spacing: 7) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 18, weight: .light))
+                    Text("翻译历史为空")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 4) {
+                        ForEach(engine.history) { record in
+                            HistoryRecordRow(
+                                record: record,
+                                relativeTime: relativeTime(record.timestamp)
+                            ) {
+                                engine.restoreHistory(record)
+                                panelState.showHistory = false
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+        }
+        .frame(height: historyViewportHeight)
+    }
+
+
+    private func relativeTime(_ date: Date) -> String {
+        let interval = -date.timeIntervalSinceNow
+        switch interval {
+        case ..<60: return L("刚刚")
+        case ..<3600: return String(format: L("%d 分钟前"), Int(interval / 60))
+        case ..<86400: return String(format: L("%d 小时前"), Int(interval / 3600))
+        default: return String(format: L("%d 天前"), Int(interval / 86400))
+        }
+    }
+
     private var bottomBar: some View {
         HStack(spacing: 8) {
             DirectionChip(
@@ -201,6 +285,15 @@ struct TranslatorView: View {
             ) {
                 panelState.pinned.toggle()
             }
+            BarIconButton(
+                systemName: panelState.showHistory ? "clock.fill" : "clock",
+                isActive: panelState.showHistory,
+                help: panelState.showHistory ? "关闭历史" : "翻译历史"
+            ) {
+                withAnimation(.snappy(duration: 0.25)) {
+                    panelState.showHistory.toggle()
+                }
+            }
 
             BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
                 withAnimation(.snappy(duration: 0.25)) {
@@ -217,5 +310,47 @@ struct TranslatorView: View {
         }
         .animation(.snappy(duration: 0.22), value: engine.output.isEmpty)
         .animation(.snappy(duration: 0.22), value: engine.isTranslating)
+        .animation(.snappy(duration: 0.22), value: panelState.showHistory)
+    }
+}
+
+private struct HistoryRecordRow: View {
+    let record: TranslationEngine.Record
+    let relativeTime: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(record.input)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(record.output)
+                    .font(Theme.contentFont)
+                    .lineSpacing(3)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    Text(record.sourceLabel + " → " + (record.target == .english ? "EN" : "中"))
+                    Spacer(minLength: 4)
+                    Text(relativeTime)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.quaternary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(hovering ? Color.primary.opacity(0.065) : Color.primary.opacity(0.025))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.snappy(duration: 0.15), value: hovering)
     }
 }

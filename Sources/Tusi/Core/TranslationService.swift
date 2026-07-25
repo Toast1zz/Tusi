@@ -1,16 +1,22 @@
 import Foundation
 
-enum TranslationError: LocalizedError {
+enum TranslationError: LocalizedError, Equatable {
     case emptyKey
+    case emptyResponse
     case invalidURL
+    case insecureURL
     case http(Int, String)
 
     var errorDescription: String? {
         switch self {
         case .emptyKey:
             return L("还没有配置 API Key，请先在设置中填写")
+        case .emptyResponse:
+            return L("模型没有返回内容")
         case .invalidURL:
             return L("接口地址无效，请检查设置")
+        case .insecureURL:
+            return L("远程接口必须使用 HTTPS，本机地址可使用 HTTP")
         case .http(let code, let message):
             switch code {
             case 401: return L("API Key 无效或已过期 (401)")
@@ -29,38 +35,72 @@ enum TranslationService {
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
+        // A stream may legitimately take a while, but it should never be allowed to
+        // hang for URLSession's default multi-day resource timeout.
+        config.timeoutIntervalForResource = 300
         return URLSession(configuration: config)
     }()
 
-    private static func endpoint(for config: APIConfig) throws -> URL {
-        var base = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") { base.removeLast() }
-        // Users routinely paste the full completions URL into the base-URL field;
-        // strip it back down rather than doubling the path into a 404.
-        if base.hasSuffix("/chat/completions") {
-            base.removeLast("/chat/completions".count)
-        }
-        guard !base.isEmpty, let url = URL(string: base + "/chat/completions") else {
+    /// Builds the OpenAI-compatible chat-completions endpoint from the user's base URL.
+    /// Kept internal so the URL normalization and security rules can be unit-tested.
+    static func endpoint(for config: APIConfig) throws -> URL {
+        var raw = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { throw TranslationError.invalidURL }
+        if !raw.contains("://") { raw = "https://" + raw }
+
+        guard var components = URLComponents(string: raw),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil
+        else {
             throw TranslationError.invalidURL
         }
+
+        // API keys sent over remote HTTP are exposed on the network. Local Ollama-style
+        // endpoints remain supported, but all non-loopback endpoints must use HTTPS.
+        if scheme == "http" && !isLoopback(host) {
+            throw TranslationError.insecureURL
+        }
+
+        var path = components.path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        let completionsPath = "/chat/completions"
+        if path.hasSuffix(completionsPath) {
+            path.removeLast(completionsPath.count)
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        }
+        components.path = (path == "/" ? "" : path) + completionsPath
+        guard let url = components.url else { throw TranslationError.invalidURL }
         return url
     }
 
+    private static func isLoopback(_ host: String) -> Bool {
+        let normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return normalized == "localhost" || normalized == "127.0.0.1" || normalized == "::1"
+    }
+
     private static func makeRequest(config: APIConfig, body: [String: Any]) throws -> URLRequest {
-        guard !config.apiKey.isEmpty else { throw TranslationError.emptyKey }
+        let apiKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { throw TranslationError.emptyKey }
         var request = URLRequest(url: try endpoint(for: config))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: applyProviderOrder(body, config: config))
         return request
     }
 
-    /// Adds OpenRouter's `provider.order` routing hint when the profile asked for one.
-    /// Gateways that don't recognize the `provider` field simply ignore it.
+    /// Adds OpenRouter's `provider.order` routing hint only where the field is known to
+    /// be accepted. Strict OpenAI-compatible gateways may reject unknown top-level keys.
     private static func applyProviderOrder(_ body: [String: Any], config: APIConfig) -> [String: Any] {
         let order = config.providerOrderList
-        guard !order.isEmpty else { return body }
+        let host = config.displayHost.lowercased()
+        let isOpenRouter = host == "openrouter.ai" || host.hasSuffix(".openrouter.ai")
+        guard !order.isEmpty, isOpenRouter else { return body }
         var body = body
         body["provider"] = ["order": order]
         return body
@@ -89,7 +129,7 @@ enum TranslationService {
             let task = Task {
                 do {
                     let body: [String: Any] = [
-                        "model": config.model,
+                        "model": config.model.trimmingCharacters(in: .whitespacesAndNewlines),
                         "stream": true,
                         // Low temperature: translation wants faithful, repeatable output,
                         // not creative variation. 1.0 made the same input drift between runs.
@@ -115,8 +155,9 @@ enum TranslationService {
                     }
 
                     let decoder = JSONDecoder()
-                    for try await line in bytes.lines {
+                    for try await rawLine in bytes.lines {
                         try Task.checkCancellation()
+                        let line = rawLine.trimmingCharacters(in: .whitespaces)
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if payload == "[DONE]" { break }
@@ -139,12 +180,13 @@ enum TranslationService {
     /// Sends a minimal request to verify base URL + key + model. Returns latency in ms.
     static func testConnection(config: APIConfig) async throws -> Int {
         let body: [String: Any] = [
-            "model": config.model,
+            "model": config.model.trimmingCharacters(in: .whitespacesAndNewlines),
             "stream": false,
             "max_tokens": 1,
             "messages": [["role": "user", "content": "hi"]],
         ]
-        let request = try makeRequest(config: config, body: body)
+        var request = try makeRequest(config: config, body: body)
+        request.timeoutInterval = 15
         let start = Date()
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {

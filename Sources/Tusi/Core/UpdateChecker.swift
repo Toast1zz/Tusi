@@ -27,6 +27,9 @@ final class UpdateChecker: ObservableObject {
     /// status-bar menu) can show it even after `state` is reset by a later manual check.
     @Published private(set) var pendingUpdate: (version: String, url: URL)?
 
+    private var checkTask: Task<Void, Never>?
+    private var activeCheckID = UUID()
+
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
@@ -45,12 +48,25 @@ final class UpdateChecker: ObservableObject {
                 return
             }
         }
+
+        checkTask?.cancel()
+        let checkID = UUID()
+        activeCheckID = checkID
         state = .checking
-        Task { await performCheck(manual: manual) }
+        checkTask = Task { [weak self] in
+            await self?.performCheck(id: checkID)
+        }
     }
 
-    private func performCheck(manual: Bool) async {
-        defer { defaults.set(Date(), forKey: lastCheckKey) }
+    private func performCheck(id: UUID) async {
+        defer {
+            if activeCheckID == id {
+                defaults.set(Date(), forKey: lastCheckKey)
+                checkTask = nil
+            }
+        }
+
+        guard !Task.isCancelled, activeCheckID == id else { return }
 
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
             state = .failed
@@ -62,6 +78,7 @@ final class UpdateChecker: ObservableObject {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled, activeCheckID == id else { return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   let release = try? JSONDecoder().decode(Release.self, from: data) else {
                 state = .failed
@@ -76,9 +93,18 @@ final class UpdateChecker: ObservableObject {
                 pendingUpdate = nil
                 state = .upToDate
             }
+        } catch is CancellationError {
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch {
+            guard activeCheckID == id else { return }
             state = .failed
         }
+    }
+
+    deinit {
+        checkTask?.cancel()
     }
 
     /// True when `candidate` is a strictly higher semantic version than `current`.

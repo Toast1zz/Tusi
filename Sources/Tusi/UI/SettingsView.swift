@@ -7,8 +7,19 @@ struct SettingsView: View {
 
     @State private var showKey = false
     @State private var testStates: [Int: TestState] = [:]
+    @State private var testTasks: [Int: Task<Void, Never>] = [:]
+    @State private var testGenerations: [Int: Int] = [:]
     @State private var shortcutsRowHovering = false
-    @State private var showAdvanced = false
+    @State private var advancedExpandedOverride: [Int: Bool] = [:]
+
+    private enum FocusedField: Hashable {
+        case baseURL
+        case model
+        case providerOrder
+        case apiKey
+    }
+
+    @FocusState private var focusedField: FocusedField?
 
     enum TestState: Equatable {
         case idle
@@ -33,15 +44,19 @@ struct SettingsView: View {
             slotTabs
 
             VStack(alignment: .leading, spacing: 12) {
-                labeledField("接口地址") {
+                labeledField("接口地址", focused: focusedField == .baseURL) {
                     TextField("https://api.example.com/v1", text: $settings.profiles[editingIndex].baseURL)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
+                        .focused($focusedField, equals: .baseURL)
+                        .accessibilityLabel("接口地址")
                 }
-                labeledField("模型") {
+                labeledField("模型", focused: focusedField == .model) {
                     TextField("model-name", text: $settings.profiles[editingIndex].model)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
+                        .focused($focusedField, equals: .model)
+                        .accessibilityLabel("模型")
                 }
                 advancedSection
                 labeledField("API Key") {
@@ -73,7 +88,17 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .help(showKey ? "隐藏" : "显示")
+                        .accessibilityLabel(showKey ? "隐藏" : "显示")
                     }
+                    .focused($focusedField, equals: .apiKey)
+                    .accessibilityLabel("API Key")
+                }
+
+                if let error = settings.keychainError {
+                    Text(error)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -114,13 +139,24 @@ struct SettingsView: View {
             }
         }
         .padding(18)
-        .onChange(of: settings.profiles) { _ in testStates[editingIndex] = .idle }
-        .onChange(of: editingIndex) { _ in showKey = false }
+        .onChange(of: settings.profiles) { _ in
+            testTasks.values.forEach { $0.cancel() }
+            testTasks.removeAll()
+            testStates.removeAll()
+            testGenerations.removeAll()
+        }
+        .onChange(of: editingIndex) { _ in
+            showKey = false
+            testTasks.values.forEach { $0.cancel() }
+            testTasks.removeAll()
+        }
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
         .onDisappear {
             panelState.recordingShortcut = nil
             panelState.shortcutError = nil
+            testTasks.values.forEach { $0.cancel() }
+            testTasks.removeAll()
         }
     }
 
@@ -229,12 +265,15 @@ struct SettingsView: View {
     // MARK: - Toggles
 
     /// Label left, switch right — so every switch lines up in one column regardless of how
-    /// long its label is.
+    /// long its label is. Label is also tappable for accessibility.
     private func settingToggle(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         HStack {
             Text(label)
+                .onTapGesture { isOn.wrappedValue.toggle() }
             Spacer(minLength: 8)
-            Toggle("", isOn: isOn).labelsHidden()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .accessibilityLabel(label)
         }
     }
 
@@ -335,16 +374,31 @@ struct SettingsView: View {
 
     // MARK: - Advanced
 
+    /// Per-profile: each slot defaults to expanded if it already holds a routing value
+    /// (so a configured setting isn't hidden on first sight), but a manual toggle always
+    /// wins after that — collapsing one slot's chevron used to be a no-op whenever that
+    /// slot had a value, which read as a fake switch.
+    private var showAdvanced: Bool {
+        get {
+            advancedExpandedOverride[editingIndex]
+                ?? !settings.profiles[editingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        nonmutating set { advancedExpandedOverride[editingIndex] = newValue }
+    }
+
     /// Provider routing only matters for a handful of gateways and is empty for almost
     /// everyone — collapsed by default so it doesn't cost every user a field + two lines
-    /// of explanation. Stays open on its own once it actually holds a value, so a
-    /// configured setting is never hidden behind a click.
+    /// of explanation.
     private var advancedSection: some View {
-        let hasValue = !settings.profiles[editingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
-        let expanded = showAdvanced || hasValue
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             Button {
-                showAdvanced.toggle()
+                // Only the chevron animates here — the field below deliberately doesn't
+                // (see its comment): cross-fading it fights the panel's own window-resize
+                // animation, which runs on AppKit's timeline, not SwiftUI's, and the two
+                // easing curves never quite track each other. Letting the field pop in
+                // instantly and having the window's resize be the only motion sidesteps
+                // that mismatch entirely.
+                withAnimation(.snappy(duration: 0.2)) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
@@ -353,22 +407,27 @@ struct SettingsView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .rotationEffect(.degrees(showAdvanced ? 90 : 0))
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if expanded {
-                labeledField("供应商路由（可选）", hint: "仅 OpenRouter 等支持 provider 参数的网关生效，如 novita，多个用逗号分隔") {
+            if showAdvanced {
+                labeledField(
+                    "供应商路由（可选）",
+                    hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔",
+                    focused: focusedField == .providerOrder
+                ) {
                     TextField("novita, together", text: $settings.profiles[editingIndex].providerOrder)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
+                        .focused($focusedField, equals: .providerOrder)
+                        .accessibilityLabel("供应商路由（可选）")
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.identity)
             }
         }
-        .animation(.snappy(duration: 0.2), value: expanded)
     }
 
     // MARK: - Fields
@@ -379,6 +438,7 @@ struct SettingsView: View {
     private func labeledField(
         _ label: String,
         hint: String? = nil,
+        focused: Bool = false,
         @ViewBuilder trailing: () -> some View = { EmptyView() },
         @ViewBuilder content: () -> some View
     ) -> some View {
@@ -399,7 +459,10 @@ struct SettingsView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                        .strokeBorder(
+                            focused ? Theme.accent.opacity(0.75) : Color.primary.opacity(0.07),
+                            lineWidth: focused ? 1.5 : 1
+                        )
                 )
             if let hint {
                 Text(LocalizedStringKey(hint))
@@ -474,15 +537,25 @@ struct SettingsView: View {
 
     private func runTest() {
         let index = editingIndex
+        testTasks[index]?.cancel()
+        let generation = (testGenerations[index] ?? 0) + 1
+        testGenerations[index] = generation
         testStates[index] = .testing
         let config = settings.profiles[index].config
-        Task {
+
+        let task = Task {
             do {
                 let ms = try await TranslationService.testConnection(config: config)
+                guard !Task.isCancelled, testGenerations[index] == generation else { return }
                 testStates[index] = .success(ms)
             } catch {
+                guard !Task.isCancelled, testGenerations[index] == generation else { return }
                 testStates[index] = .failure(error.localizedDescription)
             }
+            if testGenerations[index] == generation {
+                testTasks[index] = nil
+            }
         }
+        testTasks[index] = task
     }
 }

@@ -14,6 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let updateChecker = UpdateChecker()
     lazy var engine = TranslationEngine(settings: settings)
 
+    func applicationWillTerminate(_ notification: Notification) {
+        settings.flushPendingSaves()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         setupStatusItem()
@@ -79,8 +83,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ]
                 settings.autoCopy = true
                 panelState.showSettings = false
+                engine.$history
+                    .dropFirst()
+                    .first()
+                    .sink { [weak self] records in
+                        let receipt = "TUSI_HISTORY_COUNT=\(records.count)\n"
+                        FileHandle.standardError.write(Data(receipt.utf8))
+                        self?.panelState.showHistory = true
+                    }
+                    .store(in: &cancellables)
                 engine.input = "测试引号"
                 engine.translate()
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    guard let self else { return }
+                    let receipt = "TUSI_STATE=\(self.engine.state) OUTPUT=\(self.engine.output) HISTORY=\(self.engine.history.count)\n"
+                    FileHandle.standardError.write(Data(receipt.utf8))
+                }
             case "corners":
                 // Opens settings on a delay so a screenshot burst can catch the
                 // transition mid-flight; pair with TUSI_SLOWMO to stretch it out.

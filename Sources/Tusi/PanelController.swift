@@ -8,12 +8,11 @@ final class FloatingPanel: NSPanel {
 }
 
 @MainActor
-final class PanelController {
+final class PanelController: NSObject, NSWindowDelegate {
     // 424 was sized for the Chinese bottom bar; English tone labels (Casual/Standard/
     // Formal vs 口语/标准/正式) measured 428.5pt of *content* alone in that row, which
     // overflows 424 once its 16pt side margins are added. 470 clears that with room
     // to spare in both languages.
-    static let panelWidth: CGFloat = 470
 
     private let panel: FloatingPanel
     private let engine: TranslationEngine
@@ -34,12 +33,21 @@ final class PanelController {
         self.updateChecker = updateChecker
         self.statusItem = statusItem
 
+        let width = min(max(settings.panelWidth, 470), 700)
         panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 160),
-            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView, .resizable],
             backing: .buffered,
             defer: false
         )
+
+        super.init()
+
+        settings.panelWidth = width
+        panelState.panelWidth = width
+        panel.delegate = self
+        panel.minSize = NSSize(width: 470, height: 100)
+        panel.maxSize = NSSize(width: 700, height: 2000)
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -72,6 +80,14 @@ final class PanelController {
         installKeyMonitor()
         installResignObserver()
     }
+    deinit {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        if let resignObserver {
+            NotificationCenter.default.removeObserver(resignObserver)
+        }
+    }
 
     // MARK: - Show / hide
 
@@ -96,18 +112,12 @@ final class PanelController {
                 panelState.showSettings = true
             }
         }
-        // Reopening on a finished translation means the last text is spent — preselect it
-        // so the next keystroke starts a new one, without destroying an unfinished draft.
-        let selectAll = engine.hasFinishedTranslation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            NotificationCenter.default.post(name: .tusiFocusInput, object: nil)
-            guard selectAll else { return }
-            // One more hop: the focus above lands via SwiftUI's @FocusState, which
-            // only takes effect on the next runloop pass.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                (self.panel.firstResponder as? NSTextView)?.selectAll(nil)
-            }
-        }
+        // Reopening on a finished translation means the last text is spent. The view
+        // applies focus first, then selects on the next actor turn — no timing constants.
+        NotificationCenter.default.post(
+            name: .tusiFocusInput,
+            object: engine.hasFinishedTranslation
+        )
     }
 
     func hide() {
@@ -120,7 +130,7 @@ final class PanelController {
     }
 
     private func position() {
-        let width = Self.panelWidth
+        let width = settings.panelWidth
         let height = desiredHeight
 
         // Show on the screen the user is actually on (where the mouse is),
@@ -182,6 +192,13 @@ final class PanelController {
                 }
                 self.captureShortcut(for: action, event: event, flags: flags)
                 return nil
+            }
+
+            // While an input method is composing marked text, Return commits the
+            // candidate and Esc cancels it. Those events must reach NSTextView before
+            // panel shortcuts get a chance to consume them.
+            if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true {
+                return event
             }
 
             // Close / back — configurable (default Esc). Backs out one level at a time:
@@ -278,5 +295,21 @@ final class PanelController {
                 self.hide()
             }
         }
+    }
+
+    // MARK: - Panel resize
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        NSSize(
+            width: min(max(frameSize.width, 470), 700),
+            height: desiredHeight
+        )
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        let width = min(max(panel.frame.width, 470), 700)
+        guard abs(width - panelState.panelWidth) > 0.5 else { return }
+        panelState.panelWidth = width
+        settings.panelWidth = width
     }
 }

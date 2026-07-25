@@ -29,7 +29,7 @@
 "模型" = "Model";
 "高级选项" = "Advanced";
 "供应商路由（可选）" = "Provider routing (optional)";
-"仅 OpenRouter 等支持 provider 参数的网关生效，如 novita，多个用逗号分隔" = "Only takes effect on gateways that support the provider parameter (e.g. OpenRouter), like novita. Separate multiple with commas.";
+"仅 OpenRouter 支持，多个供应商名称用逗号分隔" = "Only supported by OpenRouter; separate multiple provider names with commas.";
 "隐藏" = "Hide";
 "显示" = "Show";
 "附加要求（可选）" = "Additional instructions (optional)";
@@ -94,10 +94,20 @@
 
 /* MARK: - TranslationService errors */
 "还没有配置 API Key，请先在设置中填写" = "No API key set yet — add one in Settings";
+"钥匙串保存失败（错误码 %d）" = "Couldn't save to Keychain (error %d)";
 "接口地址无效，请检查设置" = "Invalid base URL — check Settings";
+"远程接口必须使用 HTTPS，本机地址可使用 HTTP" = "Remote endpoints must use HTTPS; HTTP is allowed for local addresses";
 "API Key 无效或已过期 (401)" = "Invalid or expired API key (401)";
 "账户余额不足 (402)" = "Insufficient account balance (402)";
 "请求过于频繁，稍后再试 (429)" = "Too many requests — try again later (429)";
 "请求失败 (HTTP %d)" = "Request failed (HTTP %d)";
 "无效响应" = "Invalid response";
 "接口地址返回的是网页而不是 API 数据，请检查接口地址是否正确" = "The base URL returned a web page instead of API data — check that it's correct";
+"翻译历史" = "Translation History";
+"关闭历史" = "Close History";
+"刚刚" = "Just now";
+"%d 分钟前" = "%d min ago";
+"%d 小时前" = "%d hr ago";
+"%d 天前" = "%d day ago";
+"清空历史" = "Clear History";
+"翻译历史为空" = "No translation history";

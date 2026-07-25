@@ -55,9 +55,13 @@ There are two profiles, primary and backup. With failover enabled, a primary req
 ```bash
 ./build.sh                        # builds build/Tusi.app for the current arch
 TUSI_ARCH=universal ./build.sh    # universal binary (arm64 + Intel)
+TUSI_VERSION=1.4.3 TUSI_BUILD_NUMBER=12 ./build.sh
 ```
 
-Pure Swift + SwiftUI + AppKit, no third-party dependencies. `build.sh` signs with a local code-signing identity when one is available (so Keychain access survives rebuilds), and falls back to ad-hoc signing otherwise.
+The default version/build number comes from `VERSION`; CI or release scripts can override
+it with `TUSI_VERSION` and `TUSI_BUILD_NUMBER`.
+
+Pure Swift + SwiftUI + AppKit, no third-party dependencies. `build.sh` signs with a local code-signing identity when one is available (so Keychain access survives rebuilds), and falls back to ad-hoc signing otherwise. For public distribution, use a Developer ID identity and notarize the resulting app.
 
 ## License
 

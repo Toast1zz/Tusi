@@ -11,14 +11,33 @@ final class TranslationEngine: ObservableObject {
         case failed(String)
     }
 
+    struct Record: Identifiable, Equatable {
+        let id = UUID()
+        let input: String
+        let output: String
+        let sourceLabel: String
+        let target: TargetLanguage
+        let tone: Tone
+        let timestamp = Date()
+    }
+
+    typealias Streamer = (
+        _ text: String,
+        _ target: TargetLanguage,
+        _ tone: Tone,
+        _ extra: String,
+        _ config: APIConfig
+    ) -> AsyncThrowingStream<String, Error>
+
     @Published var input = "" {
         didSet {
+            guard input != oldValue else { return }
             updateDirection()
-            // Deleting the whole draft — not just editing it — drops its translation too;
-            // otherwise the output no longer corresponds to anything in the input box.
-            if input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                clearResult()
-            }
+            // Any edit makes the previous result stale. Clearing it also cancels a
+            // request for the old text, while the revision check below protects against
+            // a final network callback that races with that cancellation.
+            inputRevision &+= 1
+            clearResult()
         }
     }
     @Published private(set) var output = ""
@@ -38,20 +57,39 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var toast: Toast?
 
     private let settings: SettingsStore
+    private let stream: Streamer
     private var translationTask: Task<Void, Never>?
+    private var inputRevision: UInt = 0
     private var toastTask: Task<Void, Never>?
     private var copyResetTask: Task<Void, Never>?
 
-    init(settings: SettingsStore) {
+    /// Ring buffer of completed translations (newest first).
+    @Published private(set) var history: [Record] = []
+    private let historyCapacity = 50
+
+    init(
+        settings: SettingsStore,
+        stream: @escaping Streamer = { text, target, tone, extra, config in
+            TranslationService.stream(
+                text: text,
+                target: target,
+                tone: tone,
+                extra: extra,
+                config: config
+            )
+        }
+    ) {
         self.settings = settings
+        self.stream = stream
     }
 
     var isTranslating: Bool { state == .translating }
 
     /// Model shown in the bottom bar: always the primary slot's model.
-    /// The bar never reveals which slot actually served — that stays behind the scenes.
     var activeModel: String {
-        let model = settings.profiles[settings.primaryIndex].model.trimmingCharacters(in: .whitespaces)
+        let idx = settings.primaryIndex
+        guard settings.profiles.indices.contains(idx) else { return L("未配置模型") }
+        let model = settings.profiles[idx].model.trimmingCharacters(in: .whitespaces)
         return model.isEmpty ? L("未配置模型") : model
     }
 
@@ -74,20 +112,23 @@ final class TranslationEngine: ObservableObject {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        translationTask?.cancel()
+        translationTask = nil
+        output = ""
+        copied = false
+        toast = nil
+
         let chain = settings.resolvedChain
         guard !chain.isEmpty else {
             state = .failed(TranslationError.emptyKey.localizedDescription)
             return
         }
 
-        translationTask?.cancel()
-        output = ""
-        copied = false
-        toast = nil
         state = .translating
         let target = target
         let tone = settings.tone
         let extra = settings.extraInstruction
+        let requestRevision = inputRevision
 
         translationTask = Task { [weak self] in
             guard let self else { return }
@@ -95,14 +136,26 @@ final class TranslationEngine: ObservableObject {
 
             for (position, link) in chain.enumerated() {
                 do {
-                    for try await piece in TranslationService.stream(text: text, target: target, tone: tone, extra: extra, config: link.config) {
+                    for try await piece in stream(text, target, tone, extra, link.config) {
+                        guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                         self.output += piece
                     }
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+
+                    // A successful HTTP response with no usable content is still a
+                    // failed attempt and should be eligible for backup failover.
+                    guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        self.output = ""
+                        lastError = TranslationError.emptyResponse
+                        guard position < chain.count - 1 else { break }
+                        continue
+                    }
+
                     // Normalize punctuation once the full text is in — the conversion
                     // needs to see the character after a quote to place it.
                     self.output = SmartQuotes.apply(to: self.output)
-                    self.state = self.output.isEmpty ? .failed(L("模型没有返回内容")) : .done
+                    self.state = .done
+                    self.pushHistory(input: text, target: target, tone: tone)
                     if self.settings.autoCopy, !self.output.isEmpty {
                         self.copyToPasteboard()
                         self.flashCopied(auto: true)
@@ -118,15 +171,23 @@ final class TranslationEngine: ObservableObject {
                 } catch let urlError as URLError where urlError.code == .cancelled {
                     return
                 } catch {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                     lastError = error
                     // Only fall back before any token landed — retrying mid-stream
                     // would splice two different translations together.
-                    guard self.output.isEmpty, position < chain.count - 1 else { break }
+                    if self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       position < chain.count - 1 {
+                        self.output = ""
+                        continue
+                    }
+                    break
                 }
             }
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+            // Partial output is not presented as a complete translation and must not
+            // remain available through the copy button after a failed stream.
+            self.output = ""
             let message = lastError?.localizedDescription ?? L("翻译失败")
             self.state = .failed(chain.count > 1 ? String(format: L("主用和备用都失败了 · %@"), message) : message)
         }
@@ -139,9 +200,13 @@ final class TranslationEngine: ObservableObject {
     }
 
     private func clearResult() {
-        guard state != .idle || !output.isEmpty else { return }
+        guard state != .idle || !output.isEmpty || translationTask != nil else { return }
         translationTask?.cancel()
         translationTask = nil
+        toastTask?.cancel()
+        toastTask = nil
+        copyResetTask?.cancel()
+        copyResetTask = nil
         output = ""
         copied = false
         toast = nil
@@ -190,4 +255,32 @@ final class TranslationEngine: ObservableObject {
             self?.copied = false
         }
     }
+
+    /// Appends one completed request to the bounded, newest-first history.
+    private func pushHistory(input: String, target: TargetLanguage, tone: Tone) {
+        let record = Record(
+            input: input,
+            output: output,
+            sourceLabel: sourceLabel,
+            target: target,
+            tone: tone
+        )
+        // Publish the bounded snapshot as one atomic observable change.
+        history = Array(([record] + history).prefix(historyCapacity))
+    }
+
+    /// Restores a history record into the input/output area.
+    func restoreHistory(_ record: Record) {
+        input = record.input
+        output = record.output
+        sourceLabel = record.sourceLabel
+        target = record.target
+        state = .done
+    }
+
+    /// Clears all translation history.
+    func clearHistory() {
+        history = []
+    }
+
 }

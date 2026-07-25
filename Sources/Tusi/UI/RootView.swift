@@ -40,7 +40,7 @@ struct RootView: View {
                     ))
             }
         }
-        .frame(width: PanelController.panelWidth, alignment: .top)
+        .frame(width: panelState.panelWidth, alignment: .top)
         .background(
             GeometryReader { proxy in
                 Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
