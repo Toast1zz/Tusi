@@ -41,9 +41,6 @@
 "自动检查更新" = "Check for updates automatically";
 "多语言模式" = "Multi-language mode";
 "目标语言" = "Target language";
-"翻译上下文（轮次）" = "Context turns";
-"把最近几轮对话一起发给模型作为上下文，0 表示不携带" = "Send recent conversation turns to the model as context; 0 disables it";
-"%lld 轮" = "%lld turns";
 
 /* MARK: - Update checking */
 "检查更新" = "Check for Updates";

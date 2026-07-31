@@ -134,21 +134,12 @@ enum TranslationService {
         return prompt
     }
 
-    static func stream(text: String, target: TranslationLanguage, tone: Tone, extra: String, config: APIConfig, context: [TranslationEngine.ContextMessage] = []) -> AsyncThrowingStream<String, Error> {
+    static func stream(text: String, target: TranslationLanguage, tone: Tone, extra: String, config: APIConfig) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     var messages: [[String: Any]] = []
                     messages.append(["role": "system", "content": systemPrompt(for: target, tone: tone, extra: extra)])
-                    for msg in context {
-                        // Prior user turns get the same marker treatment as the current
-                        // message: they are also data to translate, not conversation
-                        // directed at the model.
-                        let content = msg.role == "user"
-                            ? "<translate>\n\(msg.content)\n</translate>"
-                            : msg.content
-                        messages.append(["role": msg.role, "content": content])
-                    }
                     messages.append(["role": "user", "content": "<translate>\n\(text)\n</translate>"])
                     let body: [String: Any] = [
                         "model": config.model.trimmingCharacters(in: .whitespacesAndNewlines),

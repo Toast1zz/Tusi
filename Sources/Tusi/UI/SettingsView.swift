@@ -116,15 +116,6 @@ struct SettingsView: View {
 
             SoftDivider()
 
-            labeledField("翻译上下文（轮次）", hint: "把最近几轮对话一起发给模型作为上下文，0 表示不携带") {
-                Stepper(value: $settings.contextTurns, in: 0...6) {
-                    Text("\(settings.contextTurns) 轮")
-                }
-                .font(.system(size: 12.5))
-            }
-
-            SoftDivider()
-
             shortcutsNavRow
 
             VStack(alignment: .leading, spacing: 10) {

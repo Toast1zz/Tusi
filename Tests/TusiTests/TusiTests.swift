@@ -141,39 +141,6 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.target, .japanese)
     }
 
-    func testConversationContextOrderIsUserThenAssistant() async throws {
-        let settings = SettingsStore(preview: true)
-        settings.autoCopy = false
-        settings.contextTurns = 1
-        settings.profiles[0] = APIProfile(
-            baseURL: "https://example.com/v1",
-            apiKey: "test-key",
-            model: "test-model"
-        )
-
-        var captured: [[TranslationEngine.ContextMessage]] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _, context in
-            captured.append(context)
-            return AsyncThrowingStream { continuation in
-                continuation.yield("译文")
-                continuation.finish()
-            }
-        }
-
-        engine.input = "第一句"
-        engine.translate()
-        try await waitUntilDone(engine)
-        engine.input = "第二句"
-        engine.translate()
-        try await waitUntilDone(engine)
-
-        XCTAssertEqual(captured.count, 2)
-        // The second request carries the first turn as context, newest-first:
-        // the user message must precede the assistant reply.
-        XCTAssertEqual(captured[1].map(\.role), ["user", "assistant"])
-        XCTAssertEqual(captured[1].map(\.content), ["第一句", "译文"])
-    }
-
     func testLoopback127RangeAllowsHTTP() throws {
         let config = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "key", model: "model")
         XCTAssertEqual(
@@ -219,7 +186,7 @@ final class TusiTests: XCTestCase {
         )
 
         var responses = ["First result", "Second result"]
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
             let response = responses.removeFirst()
             return AsyncThrowingStream { continuation in
                 continuation.yield(response)

@@ -92,10 +92,6 @@ final class SettingsStore: ObservableObject {
     @Published var multiLanguageMode: Bool {
         didSet { defaults.set(multiLanguageMode, forKey: "multiLanguageMode") }
     }
-    /// Completed conversation turns sent back to the model as context; 0 disables it.
-    @Published var contextTurns: Int {
-        didSet { defaults.set(contextTurns, forKey: "contextTurns") }
-    }
     /// All five rebindable shortcuts. Missing entries fall back to the action's default.
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
         didSet { persistShortcuts() }
@@ -146,7 +142,6 @@ final class SettingsStore: ObservableObject {
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
         multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
-        contextTurns = defaults.object(forKey: "contextTurns") as? Int ?? 0
         let storedWidth = defaults.double(forKey: "panelWidth")
         if storedWidth > 0 {
             panelWidth = min(max(CGFloat(storedWidth), 470), 700)

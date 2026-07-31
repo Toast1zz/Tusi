@@ -2,6 +2,12 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-07-31
+
+### Removed
+
+- Conversation context turns setting: translations are single-turn requests again, no history is sent to the model
+
 ## [1.6.0] - 2026-07-31
 
 ### Added
@@ -66,6 +72,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.6.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.1
 [1.6.0]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0
 [1.6.0-beta.1]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0-beta.1
 [1.5.1]: https://github.com/neko1chau/Tusi/releases/tag/1.5.1

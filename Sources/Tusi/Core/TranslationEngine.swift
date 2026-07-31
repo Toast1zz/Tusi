@@ -11,12 +11,6 @@ final class TranslationEngine: ObservableObject {
         case failed(String)
     }
 
-    /// A single conversation turn passed along with the API request.
-    struct ContextMessage: Codable, Equatable {
-        let role: String
-        let content: String
-    }
-
     struct Record: Identifiable, Equatable, Codable {
         let id: UUID
         let input: String
@@ -33,8 +27,7 @@ final class TranslationEngine: ObservableObject {
         _ target: TranslationLanguage,
         _ tone: Tone,
         _ extra: String,
-        _ config: APIConfig,
-        _ context: [ContextMessage]
+        _ config: APIConfig
     ) -> AsyncThrowingStream<String, Error>
 
     @Published var input = "" {
@@ -83,12 +76,6 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var history: [Record] = []
     private let historyCapacity = 50
 
-    /// Conversation context: last N completed (input, output) pairs, newest first.
-    private var conversationContext: [ContextMessage] = []
-    /// Number of completed translations since the last manual clear, so we can trim
-    /// the context buffer to the user's setting.
-    private var contextGeneration: UInt = 0
-
     // MARK: - History persistence
 
     /// History file location. Preview runs (TUSI_PREVIEW / preview settings) get a
@@ -105,14 +92,13 @@ final class TranslationEngine: ObservableObject {
 
     init(
         settings: SettingsStore,
-        stream: @escaping Streamer = { text, target, tone, extra, config, context in
+        stream: @escaping Streamer = { text, target, tone, extra, config in
             TranslationService.stream(
                 text: text,
                 target: target,
                 tone: tone,
                 extra: extra,
-                config: config,
-                context: context
+                config: config
             )
         }
     ) {
@@ -215,18 +201,13 @@ final class TranslationEngine: ObservableObject {
         let extra = settings.extraInstruction
         let requestRevision = inputRevision
 
-        // Build context messages from recent turns.
-        let contextMessages = settings.contextTurns > 0
-            ? Array(conversationContext.prefix(settings.contextTurns * 2))
-            : []
-
         translationTask = Task { [weak self] in
             guard let self else { return }
             var lastError: Error?
 
             for (position, link) in chain.enumerated() {
                 do {
-                    for try await piece in stream(text, target, tone, extra, link.config, contextMessages) {
+                    for try await piece in stream(text, target, tone, extra, link.config) {
                         guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                         self.output += piece
                     }
@@ -365,24 +346,10 @@ final class TranslationEngine: ObservableObject {
         // Publish the bounded snapshot as one atomic observable change.
         history = Array(([record] + history).prefix(historyCapacity))
         saveHistory()
-
-        // Update conversation context. Both inserts land at the head, so the assistant
-        // reply must go in first and the user turn second — that yields newest-first
-        // [user, assistant, user, assistant, …], i.e. the order the model expects.
-        if settings.contextTurns > 0 {
-            conversationContext.insert(ContextMessage(role: "assistant", content: output), at: 0)
-            conversationContext.insert(ContextMessage(role: "user", content: input), at: 0)
-            // Trim to the configured number of turns (2 messages per turn).
-            let maxMessages = settings.contextTurns * 2
-            if conversationContext.count > maxMessages {
-                conversationContext = Array(conversationContext.prefix(maxMessages))
-            }
-        }
     }
 
-    /// Restores a history record into the input/output area. The conversation context
-    /// is NOT rebuilt from a restored record — the user is going back to an earlier
-    /// point and should start a fresh conversation turn.
+    /// Restores a history record into the input/output area. The user is going back
+    /// to an earlier point and should start a fresh conversation turn.
     func restoreHistory(_ record: Record) {
         input = record.input
         output = record.output
@@ -392,10 +359,9 @@ final class TranslationEngine: ObservableObject {
         state = .done
     }
 
-    /// Clears all translation history and conversation context.
+    /// Clears all translation history.
     func clearHistory() {
         history = []
-        conversationContext = []
         saveHistory()
     }
 
