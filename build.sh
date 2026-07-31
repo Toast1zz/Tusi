@@ -14,11 +14,13 @@ ARCH_MODE="${TUSI_ARCH:-native}"
 DEFAULT_VERSION="1.0.0"
 DEFAULT_BUILD_NUMBER="1"
 if [[ -f VERSION ]]; then
-    read -r DEFAULT_VERSION DEFAULT_BUILD_NUMBER < VERSION
+    # || true: a missing trailing newline makes read return nonzero, which would
+    # otherwise abort the script under set -e after silently keeping the old version.
+    read -r DEFAULT_VERSION DEFAULT_BUILD_NUMBER < VERSION || true
 fi
 VERSION="${TUSI_VERSION:-${DEFAULT_VERSION:-1.0.0}}"
 BUILD_NUMBER="${TUSI_BUILD_NUMBER:-${DEFAULT_BUILD_NUMBER:-1}}"
-if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*(-[A-Za-z0-9.]+)?$ ]]; then
     echo "无效版本号: $VERSION" >&2
     exit 1
 fi

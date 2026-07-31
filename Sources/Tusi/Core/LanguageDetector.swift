@@ -1,15 +1,120 @@
 import Foundation
 import NaturalLanguage
 
-enum TargetLanguage {
-    case english
-    case chinese
+/// A translation language pair component. Codable for history persistence,
+/// Hashable for SwiftUI selection.
+struct TranslationLanguage: Codable, Equatable, Hashable {
+    var displayName: String
+    var apiName: String
+    var symbol: String
 
-    var promptName: String {
-        switch self {
-        case .english: return "natural, idiomatic English"
-        case .chinese: return "natural, idiomatic Simplified Chinese (简体中文)"
-        }
+    static let english = TranslationLanguage(
+        displayName: "English",
+        apiName: "natural, idiomatic English",
+        symbol: "EN"
+    )
+    static let chinese = TranslationLanguage(
+        displayName: "中文",
+        apiName: "natural, idiomatic Simplified Chinese (简体中文)",
+        symbol: "中"
+    )
+    static let japanese = TranslationLanguage(
+        displayName: "日本語",
+        apiName: "natural, idiomatic Japanese",
+        symbol: "日"
+    )
+    static let korean = TranslationLanguage(
+        displayName: "한국어",
+        apiName: "natural, idiomatic Korean",
+        symbol: "한"
+    )
+    static let french = TranslationLanguage(
+        displayName: "Français",
+        apiName: "natural, idiomatic French",
+        symbol: "FR"
+    )
+    static let german = TranslationLanguage(
+        displayName: "Deutsch",
+        apiName: "natural, idiomatic German",
+        symbol: "DE"
+    )
+    static let spanish = TranslationLanguage(
+        displayName: "Español",
+        apiName: "natural, idiomatic Spanish",
+        symbol: "ES"
+    )
+    static let portuguese = TranslationLanguage(
+        displayName: "Português",
+        apiName: "natural, idiomatic Portuguese",
+        symbol: "PT"
+    )
+    static let italian = TranslationLanguage(
+        displayName: "Italiano",
+        apiName: "natural, idiomatic Italian",
+        symbol: "IT"
+    )
+    static let russian = TranslationLanguage(
+        displayName: "Русский",
+        apiName: "natural, idiomatic Russian",
+        symbol: "RU"
+    )
+    static let arabic = TranslationLanguage(
+        displayName: "العربية",
+        apiName: "natural, idiomatic Arabic",
+        symbol: "AR"
+    )
+    static let hindi = TranslationLanguage(
+        displayName: "हिन्दी",
+        apiName: "natural, idiomatic Hindi",
+        symbol: "HI"
+    )
+    static let vietnamese = TranslationLanguage(
+        displayName: "Tiếng Việt",
+        apiName: "natural, idiomatic Vietnamese",
+        symbol: "VI"
+    )
+    static let thai = TranslationLanguage(
+        displayName: "ไทย",
+        apiName: "natural, idiomatic Thai",
+        symbol: "TH"
+    )
+    static let indonesian = TranslationLanguage(
+        displayName: "Bahasa Indonesia",
+        apiName: "natural, idiomatic Indonesian",
+        symbol: "ID"
+    )
+    static let turkish = TranslationLanguage(
+        displayName: "Türkçe",
+        apiName: "natural, idiomatic Turkish",
+        symbol: "TR"
+    )
+    static let dutch = TranslationLanguage(
+        displayName: "Nederlands",
+        apiName: "natural, idiomatic Dutch",
+        symbol: "NL"
+    )
+
+    /// All preset languages, used for the language picker in multi-language mode.
+    static let presets: [TranslationLanguage] = [
+        .english, .chinese, .japanese, .korean,
+        .french, .german, .spanish, .portuguese,
+        .italian, .russian, .arabic, .hindi,
+        .vietnamese, .thai, .indonesian, .turkish, .dutch
+    ]
+    /// Fallback for NLLanguage values not in the presets list.
+    static func fromNLLanguage(_ nl: NLLanguage) -> TranslationLanguage {
+        let display = shortDisplayName(for: nl)
+        let raw = nl.rawValue
+        return TranslationLanguage(
+            displayName: display,
+            apiName: "natural, idiomatic \(display)",
+            symbol: raw.prefix(2).uppercased()
+        )
+    }
+
+    private static func shortDisplayName(for language: NLLanguage) -> String {
+        let locale = Locale(identifier: "en")
+        return locale.localizedString(forLanguageCode: language.rawValue) ?? language.rawValue
     }
 }
 
@@ -17,7 +122,7 @@ enum TargetLanguage {
 /// made in one glance from the bottom bar — more options would turn it into a form.
 /// Declaration order is the on-screen order: the three read as one spectrum from loose
 /// to buttoned-up, with 标准 sitting between them.
-enum Tone: String, CaseIterable, Identifiable {
+enum Tone: String, CaseIterable, Identifiable, Codable {
     case casual
     case standard
     case formal
@@ -58,45 +163,50 @@ enum LanguageDetector {
         NLLanguageRecognizer()
     }()
 
-    /// Decides the translation direction: Chinese input → English, anything else → Chinese.
-    /// Returns the target language plus a short label for the detected source language.
+    /// Detects the source language of the input text. In simple (CN↔EN) mode the
+    /// caller derives the target from the source; in multi-language mode the caller
+    /// uses the user's selected target. Returns the detected source language plus a
+    /// short display label.
     ///
     /// The decision is script-based rather than NLLanguageRecognizer's dominant-language
-    /// guess. The question here is binary ("is this Chinese?"), and the recognizer answers
-    /// a harder question badly on mixed text — it reads "这个 PR 需要 rebase 一下" as
-    /// Spanish and "支持主用 API 和 fallback" as English, because a few Latin tokens
-    /// outweigh the Han characters in its probabilities.
-    static func detect(_ text: String) -> (target: TargetLanguage, sourceLabel: String) {
+    /// guess for the CN-vs-not-CN question. The recognizer reads "这个 PR 需要 rebase 一下"
+    /// as Spanish and "支持主用 API 和 fallback" as English, because a few Latin tokens
+    /// outweigh the Han characters in its probabilities. Script analysis doesn't have that
+    /// problem.
+    static func detect(_ text: String) -> (source: TranslationLanguage, sourceLabel: String) {
         let sample = String(text.prefix(400)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sample.isEmpty else { return (.english, "中") }
+        guard !sample.isEmpty else { return (.chinese, "中") }
 
         // Kana and Hangul are decisive: those scripts are never Chinese, even though
         // Japanese mixes in Han characters (kanji).
-        if sample.unicodeScalars.contains(where: isKana) { return (.chinese, "日") }
-        if sample.unicodeScalars.contains(where: isHangul) { return (.chinese, "한") }
+        if sample.unicodeScalars.contains(where: isKana) { return (.japanese, "日") }
+        if sample.unicodeScalars.contains(where: isHangul) { return (.korean, "한") }
 
         // Weigh Han characters against Latin words: one Han character carries roughly
         // one word of meaning, so this compares like with like for mixed-script text.
         // Ties fall to "not Chinese" — "I love 中国" reads as English with a loanword.
         let hanCount = sample.unicodeScalars.filter(isHan).count
         if hanCount > 0, hanCount > latinWordCount(in: sample) {
-            return (.english, "中")
+            return (.chinese, "中")
         }
 
         recognizer.reset()
         recognizer.processString(sample)
-        guard let language = recognizer.dominantLanguage else { return (.chinese, "文A") }
-        return (.chinese, shortLabel(for: language))
+        guard let language = recognizer.dominantLanguage else { return (.chinese, "文") }
+        let detected = TranslationLanguage.fromNLLanguage(language)
+        return (detected, shortLabel(for: language))
     }
 
     // MARK: - Script tests
 
     private static func isHan(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x4E00...0x9FFF,    // CJK Unified Ideographs
-             0x3400...0x4DBF,    // Extension A
-             0xF900...0xFAFF,    // Compatibility Ideographs
-             0x20000...0x2A6DF:  // Extension B
+        case 0x2E80...0x2EFF,       // CJK radicals
+             0x3000...0x303F,       // CJK punctuation
+             0x3400...0x4DBF,       // CJK Unified Extension A
+             0x4E00...0x9FFF,       // CJK Unified
+             0xF900...0xFAFF,       // CJK Compatibility
+             0x20000...0x2FFFF:     // CJK Extension B–F
             return true
         default:
             return false
@@ -105,9 +215,8 @@ enum LanguageDetector {
 
     private static func isKana(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x3040...0x309F,  // Hiragana
-             0x30A0...0x30FF,  // Katakana
-             0x31F0...0x31FF:  // Katakana phonetic extensions
+        case 0x3040...0x309F,       // Hiragana
+             0x30A0...0x30FF:       // Katakana
             return true
         default:
             return false
@@ -116,9 +225,7 @@ enum LanguageDetector {
 
     private static func isHangul(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0xAC00...0xD7AF,  // Hangul syllables
-             0x1100...0x11FF,  // Jamo
-             0x3130...0x318F:  // Compatibility jamo
+        case 0xAC00...0xD7AF:       // Hangul syllables
             return true
         default:
             return false

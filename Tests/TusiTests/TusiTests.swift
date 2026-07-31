@@ -5,8 +5,61 @@ import XCTest
 @MainActor
 final class TusiTests: XCTestCase {
     func testLanguageDirectionHandlesMixedChineseAndLatin() {
-        XCTAssertEqual(LanguageDetector.detect("这个 PR 需要 rebase 一下").target, .english)
-        XCTAssertEqual(LanguageDetector.detect("This PR needs a rebase").target, .chinese)
+        XCTAssertEqual(LanguageDetector.detect("这个 PR 需要 rebase 一下").source, .chinese)
+        XCTAssertEqual(LanguageDetector.detect("This PR needs a rebase").source, .english)
+    }
+
+    func testSystemPromptEnforcesTranslationOverAnswering() {
+        let prompt = TranslationService.systemPrompt(for: .chinese, tone: .standard)
+        // The chat channel defaults to answering user questions; the prompt must
+        // explicitly override that or a mixed query gets explained instead of translated.
+        XCTAssertTrue(prompt.contains("text between the <translate> markers"))
+        XCTAssertTrue(prompt.contains("never answer or explain it"))
+        XCTAssertTrue(prompt.contains("A question in the source remains a question"))
+    }
+
+    func testManualDirectionFlipOverridesDetection() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+
+        // 4 Han characters outweigh the 2 Latin words, so auto-detection says Chinese.
+        engine.input = "sequential thinking 什么意思"
+        XCTAssertEqual(engine.source, .chinese)
+        XCTAssertEqual(engine.target, .english)
+        XCTAssertFalse(engine.flipped)
+
+        engine.flipDirection()
+        XCTAssertTrue(engine.flipped)
+        XCTAssertEqual(engine.source, .english)
+        XCTAssertEqual(engine.target, .chinese)
+
+        // Tapping again returns to the detected direction.
+        engine.flipDirection()
+        XCTAssertFalse(engine.flipped)
+        XCTAssertEqual(engine.source, .chinese)
+        XCTAssertEqual(engine.target, .english)
+
+        // Any input change drops the manual choice.
+        engine.flipDirection()
+        XCTAssertTrue(engine.flipped)
+        engine.input = "This PR needs a rebase"
+        XCTAssertFalse(engine.flipped)
+        XCTAssertEqual(engine.source, .english)
+        XCTAssertEqual(engine.target, .chinese)
+    }
+
+    func testDirectionFlipIsNoOpWithoutInputOrInMultiLanguageMode() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+
+        engine.flipDirection()  // nothing typed yet
+        XCTAssertFalse(engine.flipped)
+
+        settings.multiLanguageMode = true
+        engine.input = "sequential thinking 什么意思"
+        engine.flipDirection()  // explicit target rules in multi-language mode
+        XCTAssertFalse(engine.flipped)
+        XCTAssertEqual(engine.source, .chinese)
     }
 
     func testSmartQuotesLeaveCodeSpansUntouched() {
@@ -73,7 +126,7 @@ final class TusiTests: XCTestCase {
         )
 
         var responses = ["First result", "Second result"]
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _, _ in
             let response = responses.removeFirst()
             return AsyncThrowingStream { continuation in
                 continuation.yield(response)

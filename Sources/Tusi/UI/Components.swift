@@ -101,18 +101,24 @@ struct BarIconButton: View {
 /// hasn't detected a language yet — so it reads "自动", and only resolves to "中 → EN"
 /// (or the reverse) once there's input to judge.
 ///
-/// Deliberately shapeless: no capsule fill, no border. Every actually-clickable thing in
-/// this bar (the tone selector, the icon buttons, the copy button) is drawn as a pill or a
-/// circle, so a pill here — despite never responding to a tap — would read as a control.
-/// Plain text + icon signals "this is a label" the same way it would in running prose.
+/// In simple CN↔EN mode the chip doubles as a manual override for the rare case the
+/// auto-detected direction is wrong: hovering gives it the same capsule affordance the
+/// other clickable controls wear, and tapping flips the direction for the current input.
+/// The flip is scoped to the input — any edit returns to auto-detection. In multi-language
+/// mode there is no "opposite side" to flip to, so the chip is a plain label again.
 struct DirectionChip: View {
     let sourceLabel: String
-    let target: TargetLanguage
+    let target: TranslationLanguage
     let isActive: Bool
+    /// Manual direction override engaged (chip tapped in simple mode).
+    let isFlipped: Bool
+    /// Whether tapping is offered at all. Simple CN↔EN mode only.
+    var isInteractive: Bool = false
+    var onFlip: (() -> Void)? = nil
 
-    private var targetLabel: String {
-        target == .english ? "EN" : "中"
-    }
+    @State private var hovering = false
+
+    private var targetLabel: String { target.symbol }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -132,8 +138,26 @@ struct DirectionChip: View {
         // both "inactive, not currently the point" — they should sit at the same weight.
         // The capsule background used to paper over the mismatch; plain text doesn't.
         .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
+        .background {
+            if hovering || isFlipped {
+                Capsule().fill(Color.primary.opacity(isFlipped ? 0.08 : 0.05))
+            }
+        }
+        .contentShape(Capsule())
+        .onHover { inside in
+            withAnimation(.snappy(duration: 0.15)) { hovering = inside }
+        }
+        .onTapGesture {
+            guard isInteractive else { return }
+            onFlip?()
+        }
+        .accessibilityAddTraits(isInteractive ? .isButton : [])
+        .help(isInteractive ? L("切换翻译方向") : "")
         .animation(.snappy(duration: 0.2), value: isActive)
         .animation(.snappy(duration: 0.2), value: sourceLabel)
+        .animation(.snappy(duration: 0.2), value: isFlipped)
     }
 }
 

@@ -51,8 +51,9 @@ struct APIProfile: Equatable {
 final class SettingsStore: ObservableObject {
     private let defaults: UserDefaults
     /// TUSI_PREVIEW runs against a throwaway suite and never touches the Keychain,
-    /// so screenshot runs can't clobber real credentials.
-    private let isPreview: Bool
+    /// so screenshot runs can't clobber real credentials. Read by TranslationEngine
+    /// too, so preview runs keep their history in a scratch location as well.
+    let isPreview: Bool
 
     /// Exactly two slots: index 0 and index 1.
     @Published var profiles: [APIProfile] {
@@ -85,6 +86,15 @@ final class SettingsStore: ObservableObject {
     }
     @Published var tone: Tone {
         didSet { defaults.set(tone.rawValue, forKey: "tone") }
+    }
+    /// Multi-language mode: the user picks the target explicitly instead of the
+    /// automatic CN↔EN pairing.
+    @Published var multiLanguageMode: Bool {
+        didSet { defaults.set(multiLanguageMode, forKey: "multiLanguageMode") }
+    }
+    /// Completed conversation turns sent back to the model as context; 0 disables it.
+    @Published var contextTurns: Int {
+        didSet { defaults.set(contextTurns, forKey: "contextTurns") }
     }
     /// All five rebindable shortcuts. Missing entries fall back to the action's default.
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
@@ -135,6 +145,8 @@ final class SettingsStore: ObservableObject {
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
+        multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
+        contextTurns = defaults.object(forKey: "contextTurns") as? Int ?? 0
         let storedWidth = defaults.double(forKey: "panelWidth")
         if storedWidth > 0 {
             panelWidth = min(max(CGFloat(storedWidth), 470), 700)

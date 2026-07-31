@@ -11,27 +11,38 @@ final class TranslationEngine: ObservableObject {
         case failed(String)
     }
 
-    struct Record: Identifiable, Equatable {
-        let id = UUID()
+    /// A single conversation turn passed along with the API request.
+    struct ContextMessage: Codable, Equatable {
+        let role: String
+        let content: String
+    }
+
+    struct Record: Identifiable, Equatable, Codable {
+        let id: UUID
         let input: String
         let output: String
         let sourceLabel: String
-        let target: TargetLanguage
+        let source: TranslationLanguage
+        let target: TranslationLanguage
         let tone: Tone
-        let timestamp = Date()
+        let timestamp: Date
     }
 
     typealias Streamer = (
         _ text: String,
-        _ target: TargetLanguage,
+        _ target: TranslationLanguage,
         _ tone: Tone,
         _ extra: String,
-        _ config: APIConfig
+        _ config: APIConfig,
+        _ context: [ContextMessage]
     ) -> AsyncThrowingStream<String, Error>
 
     @Published var input = "" {
         didSet {
             guard input != oldValue else { return }
+            // A manual direction flip is scoped to the input it was set on: any edit
+            // drops it, so a stale override can never leak into the next query.
+            flipped = false
             updateDirection()
             // Any edit makes the previous result stale. Clearing it also cancels a
             // request for the old text, while the revision check below protects against
@@ -42,8 +53,13 @@ final class TranslationEngine: ObservableObject {
     }
     @Published private(set) var output = ""
     @Published private(set) var state: State = .idle
-    @Published private(set) var target: TargetLanguage = .english
+    @Published private(set) var target: TranslationLanguage = .english
+    @Published private(set) var source: TranslationLanguage = .chinese
     @Published private(set) var sourceLabel = "中"
+    /// Manual direction override: the user tapped the direction chip because the
+    /// auto-detected side was wrong. Simple CN↔EN mode only, where the correct
+    /// direction is exactly the opposite of the detected one.
+    @Published private(set) var flipped = false
     /// Drives the copy button's confirmation. Auto-copy sets it too, so the button is the
     /// single place that reports a copy — no extra chrome competing for the bottom bar.
     @Published private(set) var copied = false
@@ -67,20 +83,42 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var history: [Record] = []
     private let historyCapacity = 50
 
+    /// Conversation context: last N completed (input, output) pairs, newest first.
+    private var conversationContext: [ContextMessage] = []
+    /// Number of completed translations since the last manual clear, so we can trim
+    /// the context buffer to the user's setting.
+    private var contextGeneration: UInt = 0
+
+    // MARK: - History persistence
+
+    /// History file location. Preview runs (TUSI_PREVIEW / preview settings) get a
+    /// scratch directory so tests and screenshot runs never read or clobber the
+    /// real history.
+    private let historyURL: URL
+
+    private static func historyURL(preview: Bool) -> URL {
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        let dir = paths[0].appendingPathComponent(preview ? "com.tusi.preview" : "com.tusi.app", isDirectory: true)
+        return dir.appendingPathComponent("history.json")
+    }
+
     init(
         settings: SettingsStore,
-        stream: @escaping Streamer = { text, target, tone, extra, config in
+        stream: @escaping Streamer = { text, target, tone, extra, config, context in
             TranslationService.stream(
                 text: text,
                 target: target,
                 tone: tone,
                 extra: extra,
-                config: config
+                config: config,
+                context: context
             )
         }
     ) {
         self.settings = settings
         self.stream = stream
+        self.historyURL = Self.historyURL(preview: settings.isPreview)
+        loadHistory()
     }
 
     var isTranslating: Bool { state == .translating }
@@ -102,11 +140,46 @@ final class TranslationEngine: ObservableObject {
         state == .done && !output.isEmpty && !input.isEmpty
     }
 
+    // MARK: - Direction
+
+    /// Updates the detected source language and the target, respecting the
+    /// multi-language mode.
     private func updateDirection() {
-        let (target, label) = LanguageDetector.detect(input)
-        if target != self.target { self.target = target }
-        if label != sourceLabel { sourceLabel = label }
+        let (detected, label) = LanguageDetector.detect(input)
+        if flipped {
+            // Manual override: the user says the detector picked the wrong side.
+            source = detected == .chinese ? .english : .chinese
+            sourceLabel = source == .chinese ? "中" : "EN"
+            target = source == .chinese ? .english : .chinese
+            return
+        }
+        source = detected
+        sourceLabel = label
+        if settings.multiLanguageMode {
+            // In multi-language mode the user picks the target explicitly.
+            // If the stored target equals the source, flip it to the most
+            // recent distinct target, or fall back to the other side.
+            if target == source {
+                // Find the most recent record where target ≠ current source.
+                let lastDifferent = history.first { $0.target != source }?.target
+                target = lastDifferent ?? (source == .english ? .chinese : .english)
+            }
+        } else {
+            // Simple CN↔EN mode: Chinese → English, everything else → Chinese.
+            target = source == .chinese ? .english : .chinese
+        }
     }
+
+    /// Toggles the manual direction override for the current input. Guarded to
+    /// simple mode: multi-language mode has no "opposite side" to flip to, and
+    /// there is nothing to flip before anything is typed.
+    func flipDirection() {
+        guard !input.isEmpty, !settings.multiLanguageMode else { return }
+        flipped.toggle()
+        updateDirection()
+    }
+
+    // MARK: - Translate
 
     func translate() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,9 +199,16 @@ final class TranslationEngine: ObservableObject {
 
         state = .translating
         let target = target
+        let source = source
+        let sourceLabel = sourceLabel
         let tone = settings.tone
         let extra = settings.extraInstruction
         let requestRevision = inputRevision
+
+        // Build context messages from recent turns.
+        let contextMessages = settings.contextTurns > 0
+            ? Array(conversationContext.prefix(settings.contextTurns * 2))
+            : []
 
         translationTask = Task { [weak self] in
             guard let self else { return }
@@ -136,7 +216,7 @@ final class TranslationEngine: ObservableObject {
 
             for (position, link) in chain.enumerated() {
                 do {
-                    for try await piece in stream(text, target, tone, extra, link.config) {
+                    for try await piece in stream(text, target, tone, extra, link.config, contextMessages) {
                         guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                         self.output += piece
                     }
@@ -155,7 +235,7 @@ final class TranslationEngine: ObservableObject {
                     // needs to see the character after a quote to place it.
                     self.output = SmartQuotes.apply(to: self.output)
                     self.state = .done
-                    self.pushHistory(input: text, target: target, tone: tone)
+                    self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
                     if self.settings.autoCopy, !self.output.isEmpty {
                         self.copyToPasteboard()
                         self.flashCopied(auto: true)
@@ -221,6 +301,8 @@ final class TranslationEngine: ObservableObject {
         self.toast = toast
     }
 
+    // MARK: - Clipboard
+
     private func copyToPasteboard() {
         guard !output.isEmpty else { return }
         let pasteboard = NSPasteboard.general
@@ -256,31 +338,73 @@ final class TranslationEngine: ObservableObject {
         }
     }
 
+    // MARK: - History persistence
+
     /// Appends one completed request to the bounded, newest-first history.
-    private func pushHistory(input: String, target: TargetLanguage, tone: Tone) {
+    private func pushHistory(input: String, output: String, source: TranslationLanguage, sourceLabel: String, target: TranslationLanguage, tone: Tone) {
         let record = Record(
+            id: UUID(),
             input: input,
             output: output,
             sourceLabel: sourceLabel,
+            source: source,
             target: target,
-            tone: tone
+            tone: tone,
+            timestamp: Date()
         )
         // Publish the bounded snapshot as one atomic observable change.
         history = Array(([record] + history).prefix(historyCapacity))
+        saveHistory()
+
+        // Update conversation context.
+        if settings.contextTurns > 0 {
+            conversationContext.insert(ContextMessage(role: "user", content: input), at: 0)
+            conversationContext.insert(ContextMessage(role: "assistant", content: output), at: 0)
+            // Trim to the configured number of turns (2 messages per turn).
+            let maxMessages = settings.contextTurns * 2
+            if conversationContext.count > maxMessages {
+                conversationContext = Array(conversationContext.prefix(maxMessages))
+            }
+        }
     }
 
-    /// Restores a history record into the input/output area.
+    /// Restores a history record into the input/output area. The conversation context
+    /// is NOT rebuilt from a restored record — the user is going back to an earlier
+    /// point and should start a fresh conversation turn.
     func restoreHistory(_ record: Record) {
         input = record.input
         output = record.output
         sourceLabel = record.sourceLabel
+        source = record.source
         target = record.target
         state = .done
     }
 
-    /// Clears all translation history.
+    /// Clears all translation history and conversation context.
     func clearHistory() {
         history = []
+        conversationContext = []
+        saveHistory()
+    }
+
+    // MARK: - File persistence
+
+    private func saveHistory() {
+        let records = history
+        let url = historyURL
+        Task.detached(priority: .background) {
+            guard let data = try? JSONEncoder().encode(records) else { return }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private func loadHistory() {
+        let url = historyURL
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([Record].self, from: data)
+        else { return }
+        history = decoded
     }
 
 }

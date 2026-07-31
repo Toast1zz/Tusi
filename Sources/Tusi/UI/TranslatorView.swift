@@ -255,7 +255,10 @@ struct TranslatorView: View {
             DirectionChip(
                 sourceLabel: engine.sourceLabel,
                 target: engine.target,
-                isActive: !engine.input.isEmpty
+                isActive: !engine.input.isEmpty,
+                isFlipped: engine.flipped,
+                isInteractive: !settings.multiLanguageMode,
+                onFlip: { engine.flipDirection() }
             )
 
             // Tone occupies the slot the model name used to: it's an action, the model
