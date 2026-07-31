@@ -7,6 +7,8 @@ import Carbon
 final class HotkeyManager {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
+    /// The combo currently registered, so a failed re-registration can roll back to it.
+    private var registeredCombo: KeyCombo?
     private let callback: () -> Void
 
     /// Fails only if the Carbon event handler can't be installed (rare). The hotkey
@@ -38,15 +40,16 @@ final class HotkeyManager {
     }
 
     /// (Re)registers the global hotkey. Returns whether registration succeeded — a bare
-    /// combo (no modifier) is rejected, as are combos another app already owns.
+    /// combo (no modifier) is rejected, as are combos another app already owns. On
+    /// failure the previously registered combo (if any) is re-registered, so a rejected
+    /// rebind never silently kills the working hotkey.
     @discardableResult
     func update(combo: KeyCombo) -> Bool {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
+        let previousCombo = registeredCombo
+        unregisterCurrent()
+
         let carbonMods = Self.carbonModifiers(from: combo.modifiers)
-        guard carbonMods != 0 else { return false }
+        guard carbonMods != 0 else { return restore(previousCombo) }
 
         let hotKeyID = EventHotKeyID(signature: Self.fourCC("TUSI"), id: 1)
         var ref: EventHotKeyRef?
@@ -58,9 +61,40 @@ final class HotkeyManager {
             0,
             &ref
         )
-        guard status == noErr else { return false }
+        guard status == noErr else { return restore(previousCombo) }
         hotKeyRef = ref
+        registeredCombo = combo
         return true
+    }
+
+    private func unregisterCurrent() {
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        registeredCombo = nil
+    }
+
+    /// Tries to put the previous combo back after a failed update. Returns false either
+    /// way — the new combo was rejected regardless — but restores the old hotkey when
+    /// the system still accepts it.
+    private func restore(_ combo: KeyCombo?) -> Bool {
+        guard let combo else { return false }
+        let hotKeyID = EventHotKeyID(signature: Self.fourCC("TUSI"), id: 1)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            UInt32(combo.keyCode),
+            Self.carbonModifiers(from: combo.modifiers),
+            hotKeyID,
+            GetEventDispatcherTarget(),
+            0,
+            &ref
+        )
+        if status == noErr {
+            hotKeyRef = ref
+            registeredCombo = combo
+        }
+        return false
     }
 
     deinit {

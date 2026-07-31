@@ -3,7 +3,9 @@ import PackageDescription
 
 let package = Package(
     name: "Tusi",
-    platforms: [.macOS(.v13)],
+    // macOS 14 is the real floor: the UI uses `.snappy` animations throughout,
+    // which are macOS 14+ APIs (no #available guards at the call sites).
+    platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
             name: "Tusi",

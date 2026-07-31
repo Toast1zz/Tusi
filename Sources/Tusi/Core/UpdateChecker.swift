@@ -59,13 +59,6 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func performCheck(id: UUID) async {
-        defer {
-            if activeCheckID == id {
-                defaults.set(Date(), forKey: lastCheckKey)
-                checkTask = nil
-            }
-        }
-
         guard !Task.isCancelled, activeCheckID == id else { return }
 
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
@@ -93,6 +86,12 @@ final class UpdateChecker: ObservableObject {
                 pendingUpdate = nil
                 state = .upToDate
             }
+            // Only a genuinely completed check counts against the throttle. A failed or
+            // superseded check leaves lastCheckKey untouched so the next launch retries.
+            if activeCheckID == id {
+                defaults.set(Date(), forKey: lastCheckKey)
+                checkTask = nil
+            }
         } catch is CancellationError {
             return
         } catch let urlError as URLError where urlError.code == .cancelled {
@@ -108,18 +107,53 @@ final class UpdateChecker: ObservableObject {
     }
 
     /// True when `candidate` is a strictly higher semantic version than `current`.
-    /// Missing components count as 0, so "1.2" == "1.2.0"; non-numeric tails are ignored.
+    /// Missing components count as 0, so "1.2" == "1.2.0"; a release beats its own
+    /// prerelease ("1.6.0" > "1.6.0-beta.1"), and prerelease segments compare by
+    /// dot-separated parts, numerically where both are numeric ("1.6.0-beta.2" >
+    /// "1.6.0-beta.1").
     static func isNewer(_ candidate: String, than current: String) -> Bool {
-        func parts(_ v: String) -> [Int] {
-            v.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        Self.compare(candidate, current) > 0
+    }
+
+    private static func compare(_ a: String, _ b: String) -> Int {
+        let (aCore, aPre) = splitVersion(a)
+        let (bCore, bPre) = splitVersion(b)
+
+        let aParts = aCore.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        let bParts = bCore.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        for i in 0..<max(aParts.count, bParts.count) {
+            let x = i < aParts.count ? aParts[i] : 0
+            let y = i < bParts.count ? bParts[i] : 0
+            if x != y { return x > y ? 1 : -1 }
         }
-        let a = parts(candidate), b = parts(current)
-        for i in 0..<max(a.count, b.count) {
-            let x = i < a.count ? a[i] : 0
-            let y = i < b.count ? b[i] : 0
-            if x != y { return x > y }
+
+        // Release beats prerelease: 1.6.0 > 1.6.0-beta.1.
+        if aPre.isEmpty != bPre.isEmpty { return aPre.isEmpty ? 1 : -1 }
+        if aPre.isEmpty { return 0 }
+
+        let aSegments = aPre.split(separator: ".").map(String.init)
+        let bSegments = bPre.split(separator: ".").map(String.init)
+        for i in 0..<max(aSegments.count, bSegments.count) {
+            let x = i < aSegments.count ? aSegments[i] : ""
+            let y = i < bSegments.count ? bSegments[i] : ""
+            if x == y { continue }
+            if x.isEmpty { return -1 }  // shorter prerelease sorts first
+            if y.isEmpty { return 1 }
+            let xn = Int(x), yn = Int(y)
+            if let xn, let yn { return xn > yn ? 1 : -1 }  // numeric segments compare numerically
+            if xn != nil { return -1 }  // numeric < alphanumeric (semver rule)
+            if yn != nil { return 1 }
+            return x < y ? -1 : 1  // alphanumeric compares lexically
         }
-        return false
+        return 0
+    }
+
+    /// Splits "v1.6.0-beta.1" into ("1.6.0", "beta.1"). Non-numeric release tails
+    /// (e.g. "1.6.0-rc" vs "1.6.0") stay out of the core comparison.
+    private static func splitVersion(_ version: String) -> (core: String, prerelease: String) {
+        let trimmed = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        guard let dash = trimmed.firstIndex(of: "-") else { return (trimmed, "") }
+        return (String(trimmed[..<dash]), String(trimmed[dash...].dropFirst()))
     }
 
     private struct Release: Decodable {

@@ -80,7 +80,14 @@ enum TranslationService {
 
     private static func isLoopback(_ host: String) -> Bool {
         let normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return normalized == "localhost" || normalized == "127.0.0.1" || normalized == "::1"
+        if normalized == "localhost" || normalized == "::1" { return true }
+        // The whole 127.0.0.0/8 range is loopback, not just 127.0.0.1
+        // (127.0.0.2 etc. are valid loopback addresses used by some local setups).
+        let octets = normalized.split(separator: ".")
+        guard octets.count == 4, octets[0] == "127" else { return false }
+        return octets.dropFirst().allSatisfy {
+            Int($0).map { (0...255).contains($0) } ?? false
+        }
     }
 
     private static func makeRequest(config: APIConfig, body: [String: Any]) throws -> URLRequest {

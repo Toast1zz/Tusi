@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
     @EnvironmentObject private var updateChecker: UpdateChecker
+    @EnvironmentObject private var engine: TranslationEngine
 
     @State private var showKey = false
     @State private var testStates: [Int: TestState] = [:]
@@ -115,6 +116,15 @@ struct SettingsView: View {
 
             SoftDivider()
 
+            labeledField("翻译上下文（轮次）", hint: "把最近几轮对话一起发给模型作为上下文，0 表示不携带") {
+                Stepper(value: $settings.contextTurns, in: 0...6) {
+                    Text("\(settings.contextTurns) 轮")
+                }
+                .font(.system(size: 12.5))
+            }
+
+            SoftDivider()
+
             shortcutsNavRow
 
             VStack(alignment: .leading, spacing: 10) {
@@ -126,6 +136,45 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(.system(size: 12.5))
+
+            VStack(alignment: .leading, spacing: 10) {
+                settingToggle("多语言模式", isOn: $settings.multiLanguageMode)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .font(.system(size: 12.5))
+
+            // The target picker is an inline grid, not a menu: a popup would make the
+            // panel resign key and trip the click-outside auto-hide (same constraint
+            // ToneSelector documents).
+            if settings.multiLanguageMode {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("目标语言")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                        ForEach(TranslationLanguage.presets, id: \.self) { language in
+                            let selected = language == engine.target
+                            Button {
+                                engine.setTarget(language)
+                            } label: {
+                                Text(language.displayName)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 5)
+                            .padding(.horizontal, 6)
+                            .background(
+                                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.05)))
+                            )
+                            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                        }
+                    }
+                }
+            }
 
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
@@ -139,13 +188,13 @@ struct SettingsView: View {
             }
         }
         .padding(18)
-        .onChange(of: settings.profiles) { _ in
+        .onChange(of: settings.profiles) { _, _ in
             testTasks.values.forEach { $0.cancel() }
             testTasks.removeAll()
             testStates.removeAll()
             testGenerations.removeAll()
         }
-        .onChange(of: editingIndex) { _ in
+        .onChange(of: editingIndex) { _, _ in
             showKey = false
             testTasks.values.forEach { $0.cancel() }
             testTasks.removeAll()

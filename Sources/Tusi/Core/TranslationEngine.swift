@@ -96,7 +96,8 @@ final class TranslationEngine: ObservableObject {
     /// real history.
     private let historyURL: URL
 
-    private static func historyURL(preview: Bool) -> URL {
+    // Internal (not private): tests reset the preview scratch history between cases.
+    static func historyURL(preview: Bool) -> URL {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
         let dir = paths[0].appendingPathComponent(preview ? "com.tusi.preview" : "com.tusi.app", isDirectory: true)
         return dir.appendingPathComponent("history.json")
@@ -177,6 +178,15 @@ final class TranslationEngine: ObservableObject {
         guard !input.isEmpty, !settings.multiLanguageMode else { return }
         flipped.toggle()
         updateDirection()
+    }
+
+    /// Explicit target selection for multi-language mode. The auto-detected source is
+    /// left alone; if the chosen target equals the source, `updateDirection` re-picks
+    /// (translating into the same language makes no sense).
+    func setTarget(_ language: TranslationLanguage) {
+        guard settings.multiLanguageMode else { return }
+        target = language
+        if target == source { updateDirection() }
     }
 
     // MARK: - Translate
@@ -356,10 +366,12 @@ final class TranslationEngine: ObservableObject {
         history = Array(([record] + history).prefix(historyCapacity))
         saveHistory()
 
-        // Update conversation context.
+        // Update conversation context. Both inserts land at the head, so the assistant
+        // reply must go in first and the user turn second — that yields newest-first
+        // [user, assistant, user, assistant, …], i.e. the order the model expects.
         if settings.contextTurns > 0 {
-            conversationContext.insert(ContextMessage(role: "user", content: input), at: 0)
             conversationContext.insert(ContextMessage(role: "assistant", content: output), at: 0)
+            conversationContext.insert(ContextMessage(role: "user", content: input), at: 0)
             // Trim to the configured number of turns (2 messages per turn).
             let maxMessages = settings.contextTurns * 2
             if conversationContext.count > maxMessages {

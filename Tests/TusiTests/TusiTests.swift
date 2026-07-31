@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class TusiTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // Preview-mode engines share one scratch history file (com.tusi.preview);
+        // reset it so no test case reads another case's records.
+        try? FileManager.default.removeItem(at: TranslationEngine.historyURL(preview: true))
+    }
+
     func testLanguageDirectionHandlesMixedChineseAndLatin() {
         XCTAssertEqual(LanguageDetector.detect("这个 PR 需要 rebase 一下").source, .chinese)
         XCTAssertEqual(LanguageDetector.detect("This PR needs a rebase").source, .english)
@@ -16,6 +23,21 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(prompt.contains("text between the <translate> markers"))
         XCTAssertTrue(prompt.contains("never answer or explain it"))
         XCTAssertTrue(prompt.contains("A question in the source remains a question"))
+    }
+
+    func testStatusItemDoubleClickTogglesOnlyOnce() {
+        func event(clickCount: Int) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: .leftMouseUp, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: clickCount, pressure: 0
+            )!
+        }
+        // First click of a double-click toggles; the second must not (it would flash
+        // the panel and trigger the activation hand-back to the previous app).
+        XCTAssertTrue(AppDelegate.shouldTogglePanel(for: event(clickCount: 1)))
+        XCTAssertFalse(AppDelegate.shouldTogglePanel(for: event(clickCount: 2)))
+        XCTAssertFalse(AppDelegate.shouldTogglePanel(for: event(clickCount: 3)))
     }
 
     func testManualDirectionFlipOverridesDetection() {
@@ -92,6 +114,77 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(UpdateChecker.isNewer("1.10.0", than: "1.9.9"))
         XCTAssertFalse(UpdateChecker.isNewer("1.2", than: "1.2.0"))
         XCTAssertFalse(UpdateChecker.isNewer("1.1.9", than: "1.2"))
+    }
+
+    func testVersionComparisonHandlesPrereleases() {
+        // A release beats its own prerelease.
+        XCTAssertTrue(UpdateChecker.isNewer("1.6.0", than: "1.6.0-beta.1"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.6.0-beta.1", than: "1.6.0"))
+        // Prerelease segments compare numerically, then lexically.
+        XCTAssertTrue(UpdateChecker.isNewer("1.6.0-beta.2", than: "1.6.0-beta.1"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.6.0-beta.10", than: "1.6.0-beta.9"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.6.0-alpha.9", than: "1.6.0-beta.1"))
+        // A prerelease of a newer minor beats the current release.
+        XCTAssertTrue(UpdateChecker.isNewer("v1.7.0-beta.1", than: "1.6.0"))
+    }
+
+    func testSetTargetOnlyWorksInMultiLanguageMode() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+
+        engine.input = "hello world"
+        engine.setTarget(.japanese)  // simple mode: explicit targets are ignored
+        XCTAssertEqual(engine.target, .chinese)
+
+        settings.multiLanguageMode = true
+        engine.setTarget(.japanese)
+        XCTAssertEqual(engine.target, .japanese)
+    }
+
+    func testConversationContextOrderIsUserThenAssistant() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.contextTurns = 1
+        settings.profiles[0] = APIProfile(
+            baseURL: "https://example.com/v1",
+            apiKey: "test-key",
+            model: "test-model"
+        )
+
+        var captured: [[TranslationEngine.ContextMessage]] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _, context in
+            captured.append(context)
+            return AsyncThrowingStream { continuation in
+                continuation.yield("译文")
+                continuation.finish()
+            }
+        }
+
+        engine.input = "第一句"
+        engine.translate()
+        try await waitUntilDone(engine)
+        engine.input = "第二句"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(captured.count, 2)
+        // The second request carries the first turn as context, newest-first:
+        // the user message must precede the assistant reply.
+        XCTAssertEqual(captured[1].map(\.role), ["user", "assistant"])
+        XCTAssertEqual(captured[1].map(\.content), ["第一句", "译文"])
+    }
+
+    func testLoopback127RangeAllowsHTTP() throws {
+        let config = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "key", model: "model")
+        XCTAssertEqual(
+            try TranslationService.endpoint(for: config).absoluteString,
+            "http://127.0.0.2:11434/v1/chat/completions"
+        )
+
+        let remote = APIConfig(baseURL: "http://10.0.0.1/v1", apiKey: "key", model: "model")
+        XCTAssertThrowsError(try TranslationService.endpoint(for: remote)) { error in
+            XCTAssertEqual(error as? TranslationError, .insecureURL)
+        }
     }
 
     func testEndpointNormalizesBaseAndRejectsRemoteHTTP() throws {

@@ -276,7 +276,15 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         settings.setShortcut(combo, for: action)
         panelState.recordingShortcut = nil
-        panelState.shortcutError = nil
+        // A bare letter/digit shortcut hijacks that key for typing — warn about it, but
+        // keep the binding (the defaults are all safe, and blocking would be worse).
+        if !action.requiresModifier, combo.modifiers == 0,
+           let chars = event.charactersIgnoringModifiers,
+           chars.rangeOfCharacter(from: .alphanumerics) != nil {
+            panelState.shortcutError = L("该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符")
+        } else {
+            panelState.shortcutError = nil
+        }
     }
 
     private func installResignObserver() {

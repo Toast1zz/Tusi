@@ -5,9 +5,10 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var panelController: PanelController!
+    // Not private: PreviewSupport.swift's debug scenarios drive these directly.
+    var panelController: PanelController!
+    var cancellables = Set<AnyCancellable>()
     private var hotkey: HotkeyManager?
-    private var cancellables = Set<AnyCancellable>()
 
     let settings = SettingsStore()
     let panelState = PanelState()
@@ -54,92 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Debug preview: TUSI_PREVIEW=main|settings pins the panel open with sample content.
-        if let preview = ProcessInfo.processInfo.environment["TUSI_PREVIEW"] {
-            if ProcessInfo.processInfo.environment["TUSI_DARK"] != nil {
-                NSApp.appearance = NSAppearance(named: .darkAqua)
-            }
-            panelState.pinned = true
-            panelController.show()
-            switch preview {
-            case "settings", "update-available", "update-latest", "shortcuts":
-                settings.profiles = [
-                    APIProfile(baseURL: "https://api.deepseek.com", apiKey: "sk-preview", model: "deepseek-chat"),
-                    APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
-                ]
-                panelState.showSettings = true
-                if preview == "update-available" {
-                    updateChecker.debugSetState(.available(version: "1.3.0", url: URL(string: "https://github.com/neko1chau/Tusi/releases/latest")!))
-                } else if preview == "update-latest" {
-                    updateChecker.debugSetState(.upToDate)
-                } else if preview == "shortcuts" {
-                    panelState.showShortcuts = true
-                }
-            case "empty":
-                panelState.showSettings = false
-            case "quotetest":
-                settings.profiles = [
-                    APIProfile(baseURL: "http://127.0.0.1:8806/v1", apiKey: "sk-x", model: "m"),
-                    APIProfile(),
-                ]
-                settings.autoCopy = true
-                panelState.showSettings = false
-                engine.$history
-                    .dropFirst()
-                    .first()
-                    .sink { [weak self] records in
-                        let receipt = "TUSI_HISTORY_COUNT=\(records.count)\n"
-                        FileHandle.standardError.write(Data(receipt.utf8))
-                        self?.panelState.showHistory = true
-                    }
-                    .store(in: &cancellables)
-                engine.input = "测试引号"
-                engine.translate()
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(2))
-                    guard let self else { return }
-                    let receipt = "TUSI_STATE=\(self.engine.state) OUTPUT=\(self.engine.output) HISTORY=\(self.engine.history.count)\n"
-                    FileHandle.standardError.write(Data(receipt.utf8))
-                }
-            case "corners":
-                // Opens settings on a delay so a screenshot burst can catch the
-                // transition mid-flight; pair with TUSI_SLOWMO to stretch it out.
-                engine.debugPreview(
-                    input: "得益于全新的架构，这次更新带来了显著的性能提升。",
-                    output: "Thanks to the brand-new architecture, this update delivers a significant performance boost.",
-                    toast: nil
-                )
-                panelState.showSettings = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    withAnimation(.snappy(duration: 0.25 * Theme.animationScale)) {
-                        self.panelState.showSettings = true
-                    }
-                }
-            case "reopen":
-                panelState.showSettings = false
-                engine.debugPreview(
-                    input: "得益于全新的架构，这次更新带来了显著的性能提升。",
-                    output: "Thanks to the brand-new architecture, this update delivers a significant performance boost.",
-                    toast: nil
-                )
-                panelController.show()
-            case "falltest":
-                // Primary points at a server that 401s, backup at one that works.
-                settings.profiles = [
-                    APIProfile(baseURL: "http://127.0.0.1:8801/v1", apiKey: "sk-x", model: "broken-model"),
-                    APIProfile(baseURL: "http://127.0.0.1:8802/v1", apiKey: "sk-x", model: "backup-model"),
-                ]
-                panelState.showSettings = false
-                engine.input = "这句话应该由备用供应商翻译。"
-                engine.translate()
-            default:
-                panelState.showSettings = false
-                engine.debugPreview(
-                    input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
-                    output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",
-                    toast: preview == "fallback" ? .fellBack : nil
-                )
-            }
-        }
+        configurePreviewIfNeeded()
     }
 
     // MARK: - Status item
@@ -164,9 +80,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let event = NSApp.currentEvent else { return togglePanel() }
         if event.type == .rightMouseUp {
             showStatusMenu()
-        } else {
-            togglePanel()
+            return
         }
+        guard Self.shouldTogglePanel(for: event) else { return }
+        togglePanel()
+    }
+
+    /// A double-click fires the action twice (clickCount 1 then 2). Toggling on both
+    /// would open-and-close the panel in a flash, and ordering the just-activated
+    /// panel out that fast makes macOS hand activation back to the previously
+    /// frontmost app — which is what made a fast double-click look like it was
+    /// opening Telegram. Only the first click of a double-click toggles.
+    static func shouldTogglePanel(for event: NSEvent) -> Bool {
+        event.clickCount < 2
     }
 
     private func showStatusMenu() {
