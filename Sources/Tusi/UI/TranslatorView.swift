@@ -257,7 +257,9 @@ struct TranslatorView: View {
                 target: engine.target,
                 isActive: !engine.input.isEmpty,
                 isFlipped: engine.flipped,
-                isInteractive: !settings.multiLanguageMode,
+                // Disabled while translating: the in-flight request already captured
+                // its target, so a flip would make the chip disagree with the result.
+                isInteractive: !settings.multiLanguageMode && !engine.isTranslating,
                 onFlip: { engine.flipDirection() }
             )
 

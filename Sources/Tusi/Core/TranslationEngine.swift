@@ -86,7 +86,10 @@ final class TranslationEngine: ObservableObject {
     // Internal (not private): tests reset the preview scratch history between cases.
     static func historyURL(preview: Bool) -> URL {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let dir = paths[0].appendingPathComponent(preview ? "com.tusi.preview" : "com.tusi.app", isDirectory: true)
+        // FileManager guarantees at least one application-support URL in practice; a
+        // degraded environment still gets a writable scratch location instead of a crash.
+        let dir = (paths.first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent(preview ? "com.tusi.preview" : "com.tusi.app", isDirectory: true)
         return dir.appendingPathComponent("history.json")
     }
 
@@ -159,18 +162,22 @@ final class TranslationEngine: ObservableObject {
 
     /// Toggles the manual direction override for the current input. Guarded to
     /// simple mode: multi-language mode has no "opposite side" to flip to, and
-    /// there is nothing to flip before anything is typed.
+    /// there is nothing to flip before anything is typed. Also guarded while a
+    /// translation is in flight — the running request captured its target at
+    /// launch, so flipping mid-stream would leave the chip disagreeing with the
+    /// result it shows. Stop first, then flip.
     func flipDirection() {
-        guard !input.isEmpty, !settings.multiLanguageMode else { return }
+        guard !input.isEmpty, !settings.multiLanguageMode, !isTranslating else { return }
         flipped.toggle()
         updateDirection()
     }
 
     /// Explicit target selection for multi-language mode. The auto-detected source is
     /// left alone; if the chosen target equals the source, `updateDirection` re-picks
-    /// (translating into the same language makes no sense).
+    /// (translating into the same language makes no sense). Ignored mid-translation
+    /// for the same reason `flipDirection` is guarded.
     func setTarget(_ language: TranslationLanguage) {
-        guard settings.multiLanguageMode else { return }
+        guard settings.multiLanguageMode, !isTranslating else { return }
         target = language
         if target == source { updateDirection() }
     }
@@ -189,7 +196,9 @@ final class TranslationEngine: ObservableObject {
 
         let chain = settings.resolvedChain
         guard !chain.isEmpty else {
-            state = .failed(TranslationError.emptyKey.localizedDescription)
+            // Nothing usable: all profiles are empty or half-filled. "API Key" alone
+            // would be wrong when the model or base URL is what's missing.
+            state = .failed(L("还没有配置可用的 API 服务，请先在设置中填写"))
             return
         }
 
@@ -204,8 +213,10 @@ final class TranslationEngine: ObservableObject {
         translationTask = Task { [weak self] in
             guard let self else { return }
             var lastError: Error?
+            var triedBackup = false
 
             for (position, link) in chain.enumerated() {
+                if position > 0 { triedBackup = true }
                 do {
                     for try await piece in stream(text, target, tone, extra, link.config) {
                         guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
@@ -260,7 +271,17 @@ final class TranslationEngine: ObservableObject {
             // remain available through the copy button after a failed stream.
             self.output = ""
             let message = lastError?.localizedDescription ?? L("翻译失败")
-            self.state = .failed(chain.count > 1 ? String(format: L("主用和备用都失败了 · %@"), message) : message)
+            // Only claim the backup failed when it was actually tried: a mid-stream
+            // failure on the primary deliberately skips failover (two spliced
+            // translations are worse than one failed one), and saying otherwise
+            // misleads about which provider is down.
+            if triedBackup {
+                self.state = .failed(String(format: L("主用和备用都失败了 · %@"), message))
+            } else if chain.count > 1 {
+                self.state = .failed(String(format: L("主用连接失败 · %@"), message))
+            } else {
+                self.state = .failed(message)
+            }
         }
     }
 
@@ -367,22 +388,39 @@ final class TranslationEngine: ObservableObject {
 
     // MARK: - File persistence
 
+    /// Serializes the bounded history snapshot. Written synchronously on the main
+    /// actor: the file is tiny (≤50 records, sub-millisecond), and a synchronous
+    /// write is what makes saves strictly ordered and guaranteed to land before
+    /// termination. The previous detached writes could finish out of order — an
+    /// older snapshot overwriting a newer one, or a cleared history resurrecting
+    /// itself — and could be cut off by app exit.
     private func saveHistory() {
         let records = history
         let url = historyURL
-        Task.detached(priority: .background) {
-            guard let data = try? JSONEncoder().encode(records) else { return }
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
-        }
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 
     private func loadHistory() {
         let url = historyURL
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([Record].self, from: data)
-        else { return }
-        history = decoded
+        guard let data = try? Data(contentsOf: url) else { return }
+        if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
+            history = decoded
+            return
+        }
+        // A single corrupt record (schema drift, truncated entry) must not cost the
+        // user the whole history: decode per-record, keep the good ones.
+        let lossy = try? JSONDecoder().decode([LossyRecord].self, from: data)
+        history = lossy?.compactMap(\.record) ?? []
+    }
+
+    /// Wrapper that tolerates individual corrupt entries during history load.
+    private struct LossyRecord: Decodable {
+        let record: Record?
+        init(from decoder: Decoder) throws {
+            record = try? Record(from: decoder)
+        }
     }
 
 }

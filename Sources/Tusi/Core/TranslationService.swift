@@ -46,7 +46,12 @@ enum TranslationService {
     static func endpoint(for config: APIConfig) throws -> URL {
         var raw = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { throw TranslationError.invalidURL }
-        if !raw.contains("://") { raw = "https://" + raw }
+        if !raw.contains("://") {
+            // A scheme-less loopback host is almost always a local HTTP server
+            // (Ollama-style); defaulting it to https would make "localhost:11434/v1"
+            // fail with a confusing TLS error. Remote hosts keep the https default.
+            raw = (Self.looksLoopback(raw) ? "http://" : "https://") + raw
+        }
 
         guard var components = URLComponents(string: raw),
               let scheme = components.scheme?.lowercased(),
@@ -76,6 +81,19 @@ enum TranslationService {
         components.path = (path == "/" ? "" : path) + completionsPath
         guard let url = components.url else { throw TranslationError.invalidURL }
         return url
+    }
+
+    /// True when a scheme-less base URL names a local host: the common ways to write
+    /// one — "localhost", the 127.0.0.0/8 range, and IPv6 loopback. Anything else stays
+    /// https. False positives here still hit the `insecureURL` gate below (an
+    /// out-of-range octet like 127.0.0.999 is not loopback), so this only widens the
+    /// default, never the security rule.
+    private static func looksLoopback(_ raw: String) -> Bool {
+        let lower = raw.lowercased()
+        return lower.hasPrefix("localhost")
+            || lower.hasPrefix("127.")
+            || lower.hasPrefix("[::1]")
+            || lower.hasPrefix("::1")
     }
 
     private static func isLoopback(_ host: String) -> Bool {
@@ -156,11 +174,15 @@ enum TranslationService {
                         throw TranslationError.http(0, L("无效响应"))
                     }
                     guard http.statusCode == 200 else {
-                        var errorBody = ""
-                        for try await line in bytes.lines {
-                            errorBody += line
-                            if errorBody.count > 4096 { break }
+                        // Consume at most 8 KiB of the error body. Reading it through
+                        // `lines` would buffer a single oversized line (e.g. a multi-MB
+                        // HTML page with no newlines) in full before we could cut it.
+                        var errorData = Data()
+                        for try await byte in bytes {
+                            errorData.append(byte)
+                            if errorData.count > 8192 { break }
                         }
+                        let errorBody = String(decoding: errorData, as: UTF8.self)
                         throw TranslationError.http(http.statusCode, Self.parseErrorMessage(errorBody))
                     }
 

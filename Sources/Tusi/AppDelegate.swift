@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let settings = SettingsStore()
     let panelState = PanelState()
-    let updateChecker = UpdateChecker()
+    lazy var updateChecker = UpdateChecker(preview: settings.isPreview)
     lazy var engine = TranslationEngine(settings: settings)
 
     func applicationWillTerminate(_ notification: Notification) {

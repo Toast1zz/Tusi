@@ -22,6 +22,14 @@ final class UpdateChecker: ObservableObject {
     private let lastCheckKey = "lastUpdateCheck"
     /// Auto-checks are throttled so a login-item app doesn't hit the API on every launch.
     private let autoInterval: TimeInterval = 6 * 3600
+    /// TUSI_PREVIEW runs must not hit GitHub, write the real throttle stamp, or paint
+    /// network state into screenshots — the preview settings suite is isolated, so the
+    /// update checker must be too.
+    private let isPreview: Bool
+
+    init(preview: Bool = false) {
+        isPreview = preview
+    }
 
     /// A newer version was found. Kept separate from `state` so a passive surface (the
     /// status-bar menu) can show it even after `state` is reset by a later manual check.
@@ -40,8 +48,10 @@ final class UpdateChecker: ObservableObject {
         if case .available(let v, let u) = state { pendingUpdate = (v, u) }
     }
 
-    /// Manual checks always run; automatic ones respect the throttle.
+    /// Manual checks always run; automatic ones respect the throttle. Preview runs
+    /// never check at all — screenshots must stay deterministic and offline.
     func check(manual: Bool) {
+        guard !isPreview else { return }
         if !manual {
             if let last = defaults.object(forKey: lastCheckKey) as? Date,
                Date().timeIntervalSince(last) < autoInterval {
@@ -149,11 +159,18 @@ final class UpdateChecker: ObservableObject {
     }
 
     /// Splits "v1.6.0-beta.1" into ("1.6.0", "beta.1"). Non-numeric release tails
-    /// (e.g. "1.6.0-rc" vs "1.6.0") stay out of the core comparison.
+    /// (e.g. "1.6.0-rc" vs "1.6.0") stay out of the core comparison. Build metadata
+    /// after "+" is dropped from both sides per semver: "1.6.0+build.5" equals
+    /// "1.6.0", never "newer".
     private static func splitVersion(_ version: String) -> (core: String, prerelease: String) {
         let trimmed = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        guard let dash = trimmed.firstIndex(of: "-") else { return (trimmed, "") }
-        return (String(trimmed[..<dash]), String(trimmed[dash...].dropFirst()))
+        guard let dash = trimmed.firstIndex(of: "-") else { return (stripBuildMetadata(trimmed), "") }
+        return (stripBuildMetadata(String(trimmed[..<dash])), stripBuildMetadata(String(trimmed[dash...].dropFirst())))
+    }
+
+    private static func stripBuildMetadata(_ component: String) -> String {
+        guard let plus = component.firstIndex(of: "+") else { return component }
+        return String(component[..<plus])
     }
 
     private struct Release: Decodable {

@@ -288,6 +288,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func installResignObserver() {
+        // queue: .main is load-bearing — the closure relies on MainActor.assumeIsolated
+        // below. Changing the queue to a background one would crash instead of degrade.
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
             object: panel,

@@ -217,6 +217,177 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(engine.history.isEmpty)
     }
 
+    func testNormalizedStripsFunctionModifier() {
+        // Fn is a layer key, not an intent: a combo recorded while Fn is held must
+        // still match plain presses, and plain presses must match Fn-carrying events.
+        let flags = NSEvent.ModifierFlags([.command, .function])
+        XCTAssertEqual(KeyCombo.normalized(flags).rawValue, NSEvent.ModifierFlags.command.rawValue)
+    }
+
+    func testVersionBuildMetadataIsIgnored() {
+        // Semver: "+build" metadata never participates in ordering.
+        XCTAssertFalse(UpdateChecker.isNewer("1.6.0+build.5", than: "1.6.0"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.6.0", than: "1.6.0+build.5"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.6.1+build.9", than: "1.6.0+build.5"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.6.0-beta.1+meta", than: "1.6.0-beta.0"))
+    }
+
+    func testEndpointDefaultsHTTPForLoopbackAndHTTPSForRemote() throws {
+        // Scheme-less local hosts must default to http (Ollama-style), remote to https.
+        let local = APIConfig(baseURL: "localhost:11434/v1", apiKey: "k", model: "m")
+        XCTAssertEqual(
+            try TranslationService.endpoint(for: local).absoluteString,
+            "http://localhost:11434/v1/chat/completions"
+        )
+        let remote = APIConfig(baseURL: "api.example.com/v1", apiKey: "k", model: "m")
+        XCTAssertEqual(
+            try TranslationService.endpoint(for: remote).absoluteString,
+            "https://api.example.com/v1/chat/completions"
+        )
+    }
+
+    func testTranslateWithoutUsableProfileShowsSetupMessage() {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        let engine = TranslationEngine(settings: settings)
+        engine.input = "hi"
+        engine.translate()
+        if case .failed(let message) = engine.state {
+            XCTAssertTrue(message.contains("还没有配置可用的 API 服务"), message)
+        } else {
+            XCTFail("expected failed state, got \(engine.state)")
+        }
+    }
+
+    func testFailoverMessageSkipsUntriedBackup() async throws {
+        // Primary yields partial output then dies: backup must NOT be tried (splicing
+        // two translations is worse), and the message must not claim it was.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                continuation.yield("partial")
+                continuation.finish(throwing: TranslationError.http(500, "boom"))
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        XCTAssertEqual(calls, 1)
+        if case .failed(let message) = engine.state {
+            XCTAssertFalse(message.contains("备用"), message)
+        } else {
+            XCTFail("expected failed state")
+        }
+    }
+
+    func testFailoverMessageMentionsBackupWhenTried() async throws {
+        // Primary fails cleanly before any output → backup is tried → both failed.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: TranslationError.http(500, "boom"))
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        XCTAssertEqual(calls, 2)
+        if case .failed(let message) = engine.state {
+            XCTAssertTrue(message.contains("备用"), message)
+        } else {
+            XCTFail("expected failed state")
+        }
+    }
+
+    func testDirectionChangesIgnoredWhileTranslating() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("ok")
+                continuation.finish()
+            }
+        }
+        engine.input = "hello world"  // English input → target Chinese
+        engine.translate()
+        XCTAssertTrue(engine.isTranslating)
+
+        engine.flipDirection()
+        XCTAssertFalse(engine.flipped)
+        XCTAssertEqual(engine.target, .chinese)
+
+        settings.multiLanguageMode = true
+        engine.setTarget(.japanese)
+        XCTAssertEqual(engine.target, .chinese)
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "ok")
+    }
+
+    func testHistoryLoadToleratesCorruptRecord() throws {
+        let url = TranslationEngine.historyURL(preview: true)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let good = """
+        {"id":"00000000-0000-0000-0000-000000000001","input":"a","output":"b","sourceLabel":"中","source":{"displayName":"中文","apiName":"x","symbol":"中"},"target":{"displayName":"English","apiName":"y","symbol":"EN"},"tone":"standard","timestamp":1000}
+        """
+        // Missing required fields (id/timestamp/tone) — must not sink the good record.
+        let bad = "{\"input\":\"broken\"}"
+        try "[\(good),\(bad)]".write(to: url, atomically: true, encoding: .utf8)
+
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        XCTAssertEqual(engine.history.count, 1)
+        XCTAssertEqual(engine.history[0].input, "a")
+    }
+
+    func testClearHistoryPersistsEmptyFile() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("result")
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.history.count, 1)
+
+        engine.clearHistory()
+        // Synchronous save: the cleared state is already on disk — no detached task
+        // can resurrect the old records later.
+        let data = try Data(contentsOf: TranslationEngine.historyURL(preview: true))
+        let decoded = try JSONDecoder().decode([TranslationEngine.Record].self, from: data)
+        XCTAssertTrue(decoded.isEmpty)
+    }
+
+    private func waitUntilFailed(_ engine: TranslationEngine) async throws {
+        for _ in 0..<100 where !isFailed(engine.state) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(isFailed(engine.state))
+    }
+
+    private func isFailed(_ state: TranslationEngine.State) -> Bool {
+        if case .failed = state { return true }
+        return false
+    }
+
     private func waitUntilDone(_ engine: TranslationEngine) async throws {
         for _ in 0..<100 where engine.state != .done {
             try await Task.sleep(for: .milliseconds(10))

@@ -38,6 +38,13 @@ struct SettingsView: View {
         nonmutating set { panelState.settingsProfileIndex = newValue }
     }
 
+    /// Indexing guard: `profiles` is a two-slot invariant maintained by the UI, but a
+    /// stale `settingsProfileIndex` must degrade to slot 0 instead of crashing on an
+    /// out-of-range subscript if the invariant ever breaks.
+    private var safeEditingIndex: Int {
+        settings.profiles.indices.contains(editingIndex) ? editingIndex : 0
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -46,14 +53,14 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 labeledField("接口地址", focused: focusedField == .baseURL) {
-                    TextField("https://api.example.com/v1", text: $settings.profiles[editingIndex].baseURL)
+                    TextField("https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
                         .focused($focusedField, equals: .baseURL)
                         .accessibilityLabel("接口地址")
                 }
                 labeledField("模型", focused: focusedField == .model) {
-                    TextField("model-name", text: $settings.profiles[editingIndex].model)
+                    TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
                         .focused($focusedField, equals: .model)
@@ -72,9 +79,9 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         Group {
                             if showKey {
-                                TextField("sk-…", text: $settings.profiles[editingIndex].apiKey)
+                                TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
                             } else {
-                                SecureField("sk-…", text: $settings.profiles[editingIndex].apiKey)
+                                SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
                             }
                         }
                         .textFieldStyle(.plain)
@@ -421,7 +428,7 @@ struct SettingsView: View {
     private var showAdvanced: Bool {
         get {
             advancedExpandedOverride[editingIndex]
-                ?? !settings.profiles[editingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
+                ?? !settings.profiles[safeEditingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
         }
         nonmutating set { advancedExpandedOverride[editingIndex] = newValue }
     }
@@ -459,7 +466,7 @@ struct SettingsView: View {
                     hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔",
                     focused: focusedField == .providerOrder
                 ) {
-                    TextField("novita, together", text: $settings.profiles[editingIndex].providerOrder)
+                    TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, design: .monospaced))
                         .focused($focusedField, equals: .providerOrder)
@@ -535,10 +542,10 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
                 .background(Capsule().fill(Color.primary.opacity(0.055)))
                 .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
-                .opacity(settings.profiles[editingIndex].isUsable ? 1 : 0.45)
+                .opacity(settings.profiles[safeEditingIndex].isUsable ? 1 : 0.45)
             }
             .buttonStyle(.plain)
-            .disabled(testState == .testing || !settings.profiles[editingIndex].isUsable)
+            .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
 
             Spacer(minLength: 8)
 
@@ -576,7 +583,7 @@ struct SettingsView: View {
     }
 
     private func runTest() {
-        let index = editingIndex
+        let index = safeEditingIndex
         testTasks[index]?.cancel()
         let generation = (testGenerations[index] ?? 0) + 1
         testGenerations[index] = generation

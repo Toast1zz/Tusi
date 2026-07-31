@@ -75,8 +75,11 @@ struct KeyCombo: Equatable {
     /// regardless of which physical keys are held — without stripping it too, the
     /// keypad Enter (already unified with Return above) would never match a combo
     /// defined with the main Return key, and would fall through as a plain newline.
+    /// `.function` gets the same treatment: Fn is a layer key, not an intent, so a
+    /// combo recorded while Fn happens to be held must still match plain presses
+    /// (and a combo recorded without it must match presses that carry Fn).
     static func normalized(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
-        flags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad])
+        flags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
     }
 
     static func describe(keyCode: UInt16, characters: String?, flags: NSEvent.ModifierFlags) -> String {

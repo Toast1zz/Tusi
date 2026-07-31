@@ -157,6 +157,10 @@ enum Tone: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// The recognizer is a shared mutable instance (reset between uses), so the whole
+/// detector is main-actor-isolated: a future off-main caller becomes a compile error
+/// instead of a silent data race.
+@MainActor
 enum LanguageDetector {
     private static let recognizer: NLLanguageRecognizer = {
         // NLLanguageRecognizer is designed for reuse — create once, reset() between uses.
@@ -192,7 +196,11 @@ enum LanguageDetector {
 
         recognizer.reset()
         recognizer.processString(sample)
-        guard let language = recognizer.dominantLanguage else { return (.chinese, "文") }
+        guard let language = recognizer.dominantLanguage else {
+            // Nothing the recognizer can name: fall back to the same default the empty
+            // input takes, keeping source and label consistent.
+            return (.chinese, "中")
+        }
         let detected = TranslationLanguage.fromNLLanguage(language)
         return (detected, shortLabel(for: language))
     }

@@ -2,6 +2,26 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-07-31
+
+### Changed
+
+- Translation direction / target language can no longer be switched while a translation is in flight — the running request captured its target at launch, and flipping mid-stream left the direction chip disagreeing with the result. Stop first, then switch
+- Scheme-less loopback base URLs (`localhost:11434/v1`) now default to HTTP instead of a guaranteed-to-fail HTTPS; remote hosts keep the HTTPS default
+
+### Fixed
+
+- The Fn modifier could get baked into a recorded shortcut (recorded while Fn was held), making the shortcut never match afterwards; Fn is now stripped like Caps Lock and the keypad flags
+- History file writes could complete out of order (an older snapshot overwriting a newer one, or a cleared history resurrecting itself on next launch); saves are now synchronous and strictly ordered, and the final entry always lands before app exit
+- One corrupt history record silently discarded the entire history; records now decode individually and the good ones survive
+- The error message claimed "both primary and backup failed" when the backup was never tried (a mid-stream failure deliberately skips failover); the message now distinguishes the two cases
+- Version comparison treated `+build` metadata as a version component (`1.6.0+build.5` outranked `1.6.0`); build metadata is now ignored per semver
+- Error responses were read line-by-line, so one oversized line (e.g. a multi-MB HTML page with no newlines) was buffered in full; the error body is now capped at 8 KiB of bytes
+- The language detector could report source `.chinese` with the label `文` when the recognizer had no answer; the fallback label is now consistent
+- The "nothing configured" message only mentioned the API key even when the model or base URL was what was missing
+- TUSI_PREVIEW screenshot runs could fire a real update check and write the real throttle timestamp; preview runs now skip update checks entirely
+- Settings profile-slot index gained an out-of-range guard (degrade to slot 0 instead of crashing on a broken invariant)
+
 ## [1.6.1] - 2026-07-31
 
 ### Removed
@@ -72,6 +92,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.6.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.2
 [1.6.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.1
 [1.6.0]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0
 [1.6.0-beta.1]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0-beta.1
