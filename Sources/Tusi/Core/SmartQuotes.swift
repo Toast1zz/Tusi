@@ -7,14 +7,22 @@ import Foundation
 /// to actually guarantee it. Text inside code spans and fenced blocks is left byte-exact:
 /// curly quotes there would break the code the translation is trying to preserve.
 enum SmartQuotes {
+    /// A contiguous run of backticks, located up front so unpaired runs can be told
+    /// apart from genuine code delimiters.
+    private struct BacktickRun {
+        let start: Int
+        let end: Int
+        let length: Int
+    }
+
     static func apply(to text: String) -> String {
         guard text.contains("\"") || text.contains("'") else { return text }
 
         let characters = Array(text)
+        let codeFlags = matchedCodeFlags(in: characters)
         var result = ""
         result.reserveCapacity(characters.count)
 
-        var insideCode = false
         var doubleIsOpen = false
         var singleIsOpen = false
         var previous: Character?
@@ -23,18 +31,20 @@ enum SmartQuotes {
         while index < characters.count {
             let character = characters[index]
 
-            // A run of backticks opens or closes code — ` for spans, ``` for blocks.
-            if character == "`" {
-                var end = index
-                while end < characters.count, characters[end] == "`" { end += 1 }
-                result.append(contentsOf: characters[index..<end])
-                insideCode.toggle()
-                previous = "`"
-                index = end
-                continue
-            }
-
-            if insideCode {
+            // Backtick runs and the text between a matched pair are passed through
+            // byte-exact — curly quotes there would break the code being preserved.
+            // A run whose partner never appears (a stray ` from a half-finished
+            // markdown edit) is NOT code: leaving it unpaired keeps one orphan
+            // backtick from disabling quote conversion for the rest of the text.
+            if codeFlags[index] {
+                if character == "`" {
+                    var end = index
+                    while end < characters.count, characters[end] == "`" { end += 1 }
+                    result.append(contentsOf: characters[index..<end])
+                    previous = "`"
+                    index = end
+                    continue
+                }
                 result.append(character)
                 previous = character
                 index += 1
@@ -66,6 +76,40 @@ enum SmartQuotes {
             index += 1
         }
         return result
+    }
+
+    /// Marks every character inside a matched code region (delimiters included).
+    /// Runs of 1–2 backticks pair with an equal-length run (inline spans); runs of
+    /// 3+ pair with another block run (fenced blocks). Unpaired runs stay plain text.
+    private static func matchedCodeFlags(in characters: [Character]) -> [Bool] {
+        var flags = [Bool](repeating: false, count: characters.count)
+        var runs: [BacktickRun] = []
+        var i = 0
+        while i < characters.count {
+            if characters[i] == "`" {
+                var j = i
+                while j < characters.count, characters[j] == "`" { j += 1 }
+                runs.append(BacktickRun(start: i, end: j, length: j - i))
+                i = j
+            } else {
+                i += 1
+            }
+        }
+        var stack: [BacktickRun] = []
+        for run in runs {
+            if let top = stack.last, canPair(top, run) {
+                for position in top.start..<run.end { flags[position] = true }
+                stack.removeLast()
+            } else {
+                stack.append(run)
+            }
+        }
+        return flags
+    }
+
+    private static func canPair(_ a: BacktickRun, _ b: BacktickRun) -> Bool {
+        if a.length >= 3 || b.length >= 3 { return a.length >= 3 && b.length >= 3 }
+        return a.length == b.length
     }
 
     /// Latin text puts a space before an opening quote, so the preceding character settles

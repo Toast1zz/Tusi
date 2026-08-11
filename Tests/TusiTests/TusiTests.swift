@@ -394,4 +394,155 @@ final class TusiTests: XCTestCase {
         }
         XCTAssertEqual(engine.state, .done)
     }
+
+    // MARK: - Streaming (mock URLSession)
+
+    func testStreamParsesSSEChunksUntilDone() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你"}}]}
+
+        data: {"choices":[{"delta":{"content":"好"}}]}
+
+        data: [DONE]
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["你", "好"])
+        }
+    }
+
+    func testStreamWithoutDoneSentinelThrowsTruncated() async throws {
+        // A clean close with content but no [DONE] means the connection ended before
+        // the result did — a truncated translation must not pass as complete.
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你"}}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
+                XCTFail("expected truncatedStream error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .truncatedStream)
+            }
+        }
+    }
+
+    func testStreamSurfacesHTTPErrorWithParsedMessage() async throws {
+        try await withMockSession(sse: #"{"error":{"message":"bad key"}}"#, statusCode: 401) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
+                XCTFail("expected http error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .http(401, "bad key"))
+            }
+        }
+    }
+
+    /// Serves `sse` as the body of a mock HTTP response through a URLProtocol-backed
+    /// session, runs `body`, and tears the seam down afterwards.
+    private func withMockSession(sse: String, statusCode: Int = 200, body: () async throws -> Void) async throws {
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
+            return (response, Data(sse.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: config)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+        try await body()
+    }
+
+    // MARK: - SmartQuotes edges
+
+    func testSmartQuotesUnmatchedBacktickDoesNotSilenceQuotes() {
+        // A stray opening backtick without a closer must not leave the rest of the
+        // text in code mode — quotes after it still convert.
+        XCTAssertEqual(SmartQuotes.apply(to: "He said \"hi\" `oops"), "He said “hi” `oops")
+    }
+
+    func testSmartQuotesPairedBackticksPreserveCode() {
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "`raw \"quotes\"` and \"real\""),
+            "`raw \"quotes\"` and “real”"
+        )
+    }
+
+    func testSmartQuotesFencedBlockPreservesContentUntilCloser() {
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "```\n\"raw\"\n```\n\"after\""),
+            "```\n\"raw\"\n```\n“after”"
+        )
+    }
+
+    func testSmartQuotesUnclosedFenceDoesNotSilenceQuotes() {
+        // An unclosed ``` block is not code: its quotes still convert rather than
+        // everything after it going raw.
+        XCTAssertEqual(SmartQuotes.apply(to: "```\n\"raw\"\n"), "```\n“raw”\n")
+    }
+
+    func testSmartQuotesApostrophesAndElision() {
+        XCTAssertEqual(SmartQuotes.apply(to: "Don't stop"), "Don’t stop")
+        XCTAssertEqual(SmartQuotes.apply(to: "the '90s"), "the ’90s")
+    }
+
+    // MARK: - Streaming coalescing
+
+    func testStreamingCoalescingDoesNotDropContent() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let chunks = (0..<40).map { "piece-\($0) " }
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                Task {
+                    for chunk in chunks {
+                        continuation.yield(chunk)
+                        try? await Task.sleep(for: .milliseconds(2))
+                    }
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, chunks.joined())
+    }
+}
+
+/// Serves canned HTTP responses to URLSession, so TranslationService's SSE parsing
+/// runs without a network. Installed as the protocol class of a throwaway session.
+final class MockURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

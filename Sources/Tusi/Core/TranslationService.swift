@@ -3,6 +3,7 @@ import Foundation
 enum TranslationError: LocalizedError, Equatable {
     case emptyKey
     case emptyResponse
+    case truncatedStream
     case invalidURL
     case insecureURL
     case http(Int, String)
@@ -13,6 +14,8 @@ enum TranslationError: LocalizedError, Equatable {
             return L("还没有配置 API Key，请先在设置中填写")
         case .emptyResponse:
             return L("模型没有返回内容")
+        case .truncatedStream:
+            return L("翻译结果不完整，连接提前中断")
         case .invalidURL:
             return L("接口地址无效，请检查设置")
         case .insecureURL:
@@ -32,7 +35,7 @@ enum TranslationError: LocalizedError, Equatable {
 }
 
 enum TranslationService {
-    private static let session: URLSession = {
+    private static let productionSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         // A stream may legitimately take a while, but it should never be allowed to
@@ -40,6 +43,21 @@ enum TranslationService {
         config.timeoutIntervalForResource = 300
         return URLSession(configuration: config)
     }()
+
+    /// The session every request goes through. Tests swap in a mock-backed session
+    /// via `sessionOverride` (a URLProtocol that serves canned SSE); the seam itself
+    /// is compiled out of release builds.
+    private static var session: URLSession {
+        #if DEBUG
+        if let override = sessionOverride { return override }
+        #endif
+        return productionSession
+    }
+
+    #if DEBUG
+    /// Test-only injection point. Never set outside of tests.
+    static var sessionOverride: URLSession?
+    #endif
 
     /// Builds the OpenAI-compatible chat-completions endpoint from the user's base URL.
     /// Kept internal so the URL normalization and security rules can be unit-tested.
@@ -187,12 +205,16 @@ enum TranslationService {
                     }
 
                     let decoder = JSONDecoder()
+                    var sawDone = false
                     for try await rawLine in bytes.lines {
                         try Task.checkCancellation()
                         let line = rawLine.trimmingCharacters(in: .whitespaces)
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        if payload == "[DONE]" { break }
+                        if payload == "[DONE]" {
+                            sawDone = true
+                            break
+                        }
                         guard let data = payload.data(using: .utf8),
                               let chunk = try? decoder.decode(StreamChunk.self, from: data),
                               let piece = chunk.choices.first?.delta.content,
@@ -200,6 +222,12 @@ enum TranslationService {
                         else { continue }
                         continuation.yield(piece)
                     }
+                    // A clean close without the [DONE] sentinel means the connection
+                    // ended before the result did (some local gateways drop the stream
+                    // this way). A truncated result must not be presented as complete —
+                    // the caller's mid-stream failure path already discards partial
+                    // output, so this follows the same contract.
+                    guard sawDone else { throw TranslationError.truncatedStream }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

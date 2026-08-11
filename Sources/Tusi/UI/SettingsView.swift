@@ -590,7 +590,7 @@ struct SettingsView: View {
         testStates[index] = .testing
         let config = settings.profiles[index].config
 
-        let task = Task {
+        let task = Task { @MainActor in
             do {
                 let ms = try await TranslationService.testConnection(config: config)
                 guard !Task.isCancelled, testGenerations[index] == generation else { return }

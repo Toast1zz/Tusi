@@ -17,6 +17,10 @@ struct TranslatorView: View {
 
     @FocusState private var inputFocused: Bool
     @State private var resultHeight: CGFloat = 20
+    /// Whether the result viewport sits at its bottom edge. Streaming auto-scrolls
+    /// only when the user is already there — reading an earlier part of a long
+    /// result must not be yanked back to the tail on every chunk.
+    @State private var isAtBottom = true
 
     // Line geometry for the 15pt content font with lineSpacing 3, measured empirically:
     // the first line is 19pt and every line after adds 22pt. Input (AppKit metrics) and
@@ -36,7 +40,21 @@ struct TranslatorView: View {
 
     /// Measures the input's natural height with AppKit metrics so it matches
     /// TextEditor's actual NSTextView layout (SwiftUI Text metrics differ for CJK).
+    ///
+    /// Memoized by (text, width): the body re-evaluates on every streamed chunk, but
+    /// the input text does not change while the result streams — re-measuring it
+    /// hundreds of times per translation is pure waste. The cache is bounded (widths
+    /// come from the clamped 470–700 range, so entries are few).
+    private struct InputMeasureKey: Hashable {
+        let text: String
+        let width: CGFloat
+    }
+    private static var inputMeasureCache: [InputMeasureKey: CGFloat] = [:]
+    private static let inputMeasureCacheLimit = 64
+
     private var inputHeight: CGFloat {
+        let key = InputMeasureKey(text: engine.input, width: editorTextWidth)
+        if let cached = Self.inputMeasureCache[key] { return cached }
         var text = engine.input.isEmpty ? " " : engine.input
         if text.hasSuffix("\n") { text += " " }
         let style = NSMutableParagraphStyle()
@@ -49,7 +67,12 @@ struct TranslatorView: View {
             with: NSSize(width: editorTextWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin]
         )
-        return ceil(rect.height) + 2
+        let height = ceil(rect.height) + 2
+        Self.inputMeasureCache[key] = height
+        if Self.inputMeasureCache.count > Self.inputMeasureCacheLimit {
+            Self.inputMeasureCache.removeAll()
+        }
+        return height
     }
 
     var body: some View {
@@ -169,9 +192,10 @@ struct TranslatorView: View {
                 }
                 .scrollIndicators(.never)
                 .frame(height: min(max(resultHeight, 20), maxResultHeight))
+                .trackBottomEdge($isAtBottom)
                 .onPreferenceChange(ResultHeightKey.self) { resultHeight = $0 }
                 .onChange(of: engine.output) { _, _ in
-                    if engine.isTranslating {
+                    if engine.isTranslating, isAtBottom {
                         proxy.scrollTo("end", anchor: .bottom)
                     }
                 }
@@ -357,5 +381,25 @@ private struct HistoryRecordRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.snappy(duration: 0.15), value: hovering)
+    }
+}
+
+private extension View {
+    /// Keeps a "user is at the bottom of the scroll view" flag current. macOS 15+
+    /// exposes ScrollGeometry for this; macOS 14 has no way to read a SwiftUI
+    /// ScrollView's offset, so the flag simply stays at its initial value there
+    /// (true — streaming keeps auto-following, the pre-existing behavior).
+    @ViewBuilder
+    func trackBottomEdge(_ isAtBottom: Binding<Bool>) -> some View {
+        if #available(macOS 15.0, *) {
+            onScrollGeometryChange(for: CGFloat.self) { geometry in
+                // Distance from the bottom edge of the content, in points.
+                max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
+            } action: { _, distanceToBottom in
+                isAtBottom.wrappedValue = distanceToBottom < 4
+            }
+        } else {
+            self
+        }
     }
 }

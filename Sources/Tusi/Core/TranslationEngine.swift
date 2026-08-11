@@ -190,6 +190,10 @@ final class TranslationEngine: ObservableObject {
 
         translationTask?.cancel()
         translationTask = nil
+        toastTask?.cancel()
+        toastTask = nil
+        copyResetTask?.cancel()
+        copyResetTask = nil
         output = ""
         copied = false
         toast = nil
@@ -215,22 +219,22 @@ final class TranslationEngine: ObservableObject {
             var lastError: Error?
             var triedBackup = false
 
-            for (position, link) in chain.enumerated() {
+            attemptLoop: for (position, link) in chain.enumerated() {
                 if position > 0 { triedBackup = true }
-                do {
-                    for try await piece in stream(text, target, tone, extra, link.config) {
-                        guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
-                        self.output += piece
-                    }
-                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
-
+                switch await consumeStream(
+                    stream(text, target, tone, extra, link.config),
+                    requestRevision: requestRevision
+                ) {
+                case .cancelled:
+                    return  // Cancelled by a newer request or by the user.
+                case .completed:
                     // A successful HTTP response with no usable content is still a
                     // failed attempt and should be eligible for backup failover.
                     guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         self.output = ""
                         lastError = TranslationError.emptyResponse
-                        guard position < chain.count - 1 else { break }
-                        continue
+                        if position < chain.count - 1 { continue attemptLoop }
+                        break attemptLoop
                     }
 
                     // Normalize punctuation once the full text is in — the conversion
@@ -248,21 +252,16 @@ final class TranslationEngine: ObservableObject {
                         self.flashToast(.fellBack)
                     }
                     return
-                } catch is CancellationError {
-                    return  // Cancelled by a newer request or by the user.
-                } catch let urlError as URLError where urlError.code == .cancelled {
-                    return
-                } catch {
-                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+                case .failed(let error):
                     lastError = error
                     // Only fall back before any token landed — retrying mid-stream
                     // would splice two different translations together.
                     if self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                        position < chain.count - 1 {
                         self.output = ""
-                        continue
+                        continue attemptLoop
                     }
-                    break
+                    break attemptLoop
                 }
             }
 
@@ -282,6 +281,67 @@ final class TranslationEngine: ObservableObject {
             } else {
                 self.state = .failed(message)
             }
+        }
+    }
+
+    /// One provider attempt's outcome as seen by the caller.
+    private enum StreamOutcome {
+        case completed
+        case failed(Error)
+        case cancelled
+    }
+
+    /// Consumes one provider stream, coalescing chunks so the UI never re-renders
+    /// faster than the flush cadence. A fast SSE stream can deliver hundreds of
+    /// chunks per second; publishing each one individually would re-layout the
+    /// result view at network speed. Chunks accumulate in a buffer, a flush task
+    /// publishes at most once per `flushInterval`, and the tail is flushed before
+    /// returning. Partial output is left in `self.output` on failure so the caller's
+    /// failover logic can see how much landed.
+    private func consumeStream(
+        _ stream: AsyncThrowingStream<String, Error>,
+        requestRevision: UInt
+    ) async -> StreamOutcome {
+        let flushInterval: Duration = .milliseconds(33)
+        var buffer = ""
+
+        let flusher = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: flushInterval) } catch { return }
+                guard let self, !Task.isCancelled else { return }
+                if !buffer.isEmpty {
+                    self.output += buffer
+                    buffer = ""
+                }
+            }
+        }
+        defer { flusher.cancel() }
+
+        do {
+            for try await piece in stream {
+                guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+                buffer += piece
+            }
+            flusher.cancel()
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+            if !buffer.isEmpty {
+                self.output += buffer
+                buffer = ""
+            }
+            return .completed
+        } catch is CancellationError {
+            return .cancelled
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return .cancelled
+        } catch {
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+            // Flush whatever arrived so the caller sees the real partial output
+            // (it decides whether that counts as a mid-stream failure).
+            if !buffer.isEmpty {
+                self.output += buffer
+                buffer = ""
+            }
+            return .failed(error)
         }
     }
 

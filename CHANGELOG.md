@@ -2,6 +2,23 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-08-11
+
+### Changed
+
+- Streaming is now coalesced: SSE chunks accumulate and are published at most ~30×/s instead of once per network packet, so a fast stream no longer re-lays-out the result view at network speed (the panel still animates smoothly, just at a sane frame rate)
+- The result view auto-scrolls during streaming only while the user is already at the bottom — reading an earlier part of a long translation no longer yanks the viewport back to the tail
+- The panel's height follows the streamed text directly instead of stacking a new 0.25s animation per line; the eased resize is reserved for discrete layout jumps
+- Input height measurement is memoized by (text, width), so streaming chunks no longer re-measure the unchanged input hundreds of times
+
+### Fixed
+
+- The smart-quote pass now pairs backtick delimiters: a stray unpaired backtick in the model's output no longer disables quote conversion for the rest of the text
+- Two error messages ("primary connection failed" and "no usable API service configured") rendered in Chinese on English systems — their localization keys are now present
+- A connection closed cleanly by the server before the `[DONE]` sentinel is treated as truncated instead of a complete translation, and partial output is discarded per the existing mid-stream failure contract
+- The settings "test connection" task now explicitly runs on the main actor instead of inheriting ambiguous isolation from the view context
+- Update-check failure paths no longer leave a stale task reference behind
+
 ## [1.6.2] - 2026-07-31
 
 ### Changed
@@ -93,6 +110,7 @@ First tagged release.
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
 [1.6.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.2
+[1.7.0]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.0
 [1.6.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.1
 [1.6.0]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0
 [1.6.0-beta.1]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0-beta.1

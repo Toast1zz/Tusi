@@ -168,10 +168,19 @@ final class PanelController: NSObject, NSWindowDelegate {
         frame.size.height = clamped
         frame.origin.y = top - clamped
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25 * Theme.animationScale
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(frame, display: true)
+        // While a translation streams, line growth arrives in a rapid burst: a full
+        // 0.25s ease-out per line would stack dozens of overlapping animations and
+        // lag the text. Set the frame directly during streaming (the engine already
+        // coalesces updates to ~30/s); the eased animation is reserved for discrete
+        // layout jumps (history toggle, mode switch).
+        if engine.isTranslating {
+            panel.setFrame(frame, display: true)
+        } else {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25 * Theme.animationScale
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(frame, display: true)
+            }
         }
     }
 

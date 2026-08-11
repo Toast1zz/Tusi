@@ -73,6 +73,7 @@ final class UpdateChecker: ObservableObject {
 
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
             state = .failed
+            checkTask = nil
             return
         }
         var request = URLRequest(url: url)
@@ -85,6 +86,7 @@ final class UpdateChecker: ObservableObject {
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   let release = try? JSONDecoder().decode(Release.self, from: data) else {
                 state = .failed
+                checkTask = nil
                 return
             }
             let latest = release.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
@@ -109,6 +111,7 @@ final class UpdateChecker: ObservableObject {
         } catch {
             guard activeCheckID == id else { return }
             state = .failed
+            checkTask = nil
         }
     }
 
