@@ -56,6 +56,8 @@ There are two profiles, primary and backup. With failover enabled, a primary req
 ./build.sh                        # builds build/Tusi.app for the current arch
 TUSI_ARCH=universal ./build.sh    # universal binary (arm64 + Intel)
 TUSI_VERSION=1.4.3 TUSI_BUILD_NUMBER=12 ./build.sh
+./build.sh install                # build and install to /Applications (debug loop)
+./build.sh install --open         # …and launch it
 ./build.sh release                # arm64 + universal release zips into dist/
 ```
 

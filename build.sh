@@ -173,6 +173,27 @@ else
 fi
 
 echo "✓ 已生成 $APP"
-if [[ "${1:-}" == "--open" ]]; then
-    open "$APP"
+INSTALLED=0
+DO_OPEN=0
+for arg in "$@"; do
+    case "$arg" in
+        --open)
+            DO_OPEN=1
+            ;;
+        install)
+            # 调试循环：装到 /Applications。签名身份稳定（Tusi Dev Signing），
+            # Keychain 的「始终允许」授权跨构建/重装保持，不会反复弹窗。
+            rm -rf /Applications/Tusi.app
+            cp -R "$APP" /Applications/Tusi.app
+            INSTALLED=1
+            echo "✓ 已安装到 /Applications/Tusi.app"
+            ;;
+    esac
+done
+if [[ "$DO_OPEN" == "1" ]]; then
+    if [[ "$INSTALLED" == "1" ]]; then
+        open /Applications/Tusi.app
+    else
+        open "$APP"
+    fi
 fi
