@@ -78,7 +78,10 @@ enum TranslationService {
               !host.isEmpty,
               components.user == nil,
               components.password == nil,
-              components.fragment == nil
+              components.fragment == nil,
+              // A query string would ride along onto /chat/completions?… — almost always
+              // a mistyped base URL, and hostile to strict gateways. Reject it outright.
+              components.query == nil
         else {
             throw TranslationError.invalidURL
         }
@@ -186,7 +189,11 @@ enum TranslationService {
                         "messages": messages,
                     ]
                     let request = try makeRequest(config: config, body: body)
-                    let (bytes, response) = try await session.bytes(for: request)
+                    // Some self-hosted gateways refuse to stream without an explicit
+                    // Accept; standard OpenAI-compatible servers ignore it.
+                    var streamRequest = request
+                    streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    let (bytes, response) = try await session.bytes(for: streamRequest)
 
                     guard let http = response as? HTTPURLResponse else {
                         throw TranslationError.http(0, L("无效响应"))

@@ -100,7 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // An available update surfaces at the top, so it's discoverable without opening
         // Settings. The menu is rebuilt on each right-click, so this stays current.
-        if let update = updateChecker.pendingUpdate {
+        // While a check is in flight the item is hidden — showing the last known update
+        // mid-refresh reads as stale. On failure the previous known update still shows
+        // (it remains true that it exists).
+        if updateChecker.state != .checking, let update = updateChecker.pendingUpdate {
             let item = NSMenuItem(
                 title: String(format: L("有新版本 %@ →"), update.version),
                 action: #selector(openUpdatePage),

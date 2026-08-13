@@ -2,6 +2,24 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-08-13
+
+### Added
+
+- `./build.sh release` builds both arch slices (arm64 + universal) and packs clean `dist/Tusi-*.zip` archives with `ditto` (no `__MACOSX` junk)
+
+### Changed
+
+- Stopping a translation now applies the smart-quote pass to the partial output and marks the result "Stopped — result is incomplete", so a half-open quote pair is fixed up and the incomplete result is clearly flagged
+- The menu's update item no longer shows a stale update while a check is running; a known update now survives a failed re-check instead of being cleared
+- Streaming requests send an explicit `Accept: text/event-stream` header
+- Builds are signed with a dedicated self-signed identity (Tusi Dev Signing) kept in its own keychain, so the Keychain "Always Allow" authorization persists across rebuilds and reinstalls instead of re-prompting on every install
+
+### Fixed
+
+- A base URL containing a query string is rejected as invalid instead of producing a malformed request
+- `build.sh release` previously ignored the `release` positional argument (silently building the native arch); the argument is now honored
+
 ## [1.7.0] - 2026-08-11
 
 ### Changed
@@ -109,6 +127,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.7.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.1
 [1.6.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.2
 [1.7.0]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.0
 [1.6.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.1

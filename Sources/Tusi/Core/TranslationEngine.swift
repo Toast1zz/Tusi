@@ -57,6 +57,11 @@ final class TranslationEngine: ObservableObject {
     /// single place that reports a copy — no extra chrome competing for the bottom bar.
     @Published private(set) var copied = false
 
+    /// True when the user stopped a stream with partial output already on screen. The
+    /// half-finished text is kept (stopping is a deliberate act), but it must not read as
+    /// a complete translation — the result view marks it as such.
+    @Published private(set) var interrupted = false
+
     /// Transient banner shown at the bottom of the panel, then auto-dismissed.
     /// Whether primary or backup served the request is an implementation detail —
     /// the only thing worth surfacing is the one-time "primary failed" notice.
@@ -197,6 +202,7 @@ final class TranslationEngine: ObservableObject {
         output = ""
         copied = false
         toast = nil
+        interrupted = false
 
         let chain = settings.resolvedChain
         guard !chain.isEmpty else {
@@ -348,7 +354,17 @@ final class TranslationEngine: ObservableObject {
     func cancelTranslation() {
         translationTask?.cancel()
         translationTask = nil
-        state = output.isEmpty ? .idle : .done
+        if output.isEmpty {
+            interrupted = false
+            state = .idle
+        } else {
+            // Stopping is deliberate: the partial text stays visible and copyable, but it
+            // gets the same punctuation pass a finished result does, and the view marks
+            // it as incomplete so it can't be mistaken for a complete translation.
+            output = SmartQuotes.apply(to: output)
+            interrupted = true
+            state = .done
+        }
     }
 
     private func clearResult() {
@@ -362,6 +378,7 @@ final class TranslationEngine: ObservableObject {
         output = ""
         copied = false
         toast = nil
+        interrupted = false
         state = .idle
     }
 
@@ -371,6 +388,7 @@ final class TranslationEngine: ObservableObject {
         self.output = output
         self.state = .done
         self.toast = toast
+        self.interrupted = false
     }
 
     // MARK: - Clipboard
@@ -437,6 +455,7 @@ final class TranslationEngine: ObservableObject {
         sourceLabel = record.sourceLabel
         source = record.source
         target = record.target
+        interrupted = false
         state = .done
     }
 

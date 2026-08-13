@@ -174,30 +174,41 @@ struct TranslatorView: View {
             StreamingPlaceholder()
                 .padding(.vertical, 2)
         default:
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    // The scroll anchor rides on the text itself — a separate spacer
-                    // child would add implicit VStack spacing and clip the top.
-                    Text(engine.output)
-                        .font(Theme.contentFont)
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            GeometryReader { geometry in
-                                Color.clear.preference(key: ResultHeightKey.self, value: geometry.size.height)
-                            }
-                        )
-                        .id("end")
-                }
-                .scrollIndicators(.never)
-                .frame(height: min(max(resultHeight, 20), maxResultHeight))
-                .trackBottomEdge($isAtBottom)
-                .onPreferenceChange(ResultHeightKey.self) { resultHeight = $0 }
-                .onChange(of: engine.output) { _, _ in
-                    if engine.isTranslating, isAtBottom {
-                        proxy.scrollTo("end", anchor: .bottom)
+            VStack(alignment: .leading, spacing: 8) {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        // The scroll anchor rides on the text itself — a separate spacer
+                        // child would add implicit VStack spacing and clip the top.
+                        Text(engine.output)
+                            .font(Theme.contentFont)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear.preference(key: ResultHeightKey.self, value: geometry.size.height)
+                                }
+                            )
+                            .id("end")
                     }
+                    .scrollIndicators(.never)
+                    .frame(height: min(max(resultHeight, 20), maxResultHeight))
+                    .trackBottomEdge($isAtBottom)
+                    .onPreferenceChange(ResultHeightKey.self) { resultHeight = $0 }
+                    .onChange(of: engine.output) { _, _ in
+                        if engine.isTranslating, isAtBottom {
+                            proxy.scrollTo("end", anchor: .bottom)
+                        }
+                    }
+                }
+
+                // A user-stopped stream keeps its partial text, but it must not pass for
+                // a complete translation — say so right under the result.
+                if engine.interrupted {
+                    Label(L("已停止，结果不完整"), systemImage: "stop.circle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .transition(.opacity)
                 }
             }
         }

@@ -176,6 +176,15 @@ final class TusiTests: XCTestCase {
             XCTAssertEqual(error as? TranslationError, .insecureURL)
         }
     }
+    func testEndpointRejectsQueryString() throws {
+        // A query on the base URL would ride along onto /chat/completions?… — reject it
+        // outright instead of sending a malformed request to the gateway.
+        let config = APIConfig(baseURL: "https://api.example.com/v1?foo=bar", apiKey: "k", model: "m")
+        XCTAssertThrowsError(try TranslationService.endpoint(for: config)) { error in
+            XCTAssertEqual(error as? TranslationError, .invalidURL)
+        }
+    }
+
     func testCompletedTranslationIsRecordedAndRestorable() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false

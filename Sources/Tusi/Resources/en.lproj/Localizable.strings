@@ -18,6 +18,7 @@
 "输入中文或任意语言，⏎ 翻译" = "Type Chinese or any language, ⏎ to translate";
 "翻译文风 · 当前模型：%@" = "Tone · Model: %@";
 "停止" = "Stop";
+"已停止，结果不完整" = "Stopped — result is incomplete";
 "⏎ 翻译" = "⏎ Translate";
 "取消固定" = "Unpin";
 "固定面板（点击外部不关闭）" = "Pin panel (stays open when you click outside)";

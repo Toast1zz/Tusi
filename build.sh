@@ -1,13 +1,17 @@
 #!/bin/bash
-# Builds Tusi.app into ./build. Usage: ./build.sh [--open]
+# Builds Tusi.app into ./build. Usage: ./build.sh [--open]  |  ./build.sh release
 #
 # Architecture is controlled by TUSI_ARCH (default: native, i.e. whatever this Mac is):
 #   TUSI_ARCH=arm64      swift build --arch arm64
 #   TUSI_ARCH=universal  builds arm64 + x86_64 separately, lipo's them together
+#   TUSI_ARCH=release    both zips into dist/ (same as the ./build.sh release form)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 ARCH_MODE="${TUSI_ARCH:-native}"
+if [[ "${1:-}" == "release" ]]; then
+    ARCH_MODE=release
+fi
 
 # VERSION contains the short version and build number, separated by whitespace.
 # Environment variables override it for CI/nightly builds.
@@ -64,8 +68,21 @@ case "$ARCH_MODE" in
         lipo -create "$arm64_slice" "$x86_64_slice" -output "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
+    release)
+        # Both release zips, packed with ditto (zip -r would sprinkle __MACOSX/ junk
+        # through the archive). Each slice is built by recursing into this script with
+        # the matching TUSI_ARCH; the last build (arm64) is what build/Tusi.app holds.
+        mkdir -p dist
+        TUSI_ARCH=universal "$0"
+        ditto -c -k --keepParent "$APP" "dist/Tusi-universal.zip"
+        TUSI_ARCH=arm64 "$0"
+        ditto -c -k --keepParent "$APP" "dist/Tusi-arm64.zip"
+        echo "✓ 已生成 dist/Tusi-arm64.zip 与 dist/Tusi-universal.zip"
+        # release 已完成全部打包；显式退出，跳过公共尾部的重复签名/echo。
+        exit 0
+        ;;
     *)
-        echo "未知 TUSI_ARCH: $ARCH_MODE（可选 native / arm64 / universal）" >&2
+        echo "未知 TUSI_ARCH: $ARCH_MODE（可选 native / arm64 / universal / release）" >&2
         exit 1
         ;;
 esac
@@ -126,10 +143,29 @@ EOF
 #
 # Anyone building this from a clone just falls through to ad-hoc: no certificate needed,
 # and the result works exactly as before.
-IDENTITY="${TUSI_SIGN_IDENTITY:-Spotoast Local Dev}"
-AVAILABLE_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+#
+# The default identity is Tusi's own signing certificate (a self-signed cert in the
+# dedicated tusi-dev.keychain-db). find-identity without -v is used for the presence
+# check on purpose: -v filters to *trusted* identities, which would hide a perfectly
+# usable self-signed certificate and silently fall back to ad-hoc.
+#
+# On a machine with the dedicated keychain, unlock it first so codesign can use it:
+#   TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
+#   TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
+IDENTITY="${TUSI_SIGN_IDENTITY:-Tusi Dev Signing}"
+
+if [[ -n "${TUSI_SIGN_KEYCHAIN:-}" && -f "${TUSI_SIGN_KEYCHAIN_PW_FILE:-}" ]]; then
+    security unlock-keychain -p "$(cat "$TUSI_SIGN_KEYCHAIN_PW_FILE")" "$TUSI_SIGN_KEYCHAIN" >/dev/null 2>&1 || true
+fi
+
+AVAILABLE_IDENTITIES="$(security find-identity -p codesigning 2>/dev/null || true)"
 if grep -F "\"$IDENTITY\"" >/dev/null <<< "$AVAILABLE_IDENTITIES"; then
-    codesign --force --sign "$IDENTITY" "$APP"
+    # Identity exists but signing fails (e.g. the keychain is locked): fail loudly
+    # instead of installing an ad-hoc build that would re-trigger the Keychain prompt.
+    codesign --force --sign "$IDENTITY" "$APP" || {
+        echo "✗ 签名失败：身份「${IDENTITY}」存在但无法使用（钥匙串是否已解锁？）" >&2
+        exit 1
+    }
     echo "✓ 已用「${IDENTITY}」签名"
 else
     codesign --force --sign - "$APP"

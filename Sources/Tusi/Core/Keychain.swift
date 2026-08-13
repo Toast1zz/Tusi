@@ -93,6 +93,10 @@ enum Keychain {
     private static func write(_ data: Data, account: String) throws {
         let query = baseQuery(account: account)
         let attributes: [String: Any] = [
+            // AfterFirstUnlock is the right trade for a login-item app: items stay
+            // available after the first unlock of a boot, but a launch that early
+            // (before the user unlocks) briefly fails to read. That's expected and
+            // recovers on its own — see README's configuration note.
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
