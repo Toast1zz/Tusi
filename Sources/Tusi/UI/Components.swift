@@ -221,7 +221,7 @@ struct ToneSelector: View {
 /// Primary copy button — flat solid capsule that morphs into a green check.
 struct CopyButton: View {
     let copied: Bool
-    var shortcutHint: String
+    var shortcutHint: String?
     let action: () -> Void
 
     @State private var hovering = false
@@ -233,7 +233,7 @@ struct CopyButton: View {
                     .font(.system(size: 10.5, weight: .bold))
                 Text(copied ? "已复制" : "复制")
                     .font(.system(size: 12, weight: .semibold))
-                if !copied {
+                if !copied, let shortcutHint, !shortcutHint.isEmpty {
                     Text(shortcutHint)
                         .font(.system(size: 10, weight: .medium))
                         .opacity(0.65)

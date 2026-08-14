@@ -110,6 +110,28 @@ final class TusiTests: XCTestCase {
         )
     }
 
+    func testClearedShortcutIsUnboundAndRebindingRestores() {
+        let settings = SettingsStore(preview: true)
+
+        // Defaults are bound.
+        XCTAssertNotNil(settings.shortcut(.copy))
+
+        // Clearing unbinds the shortcut (empty state).
+        settings.clearShortcut(for: .copy)
+        XCTAssertNil(settings.shortcut(.copy))
+
+        // Other shortcuts are unaffected.
+        XCTAssertNotNil(settings.shortcut(.translate))
+
+        // Re-binding reinstates it.
+        settings.setShortcut(.defaultCopy, for: .copy)
+        XCTAssertEqual(settings.shortcut(.copy), .defaultCopy)
+
+        // Clearing the summon works too — global registration is AppDelegate's concern.
+        settings.clearShortcut(for: .summon)
+        XCTAssertNil(settings.shortcut(.summon))
+    }
+
     func testVersionComparisonUsesSemanticOrdering() {
         XCTAssertTrue(UpdateChecker.isNewer("1.10.0", than: "1.9.9"))
         XCTAssertFalse(UpdateChecker.isNewer("1.2", than: "1.2.0"))

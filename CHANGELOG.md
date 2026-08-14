@@ -2,6 +2,14 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-08-14
+
+### Added
+
+- Shortcuts can now be unbound entirely: each shortcut row in Settings → Shortcuts gains a clear (✕) button, and an unbound shortcut displays "Unassigned" instead of a key combo. Re-record or restore the default to bind it again
+- The global summon hotkey can be unbound too — with no hotkey registered the panel still opens from the menu-bar icon, and the "hotkey failed" warning no longer applies
+- Unbound shortcuts are skipped by conflict detection, and the copy button hides its key hint when the copy shortcut is unbound
+
 ## [1.7.1] - 2026-08-13
 
 ### Added
@@ -127,6 +135,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.7.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.2
 [1.7.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.1
 [1.6.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.2
 [1.7.0]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.0

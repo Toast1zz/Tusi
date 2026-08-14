@@ -61,6 +61,8 @@
 "快捷键" = "Shortcuts";
 "恢复默认 %@" = "Restore default %@";
 "按下新快捷键…" = "Press a new shortcut…";
+"未绑定" = "Unassigned";
+"清除此快捷键" = "Clear this shortcut";
 "按 Esc 取消" = "Press Esc to cancel";
 "点击后按下新的组合键" = "Click, then press a new combination";
 "测试连接" = "Test Connection";

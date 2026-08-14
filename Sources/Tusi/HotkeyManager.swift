@@ -67,6 +67,11 @@ final class HotkeyManager {
         return true
     }
 
+    /// Unregisters the global hotkey entirely (shortcut unbound).
+    func clear() {
+        unregisterCurrent()
+    }
+
     private func unregisterCurrent() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)

@@ -342,7 +342,7 @@ struct TranslatorView: View {
             }
 
             if !engine.output.isEmpty {
-                CopyButton(copied: engine.copied, shortcutHint: settings.shortcut(.copy).display) {
+                CopyButton(copied: engine.copied, shortcutHint: settings.shortcut(.copy)?.display) {
                     engine.copyOutput()
                 }
                 .transition(.scale(scale: 0.9).combined(with: .opacity))

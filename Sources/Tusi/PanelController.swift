@@ -212,7 +212,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // Close / back — configurable (default Esc). Backs out one level at a time:
             // Shortcuts → Settings → Translator → hide.
-            if self.settings.shortcut(.close).matches(event) {
+            if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
                     withAnimation(.snappy(duration: 0.25)) { self.panelState.showShortcuts = false }
                 } else if self.panelState.showSettings {
@@ -232,17 +232,17 @@ final class PanelController: NSObject, NSWindowDelegate {
             // Let text fields in settings behave normally.
             guard !self.panelState.showSettings else { return event }
 
-            if self.settings.shortcut(.copy).matches(event) {
+            if let combo = self.settings.shortcut(.copy), combo.matches(event) {
                 self.engine.copyOutput()
                 return nil
             }
-            if self.settings.shortcut(.newline).matches(event) {
+            if let combo = self.settings.shortcut(.newline), combo.matches(event) {
                 // AppKit won't treat a modified Return as a newline on its own; ask the
                 // focused text view directly so the cursor and undo stack stay intact.
                 (self.panel.firstResponder as? NSTextView)?.insertNewline(nil)
                 return nil
             }
-            if self.settings.shortcut(.translate).matches(event) {
+            if let combo = self.settings.shortcut(.translate), combo.matches(event) {
                 self.engine.translate()
                 return nil
             }
@@ -277,7 +277,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         )
 
         if let clash = ShortcutAction.allCases.first(where: {
-            $0 != action && KeyCombo.sameKey(settings.shortcut($0), combo)
+            $0 != action && (settings.shortcut($0).map { KeyCombo.sameKey($0, combo) } ?? false)
         }) {
             panelState.shortcutError = String(format: L("与「%@」重复了"), clash.label)
             return

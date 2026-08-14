@@ -34,10 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         registerSummonHotkey(settings.shortcut(.summon))
 
-        // Re-register whenever the user rebinds the summon shortcut. Other shortcut
-        // changes flow through here too but are no-ops (same summon combo → deduped).
-        settings.$shortcuts
-            .map { $0[.summon] ?? ShortcutAction.summon.defaultCombo }
+        // Re-register whenever the user rebinds or unbinds the summon shortcut. Other
+        // shortcut changes flow through here too but are no-ops (same combo → deduped).
+        let settingsStore = settings
+        Publishers.CombineLatest(settingsStore.$shortcuts, settingsStore.$disabledShortcuts)
+            .map { _, _ in settingsStore.shortcut(.summon) }
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] combo in self?.registerSummonHotkey(combo) }
@@ -153,8 +154,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Registers (or re-registers) the global summon hotkey and surfaces failure. A nil
     /// manager or a rejected combo means the menu-bar icon is the only way in — a note,
-    /// not a fatal error.
-    private func registerSummonHotkey(_ combo: KeyCombo) {
+    /// not a fatal error. A nil combo (shortcut unbound) unregisters the hotkey.
+    private func registerSummonHotkey(_ combo: KeyCombo?) {
+        guard let combo else {
+            hotkey?.clear()
+            panelState.globalHotkeyFailed = false
+            return
+        }
         let ok = hotkey?.update(combo: combo) ?? false
         panelState.globalHotkeyFailed = !ok
     }

@@ -96,13 +96,26 @@ final class SettingsStore: ObservableObject {
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
         didSet { persistShortcuts() }
     }
+    /// Shortcuts the user has explicitly unbound. `shortcut(_:)` returns nil for these,
+    /// and the action is left to its non-keyboard affordance (button, menu-bar icon…).
+    @Published var disabledShortcuts: Set<ShortcutAction> {
+        didSet { persistDisabledShortcuts() }
+    }
 
-    func shortcut(_ action: ShortcutAction) -> KeyCombo {
-        shortcuts[action] ?? action.defaultCombo
+    func shortcut(_ action: ShortcutAction) -> KeyCombo? {
+        if disabledShortcuts.contains(action) { return nil }
+        return shortcuts[action] ?? action.defaultCombo
     }
 
     func setShortcut(_ combo: KeyCombo, for action: ShortcutAction) {
+        disabledShortcuts.remove(action)
         shortcuts[action] = combo
+    }
+
+    /// Unbinds a shortcut entirely (empty state). The previous combo is kept in
+    /// `shortcuts` so it can be reinstated by re-recording or restoring the default.
+    func clearShortcut(for action: ShortcutAction) {
+        disabledShortcuts.insert(action)
     }
     /// Optional freeform instruction appended to the system prompt — glossary entries,
     /// formatting rules, house style. Additive on purpose: it can't replace the
@@ -148,6 +161,7 @@ final class SettingsStore: ObservableObject {
         }
         extraInstruction = defaults.string(forKey: "extraInstruction") ?? ""
         shortcuts = Self.loadShortcuts(defaults: defaults)
+        disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
         profiles = isPreview ? [APIProfile(), APIProfile()] : Self.loadProfiles(defaults: defaults)
     }
@@ -192,6 +206,19 @@ final class SettingsStore: ObservableObject {
             defaults.set(Int(combo.keyCode), forKey: "\(base).keyCode")
             defaults.set(Int(combo.modifiers), forKey: "\(base).modifiers")
             defaults.set(combo.display, forKey: "\(base).display")
+        }
+    }
+
+    private static func loadDisabledShortcuts(defaults: UserDefaults) -> Set<ShortcutAction> {
+        Set((defaults.stringArray(forKey: "disabledShortcuts") ?? []).compactMap(ShortcutAction.init(rawValue:)))
+    }
+
+    private func persistDisabledShortcuts() {
+        guard !isPreview else { return }
+        if disabledShortcuts.isEmpty {
+            defaults.removeObject(forKey: "disabledShortcuts")
+        } else {
+            defaults.set(disabledShortcuts.map(\.rawValue).sorted(), forKey: "disabledShortcuts")
         }
     }
 

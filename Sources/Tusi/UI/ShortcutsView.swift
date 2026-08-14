@@ -63,13 +63,26 @@ struct ShortcutsView: View {
     private func shortcutRow(_ action: ShortcutAction) -> some View {
         let recording = panelState.recordingShortcut == action
         let combo = settings.shortcut(action)
-        let isDefault = KeyCombo.sameKey(combo, action.defaultCombo)
+        let isDefault = combo.map { KeyCombo.sameKey($0, action.defaultCombo) } ?? false
 
         return HStack(spacing: 8) {
             Text(action.label)
                 .font(.system(size: 12.5))
 
             Spacer()
+
+            if combo != nil && !recording {
+                Button {
+                    settings.clearShortcut(for: action)
+                    panelState.shortcutError = nil
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help(L("清除此快捷键"))
+            }
 
             if !isDefault && !recording {
                 Button {
@@ -96,7 +109,7 @@ struct ShortcutsView: View {
             } label: {
                 // combo.display (e.g. "⇧⌘C") is a String, so this ternary can't rely on
                 // Text's automatic LocalizedStringKey lookup — the other branch needs L().
-                Text(recording ? L("按下新快捷键…") : combo.display)
+                Text(recording ? L("按下新快捷键…") : (combo?.display ?? L("未绑定")))
                     .font(.system(size: 11.5, weight: .medium, design: recording ? .default : .rounded))
                     .foregroundStyle(recording ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
                     .frame(minWidth: 62)
