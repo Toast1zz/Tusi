@@ -2,6 +2,22 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] - 2026-08-15
+
+### Added
+
+- API keys are re-read from the Keychain once the system unlocks, when a login-item launch before the first unlock of a boot read an empty Keychain — the keys appear without a restart
+- `applicationSupportsSecureRestorableState` is implemented
+
+### Changed
+
+- Pasting more than 32,000 characters into the input is truncated at the boundary instead of being sent whole and stored in history records
+- Line-height caps for the input/result areas are derived from font metrics instead of hardcoded constants, so larger system fonts no longer clip whole lines
+- SSE parsing no longer runs on the main thread; a fast or large stream can't jank the panel
+- The dev signing identity lives in the login keychain (unlocked automatically at login), so builds never ask for a keychain password; `build.sh` verifies the signature after signing. The dedicated-keychain flow remains as an override
+- Release archives are packed without filesystem metadata (`ditto --norsrc`), so the zips extract to a cleanly verifiable signature with any tool
+- Update-check and release links follow the repository move to `Toast1zz/Tusi`
+
 ## [1.7.2] - 2026-08-14
 
 ### Added
@@ -135,13 +151,14 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
-[1.7.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.2
-[1.7.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.1
-[1.6.2]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.2
-[1.7.0]: https://github.com/neko1chau/Tusi/releases/tag/v1.7.0
-[1.6.1]: https://github.com/neko1chau/Tusi/releases/tag/v1.6.1
-[1.6.0]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0
-[1.6.0-beta.1]: https://github.com/neko1chau/Tusi/releases/tag/1.6.0-beta.1
-[1.5.1]: https://github.com/neko1chau/Tusi/releases/tag/1.5.1
-[1.5.0]: https://github.com/neko1chau/Tusi/releases/tag/1.5.0
-[1.4.3]: https://github.com/neko1chau/Tusi/releases/tag/1.4.3
+[1.7.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.3
+[1.7.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.2
+[1.7.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.1
+[1.6.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.6.2
+[1.7.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.0
+[1.6.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.6.1
+[1.6.0]: https://github.com/Toast1zz/Tusi/releases/tag/1.6.0
+[1.6.0-beta.1]: https://github.com/Toast1zz/Tusi/releases/tag/1.6.0-beta.1
+[1.5.1]: https://github.com/Toast1zz/Tusi/releases/tag/1.5.1
+[1.5.0]: https://github.com/Toast1zz/Tusi/releases/tag/1.5.0
+[1.4.3]: https://github.com/Toast1zz/Tusi/releases/tag/1.4.3

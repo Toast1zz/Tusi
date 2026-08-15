@@ -74,9 +74,9 @@ case "$ARCH_MODE" in
         # the matching TUSI_ARCH; the last build (arm64) is what build/Tusi.app holds.
         mkdir -p dist
         TUSI_ARCH=universal "$0"
-        ditto -c -k --keepParent "$APP" "dist/Tusi-universal.zip"
+        ditto -c -k --norsrc --keepParent "$APP" "dist/Tusi-universal.zip"
         TUSI_ARCH=arm64 "$0"
-        ditto -c -k --keepParent "$APP" "dist/Tusi-arm64.zip"
+        ditto -c -k --norsrc --keepParent "$APP" "dist/Tusi-arm64.zip"
         echo "✓ 已生成 dist/Tusi-arm64.zip 与 dist/Tusi-universal.zip"
         # release 已完成全部打包；显式退出，跳过公共尾部的重复签名/echo。
         exit 0
@@ -136,6 +136,14 @@ EOF
 
 # Sign with a stable identity when one is available, otherwise ad-hoc.
 #
+# Release archives are packed with ditto --norsrc (see the `ditto` calls in the
+# release case): macOS stamps filesystem metadata (com.apple.provenance,
+# com.apple.macl) on freshly created files, and those attributes are system-managed
+# — xattr -d/-c silently no-ops on them. ditto would otherwise archive them as
+# AppleDouble entries, and zip tools that can't restore forks would leave stray ._*
+# files behind, making the extracted bundle fail strict signature verification.
+# Omitting the metadata at archive time keeps every extraction clean instead.
+#
 # An ad-hoc signature's designated requirement is the binary's cdhash, so it changes on
 # every build. The Keychain stores that requirement when you click "Always Allow", which
 # means an ad-hoc app re-prompts for the API key after every rebuild. Signing with a real
@@ -149,7 +157,10 @@ EOF
 # check on purpose: -v filters to *trusted* identities, which would hide a perfectly
 # usable self-signed certificate and silently fall back to ad-hoc.
 #
-# On a machine with the dedicated keychain, unlock it first so codesign can use it:
+# The identity resolves through the default keychain search list — normally the login
+# keychain, which macOS unlocks automatically at login, so builds never ask for a
+# keychain password. The dedicated-keychain override below is kept for machines that
+# keep the identity in its own keychain:
 #   TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 #   TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
 IDENTITY="${TUSI_SIGN_IDENTITY:-Tusi Dev Signing}"
@@ -166,7 +177,8 @@ if grep -F "\"$IDENTITY\"" >/dev/null <<< "$AVAILABLE_IDENTITIES"; then
         echo "✗ 签名失败：身份「${IDENTITY}」存在但无法使用（钥匙串是否已解锁？）" >&2
         exit 1
     }
-    echo "✓ 已用「${IDENTITY}」签名"
+    codesign --verify --deep --strict "$APP"
+    echo "✓ 已用「${IDENTITY}」签名并验证"
 else
     codesign --force --sign - "$APP"
     echo "✓ 已用 ad-hoc 签名（未找到「${IDENTITY}」证书）"

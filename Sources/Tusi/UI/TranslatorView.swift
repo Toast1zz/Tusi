@@ -22,12 +22,36 @@ struct TranslatorView: View {
     /// result must not be yanked back to the tail on every chunk.
     @State private var isAtBottom = true
 
-    // Line geometry for the 15pt content font with lineSpacing 3, measured empirically:
-    // the first line is 19pt and every line after adds 22pt. Input (AppKit metrics) and
-    // result (SwiftUI Text) both come out to these same numbers.
-    private let firstLineHeight: CGFloat = 19
-    private let lineStep: CGFloat = 22
+    // Line geometry for the 15pt content font with lineSpacing 3, measured with the
+    // same AppKit machinery the input height uses — derived, not hardcoded, so a
+    // change to the font or spacing (including larger system fonts) stays correct.
+    // Measured empirically: the first line is 19pt and every line after adds 22pt.
+    private let firstLineHeight: CGFloat
+    private let lineStep: CGFloat
+    init() {
+        let metrics = Self.measureLineMetrics()
+        firstLineHeight = metrics.first
+        lineStep = metrics.step
+    }
     private func height(lines: Int) -> CGFloat { firstLineHeight + CGFloat(lines - 1) * lineStep }
+
+    /// Internal for tests: asserts the derived metrics stay sane.
+    static func measureLineMetrics() -> (first: CGFloat, step: CGFloat) {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 3
+        let font = NSFont.systemFont(ofSize: 15)
+        let one = NSAttributedString(string: "A", attributes: [.font: font, .paragraphStyle: style])
+        let two = NSAttributedString(string: "A\nA", attributes: [.font: font, .paragraphStyle: style])
+        let h1 = one.boundingRect(
+            with: NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        ).height
+        let h2 = two.boundingRect(
+            with: NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        ).height
+        return (ceil(h1), ceil(h2 - h1))
+    }
 
     // Caps expressed as whole lines so a clamped view never cuts a line in half — the panel
     // grows to fit short content, and long content scrolls inside a whole-line viewport.

@@ -17,7 +17,7 @@ final class UpdateChecker: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    private let repo = "neko1chau/Tusi"
+    private let repo = "Toast1zz/Tusi"
     private let defaults = UserDefaults.standard
     private let lastCheckKey = "lastUpdateCheck"
     /// Auto-checks are throttled so a login-item app doesn't hit the API on every launch.

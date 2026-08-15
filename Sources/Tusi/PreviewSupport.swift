@@ -26,7 +26,7 @@ extension AppDelegate {
             ]
             panelState.showSettings = true
             if preview == "update-available" {
-                updateChecker.debugSetState(.available(version: "1.3.0", url: URL(string: "https://github.com/neko1chau/Tusi/releases/latest")!))
+                updateChecker.debugSetState(.available(version: "1.3.0", url: URL(string: "https://github.com/Toast1zz/Tusi/releases/latest")!))
             } else if preview == "update-latest" {
                 updateChecker.debugSetState(.upToDate)
             } else if preview == "shortcuts" {

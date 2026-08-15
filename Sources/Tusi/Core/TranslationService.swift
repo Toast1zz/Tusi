@@ -175,7 +175,11 @@ enum TranslationService {
 
     static func stream(text: String, target: TranslationLanguage, tone: Tone, extra: String, config: APIConfig) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
+            // Detached: the SSE read + per-chunk JSON decode runs on the cooperative
+            // pool instead of the caller's actor (the caller is the main actor), so a
+            // fast or large stream never janks the panel. `continuation` is Sendable;
+            // yielding from any thread is safe.
+            let task = Task.detached {
                 do {
                     var messages: [[String: Any]] = []
                     messages.append(["role": "system", "content": systemPrompt(for: target, tone: tone, extra: extra)])

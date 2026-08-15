@@ -323,6 +323,22 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Re-reads API keys from the Keychain when every profile is currently missing one.
+    /// A login-item launch before the first unlock of a boot reads an empty Keychain;
+    /// once the system unlocks, the session observer calls this so the keys appear
+    /// without a restart. Existing (typed-but-unsaved) keys win; preview mode never
+    /// touches the Keychain.
+    func reloadKeysIfMissing() {
+        guard !isPreview, !isConfigured else { return }
+        let keys = Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+        guard !keys.isEmpty else { return }
+        for (index, profile) in profiles.enumerated() {
+            if profile.apiKey.isEmpty, let key = keys[index], !key.isEmpty {
+                profiles[index].apiKey = key
+            }
+        }
+    }
+
     /// Flushes debounced profile and Keychain writes before the app exits.
     func flushPendingSaves() {
         profileSaveTask?.cancel()

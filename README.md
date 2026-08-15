@@ -66,14 +66,14 @@ it with `TUSI_VERSION` and `TUSI_BUILD_NUMBER`.
 
 Pure Swift + SwiftUI + AppKit, no third-party dependencies. `build.sh` signs with a local code-signing identity when one is available (so Keychain access survives rebuilds), and falls back to ad-hoc signing otherwise. For public distribution, use a Developer ID identity and notarize the resulting app.
 
-The dev signing identity lives in a dedicated keychain (`~/Library/Keychains/tusi-dev.keychain-db`, password at `~/.dsh/tusi-signing.pw`). Unlock it before building when the keychain is locked (e.g. after a reboot):
+The dev signing identity (`Tusi Dev Signing`) lives in the login keychain, which macOS unlocks automatically at login — builds never ask for a keychain password, and `build.sh` verifies the signature after signing. A legacy override exists for machines that keep the identity in a dedicated keychain:
 
 ```bash
 TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
 ```
 
-Signing with the same identity on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds re-prompt for the API key on every install.
+Signing with the same certificate on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds change the signature's cdhash each build and re-prompt for the API key on every install, so keep a stable identity around for local builds.
 
 ## License
 

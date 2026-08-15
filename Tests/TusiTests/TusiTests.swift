@@ -550,6 +550,39 @@ final class TusiTests: XCTestCase {
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.output, chunks.joined())
     }
+
+    // MARK: - Input cap / keychain recovery / metrics
+
+    func testInputIsCappedAtMaximumLength() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        engine.input = String(repeating: "a", count: TranslationEngine.maxInputCharacters + 500)
+        XCTAssertEqual(engine.input.count, TranslationEngine.maxInputCharacters)
+        // Direction detection still runs on the truncated text without crashing.
+        XCTAssertFalse(engine.sourceLabel.isEmpty)
+        XCTAssertFalse(engine.target.symbol.isEmpty)
+    }
+
+    func testReloadKeysIfMissingIsSafeNoOpInPreview() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        // Preview mode must never touch the Keychain — this is a pure no-op.
+        settings.reloadKeysIfMissing()
+        XCTAssertTrue(settings.profiles.allSatisfy { $0.apiKey.isEmpty })
+        XCTAssertEqual(engine.state, .idle)
+    }
+
+    func testLineMetricsAreDerivedAndSane() {
+        let metrics = TranslatorView.measureLineMetrics()
+        // 15pt system font + 3pt line spacing: first line ≈19pt, step ≈22pt.
+        // Loose bounds only — the point is to catch gross regressions, not pin
+        // font metrics that can vary slightly across OS versions.
+        XCTAssertGreaterThan(metrics.first, 10)
+        XCTAssertGreaterThan(metrics.step, 10)
+        XCTAssertLessThan(metrics.first, 40)
+        XCTAssertLessThan(metrics.step, 40)
+        XCTAssertLessThan(metrics.first, metrics.step)
+    }
 }
 
 /// Serves canned HTTP responses to URLSession, so TranslationService's SSE parsing

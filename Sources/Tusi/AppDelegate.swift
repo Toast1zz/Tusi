@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var panelController: PanelController!
     var cancellables = Set<AnyCancellable>()
     private var hotkey: HotkeyManager?
+    private var sessionObserver: NSObjectProtocol?
 
     let settings = SettingsStore()
     let panelState = PanelState()
@@ -17,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         settings.flushPendingSaves()
+    }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -33,6 +38,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.togglePanel()
         }
         registerSummonHotkey(settings.shortcut(.summon))
+
+        // A login-item launch before the first unlock of a boot reads an empty
+        // Keychain. Re-read the keys once the system unlocks so they appear
+        // without a restart. Guarded inside SettingsStore (only when nothing is
+        // configured), so this is a cheap no-op after the first recovery.
+        sessionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.settings.reloadKeysIfMissing()
+            }
+        }
 
         // Re-register whenever the user rebinds or unbinds the summon shortcut. Other
         // shortcut changes flow through here too but are no-ops (same combo → deduped).

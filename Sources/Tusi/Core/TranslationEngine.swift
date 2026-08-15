@@ -33,6 +33,11 @@ final class TranslationEngine: ObservableObject {
     @Published var input = "" {
         didSet {
             guard input != oldValue else { return }
+            if input.count > Self.maxInputCharacters {
+                // The re-entrant didSet (truncated value) does the real work below.
+                input = String(input.prefix(Self.maxInputCharacters))
+                return
+            }
             // A manual direction flip is scoped to the input it was set on: any edit
             // drops it, so a stale override can never leak into the next query.
             flipped = false
@@ -80,6 +85,11 @@ final class TranslationEngine: ObservableObject {
     /// Ring buffer of completed translations (newest first).
     @Published private(set) var history: [Record] = []
     private let historyCapacity = 50
+
+    /// Hard ceiling for the input box. Pasted documents longer than this are
+    /// truncated at the boundary. This bounds the request body and the stored
+    /// history records (each record holds the full input).
+    static let maxInputCharacters = 32_000
 
     // MARK: - History persistence
 
