@@ -192,6 +192,9 @@ struct SettingsView: View {
             testStates.removeAll()
             testGenerations.removeAll()
         }
+        .onChange(of: settings.multiLanguageMode) { _, _ in
+            engine.multiLanguageModeDidChange()
+        }
         .onChange(of: editingIndex) { _, _ in
             showKey = false
             testTasks.values.forEach { $0.cancel() }

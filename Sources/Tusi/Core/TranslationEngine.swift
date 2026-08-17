@@ -177,10 +177,10 @@ final class TranslationEngine: ObservableObject {
 
     /// Toggles the manual direction override for the current input. Guarded to
     /// simple mode: multi-language mode has no "opposite side" to flip to, and
-    /// there is nothing to flip before anything is typed. Also guarded while a
-    /// translation is in flight — the running request captured its target at
-    /// launch, so flipping mid-stream would leave the chip disagreeing with the
-    /// result it shows. Stop first, then flip.
+    /// there is nothing to flip before anything is typed. A direction flip remains
+    /// deliberately unavailable while translating because it is a separate,
+    /// compact bottom-bar control; use the explicit target picker to restart an
+    /// in-flight translation in multi-language mode.
     func flipDirection() {
         guard !input.isEmpty, !settings.multiLanguageMode, !isTranslating else { return }
         flipped.toggle()
@@ -189,12 +189,25 @@ final class TranslationEngine: ObservableObject {
 
     /// Explicit target selection for multi-language mode. The auto-detected source is
     /// left alone; if the chosen target equals the source, `updateDirection` re-picks
-    /// (translating into the same language makes no sense). Ignored mid-translation
-    /// for the same reason `flipDirection` is guarded.
+    /// (translating into the same language makes no sense). If a translation is in
+    /// flight, `translate()` cancels that request and starts the same input again with
+    /// the newly selected target.
     func setTarget(_ language: TranslationLanguage) {
-        guard settings.multiLanguageMode, !isTranslating else { return }
+        guard settings.multiLanguageMode, !input.isEmpty else { return }
+        let previousTarget = target
         target = language
         if target == source { updateDirection() }
+        guard target != previousTarget else { return }
+        if isTranslating { translate() }
+    }
+
+    /// Applies a change made to the settings toggle. The setting is already updated
+    /// by the time SwiftUI calls this method, so direction calculation reads the new
+    /// mode. Restarting a live request is important here: otherwise the request's
+    /// captured target and the settings UI can disagree until the next translation.
+    func multiLanguageModeDidChange() {
+        updateDirection()
+        if isTranslating { translate() }
     }
 
     // MARK: - Translate

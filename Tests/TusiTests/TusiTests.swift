@@ -342,30 +342,83 @@ final class TusiTests: XCTestCase {
         }
     }
 
-    func testDirectionChangesIgnoredWhileTranslating() async throws {
+    func testMultiLanguageTargetChangeRestartsTranslationWhileTranslating() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
-            AsyncThrowingStream { continuation in
-                continuation.yield("ok")
-                continuation.finish()
+        settings.multiLanguageMode = true
+
+        var requestedTargets: [TranslationLanguage] = []
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, target, _, _, _ in
+            requestedTargets.append(target)
+            return AsyncThrowingStream { continuation in
+                continuations.append(continuation)
             }
         }
         engine.input = "hello world"  // English input → target Chinese
         engine.translate()
         XCTAssertTrue(engine.isTranslating)
 
-        engine.flipDirection()
-        XCTAssertFalse(engine.flipped)
-        XCTAssertEqual(engine.target, .chinese)
+        for _ in 0..<100 where requestedTargets.count < 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(requestedTargets, [.chinese])
+
+        engine.setTarget(.japanese)
+        XCTAssertEqual(engine.target, .japanese)
+        XCTAssertTrue(engine.isTranslating)
+
+        for _ in 0..<100 where requestedTargets.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(requestedTargets, [.chinese, .japanese])
+        XCTAssertEqual(continuations.count, 2)
+
+        // The old stream is left open to prove that the new request, not its late
+        // completion, owns the result shown by the engine.
+        continuations[1].yield("日本語")
+        continuations[1].finish()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "日本語")
+    }
+
+    func testMultiLanguageModeChangeRestartsTranslationWhileTranslating() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var requestedTargets: [TranslationLanguage] = []
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, target, _, _, _ in
+            requestedTargets.append(target)
+            return AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hello world"
+        engine.translate()
+        XCTAssertTrue(engine.isTranslating)
+
+        for _ in 0..<100 where requestedTargets.count < 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(requestedTargets, [.chinese])
 
         settings.multiLanguageMode = true
-        engine.setTarget(.japanese)
+        engine.multiLanguageModeDidChange()
         XCTAssertEqual(engine.target, .chinese)
+        XCTAssertTrue(engine.isTranslating)
 
+        for _ in 0..<100 where requestedTargets.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(requestedTargets, [.chinese, .chinese])
+        XCTAssertEqual(continuations.count, 2)
+
+        continuations[1].yield("中文")
+        continuations[1].finish()
         try await waitUntilDone(engine)
-        XCTAssertEqual(engine.output, "ok")
+        XCTAssertEqual(engine.output, "中文")
     }
 
     func testHistoryLoadToleratesCorruptRecord() throws {
