@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         settings.flushPendingSaves()
+        // Shut the sound engine down: stop loops, silence anything in flight, release
+        // cached players (uisfx `ui.destroy()` equivalent for the native player).
+        settings.shutdownSound()
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

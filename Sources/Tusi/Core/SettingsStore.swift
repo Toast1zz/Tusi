@@ -92,6 +92,24 @@ final class SettingsStore: ObservableObject {
     @Published var multiLanguageMode: Bool {
         didSet { defaults.set(multiLanguageMode, forKey: "multiLanguageMode") }
     }
+    /// Master sound switch. Persisted in UserDefaults like every other preference;
+    /// applied live to the shared SoundPlayer so mute is immediate.
+    @Published var soundEnabled: Bool {
+        didSet {
+            guard soundEnabled != oldValue else { return }
+            defaults.set(soundEnabled, forKey: "soundEnabled")
+            SoundPlayer.shared.enabled = soundEnabled
+        }
+    }
+    /// Master sound volume 0...1. Persisted; applied live to the shared player.
+    @Published var soundVolume: Double {
+        didSet {
+            guard soundVolume != oldValue else { return }
+            defaults.set(soundVolume, forKey: "soundVolume")
+            SoundPlayer.shared.volume = soundVolume
+        }
+    }
+
     /// All five rebindable shortcuts. Missing entries fall back to the action's default.
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
         didSet { persistShortcuts() }
@@ -138,7 +156,6 @@ final class SettingsStore: ObservableObject {
             }
         }
     }
-
     init(preview: Bool? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         if isPreview {
@@ -155,6 +172,13 @@ final class SettingsStore: ObservableObject {
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
         multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
+        // Sound preferences: enabled defaults to true (sound is opt-out), volume to 0.7.
+        // The player's own defaults must match these so a fresh install behaves the same
+        // whether or not the keys exist. The didSet during init already persisted them;
+        // the live player sync happens at the end of init (see below) once every stored
+        // property is initialized.
+        soundEnabled = defaults.object(forKey: "soundEnabled") as? Bool ?? true
+        soundVolume = min(max(defaults.object(forKey: "soundVolume") as? Double ?? 0.7, 0), 1)
         let storedWidth = defaults.double(forKey: "panelWidth")
         if storedWidth > 0 {
             panelWidth = min(max(CGFloat(storedWidth), 470), 700)
@@ -164,6 +188,12 @@ final class SettingsStore: ObservableObject {
         disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
         profiles = isPreview ? [APIProfile(), APIProfile()] : Self.loadProfiles(defaults: defaults)
+
+        // Sync the persisted sound preferences into the shared player. Must come after
+        // every stored property is initialized (reading `soundEnabled`/`soundVolume`
+        // earlier would trip Swift's initialization rules).
+        SoundPlayer.shared.enabled = soundEnabled
+        SoundPlayer.shared.volume = soundVolume
     }
 
     // MARK: - Shortcut persistence
@@ -352,6 +382,13 @@ final class SettingsStore: ObservableObject {
         if let keys = pendingKeychainKeys {
             saveKeychain(keys)
         }
+    }
+
+    /// Shuts the shared sound player down at app termination. Called from
+    /// `applicationWillTerminate` after `flushPendingSaves` so the last-written
+    /// preferences are already persisted when audio stops.
+    func shutdownSound() {
+        SoundPlayer.shared.destroy()
     }
 
     // MARK: - Resolution

@@ -211,7 +211,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             }
 
             // Close / back — configurable (default Esc). Backs out one level at a time:
-            // Shortcuts → Settings → Translator → hide.
+            // Shortcuts → Settings → Translator → hide. Backing out of a page matches
+            // the on-screen back buttons (back cue); hiding the panel stays silent so
+            // the frequent Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
                     withAnimation(.snappy(duration: 0.25)) { self.panelState.showShortcuts = false }

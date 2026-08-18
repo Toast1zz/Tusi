@@ -3,3 +3,5 @@ build/
 .DS_Store
 dist/
 *.zip
+node_modules/
+graphify-out/

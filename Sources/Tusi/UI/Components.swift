@@ -72,6 +72,11 @@ struct BarIconButton: View {
     let systemName: String
     var isActive = false
     var help: String
+    /// Optional vertical nudge for the glyph inside its 26×26 frame. SF Symbols have
+    /// different optical baselines — e.g. `pin` is a 14pt-tall glyph next to 13pt
+    /// circles (clock/gearshape) at the same font size, so it visually sits higher.
+    /// A small downward offset aligns it with its neighbors. Clickable area unchanged.
+    var glyphOffset: CGFloat = 0
     let action: () -> Void
 
     @State private var hovering = false
@@ -81,6 +86,7 @@ struct BarIconButton: View {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                .offset(y: glyphOffset)
                 .frame(width: 26, height: 26)
                 .background(
                     Circle().fill(hovering ? Color.primary.opacity(0.07) : Color.clear)

@@ -255,6 +255,9 @@ final class TranslationEngine: ObservableObject {
                     requestRevision: requestRevision
                 ) {
                 case .cancelled:
+                    // Cancelled by a newer request or by the user. The cancellation
+                    // handling is the caller's concern (translate entry, cancelTranslation,
+                    // clearResult); nothing to do here.
                     return  // Cancelled by a newer request or by the user.
                 case .completed:
                     // A successful HTTP response with no usable content is still a
@@ -280,6 +283,8 @@ final class TranslationEngine: ObservableObject {
                     if position > 0 {
                         self.flashToast(.fellBack)
                     }
+                    // The request is over and it succeeded: play the completion cue.
+                    SoundPlayer.shared.playSuccess()
                     return
                 case .failed(let error):
                     lastError = error

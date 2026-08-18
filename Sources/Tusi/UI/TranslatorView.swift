@@ -345,7 +345,11 @@ struct TranslatorView: View {
             BarIconButton(
                 systemName: panelState.pinned ? "pin.fill" : "pin",
                 isActive: panelState.pinned,
-                help: panelState.pinned ? "取消固定" : "固定面板（点击外部不关闭）"
+                help: panelState.pinned ? "取消固定" : "固定面板（点击外部不关闭）",
+                // The pin glyph is 14pt tall next to 13pt circles (clock/gearshape) at
+                // the same 12pt font size; nudge it down 0.5pt so its optical center
+                // aligns with its neighbors instead of sitting visually higher.
+                glyphOffset: 0.5
             ) {
                 panelState.pinned.toggle()
             }

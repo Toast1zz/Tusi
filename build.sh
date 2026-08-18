@@ -96,6 +96,10 @@ for lproj in Sources/Tusi/Resources/*.lproj; do
     [ -d "$lproj" ] && cp -R "$lproj" "$APP/Contents/Resources/"
 done
 
+# Bundle the sound pack (uisfx "scifi" mp3s) so Bundle.main can resolve
+# "Sounds/scifi/<cue>.mp3" at runtime.
+cp -R Resources/Sounds "$APP/Contents/Resources/"
+
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

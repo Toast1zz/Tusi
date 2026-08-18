@@ -2,6 +2,17 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-08-18
+
+### Added
+
+- A completion sound when a translation result fully arrives (the `success` cue from the `scifi` pack of [uisfx](https://uisfx.com), CC0 audio). A "翻译成功音效" switch in Settings persists the preference (on by default) with a "试听" button that previews the cue even when the switch is off; no other interactions make sound
+
+### Fixed
+
+- The pin button in the bottom bar visually sat higher than its neighbors because the `pin` SF Symbol's glyph is 1pt taller than the circular `clock`/`gearshape` glyphs; it is now nudged down 0.5pt to align optically
+- `Tusi Dev Signing` lost its trust setting (self-signed cert), which made every `./build.sh install` prompt for keychain authorization; the certificate is trusted again so builds sign silently
+
 ## [1.7.4] - 2026-08-17
 
 ### Fixed

@@ -122,3 +122,6 @@
 
 "切换翻译方向" = "Switch translation direction";
 "该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符" = "No modifier on this shortcut — binding a letter or digit will make it untypeable";
+
+/* MARK: - Sound preference */
+"翻译成功音效" = "Translation Completion Sound";

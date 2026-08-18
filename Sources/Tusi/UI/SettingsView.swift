@@ -142,6 +142,17 @@ struct SettingsView: View {
             .controlSize(.mini)
             .font(.system(size: 12.5))
 
+            // The sound preference gets its own row so it reads as a distinct sense
+            // channel, not a translation behavior. Switching it off is deliberately
+            // silent (muting must not announce itself); switching it on plays one quiet
+            // toggle-on cue as confirmation.
+            VStack(alignment: .leading, spacing: 10) {
+                soundToggleRow
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .font(.system(size: 12.5))
+
             // The target picker is an inline grid, not a menu: a popup would make the
             // panel resign key and trip the click-outside auto-hide (same constraint
             // ToneSelector documents).
@@ -324,6 +335,33 @@ struct SettingsView: View {
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .accessibilityLabel(label)
+        }
+    }
+
+    // MARK: - Sound
+
+    /// The sound switch. Sound plays only for the finished translation result, so this
+    /// switch is a plain on/off for that cue. The label is tappable for accessibility,
+    /// same as the other rows. The small "试听" button next to it plays the cue even
+    /// when the switch is off, so the user can judge the sound before enabling it.
+    private var soundToggleRow: some View {
+        HStack {
+            Text("翻译成功音效")
+                .onTapGesture { settings.soundEnabled.toggle() }
+            Button {
+                SoundPlayer.shared.previewSuccess()
+            } label: {
+                Image(systemName: "play.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("试听翻译成功音效")
+            .accessibilityLabel("试听翻译成功音效")
+            Spacer(minLength: 8)
+            Toggle("", isOn: $settings.soundEnabled)
+                .labelsHidden()
+                .accessibilityLabel("翻译成功音效")
         }
     }
 
