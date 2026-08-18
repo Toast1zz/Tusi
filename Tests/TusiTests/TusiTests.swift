@@ -303,7 +303,13 @@ final class TusiTests: XCTestCase {
             calls += 1
             return AsyncThrowingStream { continuation in
                 continuation.yield("partial")
-                continuation.finish(throwing: TranslationError.http(500, "boom"))
+                // The connection dies *after* the partial data landed — the realistic
+                // mid-stream failure. (A synchronous yield-then-throw would drop the
+                // yielded value; AsyncThrowingStream delivers the error instead.)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    continuation.finish(throwing: TranslationError.http(500, "boom"))
+                }
             }
         }
         engine.input = "hi"
@@ -334,9 +340,64 @@ final class TusiTests: XCTestCase {
         engine.input = "hi"
         engine.translate()
         try await waitUntilFailed(engine)
-        XCTAssertEqual(calls, 2)
+        // Transient 500 is retried once per provider before failing over, so the
+        // primary is attempted twice and the backup twice: 4 calls total.
+        XCTAssertEqual(calls, 4)
         if case .failed(let message) = engine.state {
             XCTAssertTrue(message.contains("备用"), message)
+        } else {
+            XCTFail("expected failed state")
+        }
+    }
+
+    func testTransientFailureRetriesSameProviderOnceThenSucceeds() async throws {
+        // A transient 500 on the first attempt must be retried on the same provider;
+        // the second attempt succeeds, so no backup is tried and the result is complete.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                if calls == 1 {
+                    continuation.finish(throwing: TranslationError.http(500, "boom"))
+                } else {
+                    continuation.yield("你好")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(engine.output, "你好")
+        XCTAssertFalse(engine.interrupted)
+    }
+
+    func testNonTransientFailureDoesNotRetry() async throws {
+        // A 401 (bad auth) is deterministic — retrying would just fail again, so the
+        // provider is attempted exactly once.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: TranslationError.http(401, "bad key"))
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        XCTAssertEqual(calls, 1)
+        if case .failed(let message) = engine.state {
+            XCTAssertTrue(message.contains("401"), message)
         } else {
             XCTFail("expected failed state")
         }

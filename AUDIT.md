@@ -70,7 +70,7 @@ deinit {   // Swift 5.10+ 支持 @MainActor deinit
 
 ## 2. 前端美观性（UI/UX）
 
-### 🔴 P0-2：UI 缺乏设计令牌（design tokens），字号/间距/动画散落 25+ 种组合
+### 🔴 P0-2：UI 缺乏设计令牌（design tokens），字号/间距/动画散落 25+ 种组合 ✅ 已修复
 
 **证据**：
 - **字号**：25 种不同组合（8 / 9 / 9.5 / 10 / 10.5 / 11 / 11.5 / 12 / 12.5 / 14 / 15 / 18pt，多种 weight/design 组合）散落在 5 个 UI 文件
@@ -80,29 +80,7 @@ deinit {   // Swift 5.10+ 支持 @MainActor deinit
 
 **影响**：不是某个元素难看，而是**整体缺乏一致性**——同样的"次要标签"在不同页面字号不同（10.5 vs 11 vs 12.5），同样的"轻量按钮"圆角不同。视觉上"差不多但总差一点"。
 
-**建议**：在 `Theme.swift` 建立完整设计令牌体系：
-```swift
-enum Theme {
-    enum Font {
-        static let caption = Font.system(size: 10.5)
-        static let footnote = Font.system(size: 11)
-        static let body = Font.system(size: 12.5)
-        static let content = Font.system(size: 15)
-        static let title = Font.system(size: 14, weight: .semibold)
-    }
-    enum Duration {
-        static let fast = 0.15
-        static let standard = 0.2
-        static let slow = 0.25
-    }
-    enum Radius {
-        static let control: CGFloat = 6
-        static let card: CGFloat = 9
-        static let panel: CGFloat = 20
-    }
-}
-```
-然后系统性替换散落的字面量。这是**低风险、高观感收益**的改动。
+**修复**：`Theme.swift` 建立完整设计令牌体系（25 个字体令牌覆盖 9–18pt 全部层级 + weight/design 变体、4 个圆角、5 个动画时长 + `snappy()` 统一缩放）。所有 UI 文件字面量替换为令牌引用，令牌值与原字面量逐字节等价（零视觉变化）。仅保留两处有意的例外：骨架条 4pt 圆角（比控件圆角更细，已注释）和录音状态的条件字体。严格并发零警告，46 测试全绿。
 
 ### 🟠 P1-3：`Text` 与 `Image` 基线未对齐
 
@@ -134,11 +112,11 @@ enum Theme {
 
 **验证**：新增 `testStreamFailsAfterFirstTokenTimeout`（挂起 mock，0.27s 快速失败）和 `testStreamWithImmediateDataIgnoresTimeout`（正常流无丢失/重复）。46 测试全绿。
 
-### 🟠 P1-4：无自动重试（除 failover）
+### 🟠 P1-4：无自动重试（除 failover） ✅ 已修复
 
 failover 只在"无输出前失败"时触发，遇到瞬时网络抖动（TCP reset、5xx）在单 profile 场景直接失败。
 
-**建议**：对**幂等的连接错误**（非 4xx）做 1 次快速重试（如 500ms 后），只影响纯网络错误，不重复计费风险（失败前无 token 产生）。
+**修复**：`TranslationError.isTransient` 判定瞬时错误（5xx、截断流；4xx 判定性错误不重试），`consumeWithRetry` 在无输出时对同一 provider 快速重试 1 次（400ms 延迟）再走 failover。重构 attemptLoop 消除重复代码。新增 2 个测试：瞬时错误重试后成功、非瞬时错误不重试。48 测试全绿，严格并发零警告。
 
 ### 🟠 P1-5：API Key 变更无即时生效提示
 

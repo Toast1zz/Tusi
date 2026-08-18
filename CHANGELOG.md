@@ -6,6 +6,7 @@ All notable changes to Tusi are documented here. Format follows [Keep a Changelo
 
 ### Added
 
+- Transient network failures (TCP reset, 5xx, timeout) are now retried once on the same provider before failing over — a one-off hiccup no longer needs a backup profile to recover
 - First-token timeout for translation streams: a server that accepts the request but never produces data (hung gateway, model queueing) now fails with "服务器长时间无响应，请稍后重试" after 30 seconds instead of leaving the user staring at an endless "working" state (URLSession's request timeout only covers response headers; the old behavior could wait the full 5-minute resource timeout)
 
 ### Fixed

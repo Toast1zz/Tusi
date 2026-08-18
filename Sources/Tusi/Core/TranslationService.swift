@@ -33,6 +33,21 @@ enum TranslationError: LocalizedError, Equatable {
             }
         }
     }
+
+    /// True for errors that a quick retry might fix: transport failures (timeouts,
+    /// resets, dropped connections) and server-side 5xx errors. False for anything
+    /// deterministic — 4xx (auth, quota, rate limit), malformed URLs, empty keys —
+    /// where retrying would just fail again.
+    var isTransient: Bool {
+        switch self {
+        case .http(let code, _):
+            return code >= 500
+        case .truncatedStream:
+            return true
+        case .emptyKey, .emptyResponse, .invalidURL, .insecureURL:
+            return false
+        }
+    }
 }
 
 enum TranslationService {

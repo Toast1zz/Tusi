@@ -250,46 +250,32 @@ final class TranslationEngine: ObservableObject {
 
             attemptLoop: for (position, link) in chain.enumerated() {
                 if position > 0 { triedBackup = true }
-                switch await consumeStream(
-                    stream(text, target, tone, extra, link.config),
-                    requestRevision: requestRevision
-                ) {
+                // Consume the stream, retrying once on the same provider for transient
+                // failures (TCP reset, 5xx, timeout) before failing over.
+                let outcome = await consumeWithRetry(
+                    link: link, text: text, target: target, source: source, sourceLabel: sourceLabel,
+                    tone: tone, extra: extra, requestRevision: requestRevision
+                )
+                switch outcome {
                 case .cancelled:
-                    // Cancelled by a newer request or by the user. The cancellation
-                    // handling is the caller's concern (translate entry, cancelTranslation,
-                    // clearResult); nothing to do here.
                     return  // Cancelled by a newer request or by the user.
-                case .completed:
-                    // A successful HTTP response with no usable content is still a
-                    // failed attempt and should be eligible for backup failover.
-                    guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        self.output = ""
-                        lastError = TranslationError.emptyResponse
-                        if position < chain.count - 1 { continue attemptLoop }
-                        break attemptLoop
-                    }
-
-                    // Normalize punctuation once the full text is in — the conversion
-                    // needs to see the character after a quote to place it.
-                    self.output = SmartQuotes.apply(to: self.output)
-                    self.state = .done
-                    self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-                    if self.settings.autoCopy, !self.output.isEmpty {
-                        self.copyToPasteboard()
-                        self.flashCopied(auto: true)
-                    }
+                case .succeeded:
                     // A backup that quietly saved the day still deserves a heads-up
                     // that the primary is down; otherwise stay silent.
                     if position > 0 {
                         self.flashToast(.fellBack)
                     }
-                    // The request is over and it succeeded: play the completion cue.
-                    SoundPlayer.shared.playSuccess()
                     return
+                case .emptyResponse:
+                    self.output = ""
+                    lastError = TranslationError.emptyResponse
+                    if position < chain.count - 1 { continue attemptLoop }
+                    break attemptLoop
                 case .failed(let error):
                     lastError = error
                     // Only fall back before any token landed — retrying mid-stream
-                    // would splice two different translations together.
+                    // would splice two different translations together. If partial
+                    // output arrived, the failure is final for this attempt.
                     if self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                        position < chain.count - 1 {
                         self.output = ""
@@ -318,11 +304,80 @@ final class TranslationEngine: ObservableObject {
         }
     }
 
-    /// One provider attempt's outcome as seen by the caller.
+    /// One provider attempt's outcome as seen by the caller (after retry handling).
     private enum StreamOutcome {
+        case succeeded
+        case emptyResponse
+        case failed(Error)
+        case cancelled
+    }
+
+    /// Raw outcome of a single `consumeStream` call, before retry/failover decisions.
+    private enum StreamConsumeOutcome {
         case completed
         case failed(Error)
         case cancelled
+    }
+
+    /// Consumes one provider's stream and commits the result on success. Transient
+    /// failures (TCP reset, 5xx, timeout) get one quick retry on the same provider —
+    /// cheaper than failing over, and often the hiccup is one-off. Returns the
+    /// outcome for the caller's failover decision; `self.output` is already committed
+    /// on `.succeeded`.
+    private func consumeWithRetry(
+        link: (index: Int, config: APIConfig),
+        text: String,
+        target: TranslationLanguage,
+        source: TranslationLanguage,
+        sourceLabel: String,
+        tone: Tone,
+        extra: String,
+        requestRevision: UInt
+    ) async -> StreamOutcome {
+        func commitIfComplete() -> Bool {
+            // A successful HTTP response with no usable content is a failed attempt.
+            guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            self.output = SmartQuotes.apply(to: self.output)
+            self.state = .done
+            self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
+            if self.settings.autoCopy, !self.output.isEmpty {
+                self.copyToPasteboard()
+                self.flashCopied(auto: true)
+            }
+            SoundPlayer.shared.playSuccess()
+            return true
+        }
+
+        let first = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
+        switch first {
+        case .completed:
+            return commitIfComplete() ? .succeeded : .emptyResponse
+        case .cancelled:
+            return .cancelled
+        case .failed(let error):
+            // Only retry before any token landed — retrying mid-stream would splice two
+            // different translations together.
+            guard self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .failed(error)
+            }
+            // Retry only transient failures (TCP reset, 5xx, timeout) — deterministic
+            // errors like bad auth or quota would just fail again.
+            let transient = (error as? TranslationError)?.isTransient ?? false
+            guard transient else { return .failed(error) }
+
+            self.output = ""
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+            let retry = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
+            switch retry {
+            case .completed:
+                return commitIfComplete() ? .succeeded : .emptyResponse
+            case .cancelled:
+                return .cancelled
+            case .failed(let retryError):
+                return .failed(retryError)
+            }
+        }
     }
 
     /// Consumes one provider stream, coalescing chunks so the UI never re-renders
@@ -335,7 +390,7 @@ final class TranslationEngine: ObservableObject {
     private func consumeStream(
         _ stream: AsyncThrowingStream<String, Error>,
         requestRevision: UInt
-    ) async -> StreamOutcome {
+    ) async -> StreamConsumeOutcome {
         let flushInterval: Duration = .milliseconds(33)
         var buffer = ""
 
