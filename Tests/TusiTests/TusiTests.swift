@@ -532,19 +532,67 @@ final class TusiTests: XCTestCase {
 
     /// Serves `sse` as the body of a mock HTTP response through a URLProtocol-backed
     /// session, runs `body`, and tears the seam down afterwards.
-    private func withMockSession(sse: String, statusCode: Int = 200, body: () async throws -> Void) async throws {
+    private func withMockSession(sse: String, statusCode: Int = 200, hangs: Bool = false, body: () async throws -> Void) async throws {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
             return (response, Data(sse.utf8))
         }
+        MockURLProtocol.hangsAfterResponse = hangs
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         TranslationService.sessionOverride = URLSession(configuration: config)
         defer {
             TranslationService.sessionOverride = nil
             MockURLProtocol.handler = nil
+            MockURLProtocol.hangsAfterResponse = false
         }
         try await body()
+    }
+
+    func testStreamFailsAfterFirstTokenTimeout() async throws {
+        // A server that accepts the connection but never delivers body data must be
+        // failed by the first-token timeout instead of hanging the UI forever.
+        let originalTimeout = TranslationService.firstTokenTimeout
+        TranslationService.firstTokenTimeout = 0.2  // shorten so the test is fast
+        defer { TranslationService.firstTokenTimeout = originalTimeout }
+
+        try await withMockSession(sse: "data: [DONE]\n\n", hangs: true) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
+                XCTFail("expected first-token timeout error")
+            } catch {
+                guard case .http(let code, _) = error as? TranslationError else {
+                    XCTFail("expected TranslationError.http, got \(error)")
+                    return
+                }
+                XCTAssertEqual(code, 0)
+            }
+        }
+    }
+
+    func testStreamWithImmediateDataIgnoresTimeout() async throws {
+        // Data arriving before the deadline must not be dropped or duplicated.
+        let originalTimeout = TranslationService.firstTokenTimeout
+        TranslationService.firstTokenTimeout = 2.0  // generous so the race never fires
+        defer { TranslationService.firstTokenTimeout = originalTimeout }
+
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你"}}]}
+
+        data: {"choices":[{"delta":{"content":"好"}}]}
+
+        data: [DONE]
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["你", "好"])
+        }
     }
 
     // MARK: - SmartQuotes edges
@@ -642,6 +690,10 @@ final class TusiTests: XCTestCase {
 /// runs without a network. Installed as the protocol class of a throwaway session.
 final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// When true, the protocol sends response headers but never delivers body data nor
+    /// finishes — simulating a server that accepted the connection but hangs. Used to
+    /// test the first-token timeout.
+    static var hangsAfterResponse = false
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -654,6 +706,12 @@ final class MockURLProtocol: URLProtocol {
         do {
             let (response, data) = try handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if Self.hangsAfterResponse {
+                // Hold the connection open without delivering body data. The
+                // URLProtocol must not finish, so `bytes.lines` blocks until the
+                // consumer's first-token timeout fires.
+                return
+            }
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
         } catch {

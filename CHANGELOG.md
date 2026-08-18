@@ -4,6 +4,10 @@ All notable changes to Tusi are documented here. Format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Added
+
+- First-token timeout for translation streams: a server that accepts the request but never produces data (hung gateway, model queueing) now fails with "服务器长时间无响应，请稍后重试" after 30 seconds instead of leaving the user staring at an endless "working" state (URLSession's request timeout only covers response headers; the old behavior could wait the full 5-minute resource timeout)
+
 ### Fixed
 
 - Swift 6 concurrency readiness: the test-only `sessionOverride` seam is `nonisolated(unsafe)` with documentation, the Carbon hotkey callback captures a `@Sendable` closure instead of the manager, and `PanelController` uses a main-actor-isolated `deinit` so its observers tear down safely. The project now builds clean under `-strict-concurrency=complete` (zero warnings)

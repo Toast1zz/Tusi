@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum TranslationError: LocalizedError, Equatable {
     case emptyKey
@@ -179,13 +180,32 @@ enum TranslationService {
         return prompt
     }
 
+    /// Seconds to wait for the first streamed token after the connection is established.
+    /// A server that accepts the request but never produces data (model queueing, a hung
+    /// gateway) must not leave the user staring at an endless "working" state —
+    /// URLSession's request timeout only covers waiting for the response headers, not
+    /// the streaming body that follows. `var` (not `let`) so tests can shorten it.
+    nonisolated(unsafe) static var firstTokenTimeout: TimeInterval = 30
+
     static func stream(text: String, target: TranslationLanguage, tone: Tone, extra: String, config: APIConfig) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             // Detached: the SSE read + per-chunk JSON decode runs on the cooperative
             // pool instead of the caller's actor (the caller is the main actor), so a
             // fast or large stream never janks the panel. `continuation` is Sendable;
             // yielding from any thread is safe.
-            let task = Task.detached {
+            //
+            // First-token watchdog: a server that accepts the connection but never
+            // produces a payload line (model queueing, a hung gateway) must not leave
+            // the user staring at an endless "working" state. URLSession's request
+            // timeout covers only the response headers — once the body starts, nothing
+            // bounds the wait except the 5-minute resource timeout. The watchdog
+            // cancels the stream task after `firstTokenTimeout` with no data; the
+            // cancellation interrupts the `bytes.lines` iteration (AsyncBytes honors
+            // task cancellation), which surfaces as CancellationError and becomes the
+            // timeout error below.
+            let gotData = OSAllocatedUnfairLock(initialState: false)
+            let didTimeOut = OSAllocatedUnfairLock(initialState: false)
+            let task = Task.detached { [gotData, didTimeOut] in
                 do {
                     var messages: [[String: Any]] = []
                     messages.append(["role": "system", "content": systemPrompt(for: target, tone: tone, extra: extra)])
@@ -237,6 +257,7 @@ enum TranslationService {
                               let piece = chunk.choices.first?.delta.content,
                               !piece.isEmpty
                         else { continue }
+                        gotData.withLock { $0 = true }
                         continuation.yield(piece)
                     }
                     // A clean close without the [DONE] sentinel means the connection
@@ -247,10 +268,29 @@ enum TranslationService {
                     guard sawDone else { throw TranslationError.truncatedStream }
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    // A watchdog-initiated cancellation (server silent for
+                    // firstTokenTimeout) is a timeout, not a user cancel: surface it as
+                    // an actionable error. Genuine consumer cancels fall through as
+                    // CancellationError.
+                    if didTimeOut.withLock({ $0 }), !gotData.withLock({ $0 }) {
+                        continuation.finish(throwing: TranslationError.http(0, L("服务器长时间无响应，请稍后重试")))
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
             }
-            continuation.onTermination = { _ in task.cancel() }
+            // Watchdog lives outside the task so it can hold a reference to it.
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(Self.firstTokenTimeout))
+                if !gotData.withLock({ $0 }), !Task.isCancelled {
+                    didTimeOut.withLock { $0 = true }
+                    task.cancel()
+                }
+            }
+            continuation.onTermination = { _ in
+                watchdog.cancel()
+                task.cancel()
+            }
         }
     }
 
