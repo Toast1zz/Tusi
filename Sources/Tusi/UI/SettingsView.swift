@@ -55,14 +55,14 @@ struct SettingsView: View {
                 labeledField("接口地址", focused: focusedField == .baseURL) {
                     TextField("https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(Theme.bodyMonospaced)
                         .focused($focusedField, equals: .baseURL)
                         .accessibilityLabel("接口地址")
                 }
                 labeledField("模型", focused: focusedField == .model) {
                     TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(Theme.bodyMonospaced)
                         .focused($focusedField, equals: .model)
                         .accessibilityLabel("模型")
                 }
@@ -70,10 +70,10 @@ struct SettingsView: View {
                 labeledField("API Key") {
                     HStack(spacing: 5) {
                         Image(systemName: "lock.fill")
-                            .font(.system(size: 9))
+                            .font(Theme.caption2)
                         Text("API Key 仅保存在本机钥匙串，不会上传")
                     }
-                    .font(.system(size: 10))
+                    .font(Theme.caption)
                     .foregroundStyle(.secondary)
                 } content: {
                     HStack(spacing: 6) {
@@ -85,13 +85,13 @@ struct SettingsView: View {
                             }
                         }
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(Theme.bodyMonospaced)
 
                         Button {
                             showKey.toggle()
                         } label: {
                             Image(systemName: showKey ? "eye.slash" : "eye")
-                                .font(.system(size: 11))
+                                .font(Theme.footnote)
                                 .foregroundStyle(.tertiary)
                         }
                         .buttonStyle(.plain)
@@ -104,7 +104,7 @@ struct SettingsView: View {
 
                 if let error = settings.keychainError {
                     Text(error)
-                        .font(.system(size: 10.5))
+                        .font(Theme.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -117,7 +117,7 @@ struct SettingsView: View {
             labeledField("附加要求（可选）", hint: "对所有翻译生效，例如统一术语、保留格式") {
                 TextField("例：commit 统一译作「提交」", text: $settings.extraInstruction, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
+                    .font(Theme.body)
                     .lineLimit(1...3)
             }
 
@@ -133,14 +133,14 @@ struct SettingsView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .font(.system(size: 12.5))
+            .font(Theme.body)
 
             VStack(alignment: .leading, spacing: 10) {
                 settingToggle("多语言模式", isOn: $settings.multiLanguageMode)
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .font(.system(size: 12.5))
+            .font(Theme.body)
 
             // The sound preference gets its own row so it reads as a distinct sense
             // channel, not a translation behavior. Switching it off is deliberately
@@ -151,7 +151,7 @@ struct SettingsView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .font(.system(size: 12.5))
+            .font(Theme.body)
 
             // The target picker is an inline grid, not a menu: a popup would make the
             // panel resign key and trip the click-outside auto-hide (same constraint
@@ -159,7 +159,7 @@ struct SettingsView: View {
             if settings.multiLanguageMode {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("目标语言")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Theme.footnoteMedium)
                         .foregroundStyle(.secondary)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
                         ForEach(TranslationLanguage.presets, id: \.self) { language in
@@ -168,7 +168,7 @@ struct SettingsView: View {
                                 engine.setTarget(language)
                             } label: {
                                 Text(language.displayName)
-                                    .font(.system(size: 11))
+                                    .font(Theme.footnote)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.7)
                                     .frame(maxWidth: .infinity)
@@ -188,11 +188,11 @@ struct SettingsView: View {
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
+                        .font(Theme.caption2)
                     Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(.system(size: 10.5))
+                .font(Theme.caption)
                 .foregroundStyle(.orange)
             }
         }
@@ -226,12 +226,12 @@ struct SettingsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(.snappy(duration: 0.25)) {
+                withAnimation(.snappy(duration: Theme.durationSlow)) {
                     panelState.showSettings = false
                 }
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.bodySmallSemibold)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Color.primary.opacity(0.06)))
@@ -240,12 +240,12 @@ struct SettingsView: View {
             .help("返回 (Esc)")
 
             Text("设置")
-                .font(.system(size: 14, weight: .semibold))
+                .font(Theme.title)
 
             Spacer()
 
             Text("Tusi v\(appVersion)")
-                .font(.system(size: 10.5))
+                .font(Theme.caption)
                 .foregroundStyle(.quaternary)
         }
     }
@@ -269,22 +269,22 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 if settings.primaryIndex == editingIndex {
                     Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
-                        .font(.system(size: 10.5))
+                        .font(Theme.caption)
                         .foregroundStyle(.tertiary)
                 } else {
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) {
+                        withAnimation(.snappy(duration: Theme.durationStandard)) {
                             settings.primaryIndex = editingIndex
                         }
                     } label: {
                         Label("设为主用", systemImage: "arrow.up.circle")
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(Theme.caption2Medium)
                             .foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
 
                     Text(settings.fallbackEnabled ? "· 现在是主用失败后的备用" : "· 备用已关闭，这套不会被使用")
-                        .font(.system(size: 10.5))
+                        .font(Theme.caption)
                         .foregroundStyle(.quaternary)
                 }
             }
@@ -295,7 +295,7 @@ struct SettingsView: View {
         let selected = editingIndex == index
         let isPrimary = settings.primaryIndex == index
         return Button {
-            withAnimation(.snappy(duration: 0.2)) { editingIndex = index }
+            withAnimation(.snappy(duration: Theme.durationStandard)) { editingIndex = index }
         } label: {
             HStack(spacing: 5) {
                 Circle()
@@ -304,9 +304,9 @@ struct SettingsView: View {
                           : AnyShapeStyle(Color.secondary.opacity(0.35)))
                     .frame(width: 5, height: 5)
                 Text(isPrimary ? "主用" : "备用")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(Theme.footnote2Semibold)
                 Text(settings.label(for: index))
-                    .font(.system(size: 10.5))
+                    .font(Theme.caption)
                     .opacity(0.7)
                     .lineLimit(1)
                     .fixedSize()
@@ -352,7 +352,7 @@ struct SettingsView: View {
                 SoundPlayer.shared.previewSuccess()
             } label: {
                 Image(systemName: "play.circle")
-                    .font(.system(size: 12))
+                    .font(Theme.bodySmall)
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
@@ -380,7 +380,7 @@ struct SettingsView: View {
                     updateChecker.check(manual: true)
                 } label: {
                     Text("检查更新")
-                        .font(.system(size: 11))
+                        .font(Theme.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
@@ -397,9 +397,9 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 11))
+                            .font(Theme.footnote)
                         Text(String(format: L("有新版本 %@，点击下载"), version))
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(Theme.footnote2Medium)
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -407,7 +407,7 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: 0.2), value: updateChecker.state)
+        .animation(.snappy(duration: Theme.durationStandard), value: updateChecker.state)
     }
 
     /// The short, non-actionable states shown inline next to the check button. An available
@@ -419,11 +419,11 @@ struct SettingsView: View {
             ProgressView().controlSize(.small).scaleEffect(0.55)
         case .upToDate:
             Text("已是最新")
-                .font(.system(size: 10.5))
+                .font(Theme.caption)
                 .foregroundStyle(.tertiary)
         case .failed:
             Text("检查失败")
-                .font(.system(size: 10.5))
+                .font(Theme.caption)
                 .foregroundStyle(.tertiary)
         case .idle, .available:
             EmptyView()
@@ -436,28 +436,28 @@ struct SettingsView: View {
     /// keeps this page from ballooning with a full per-action row list.
     private var shortcutsNavRow: some View {
         Button {
-            withAnimation(.snappy(duration: 0.25)) {
+            withAnimation(.snappy(duration: Theme.durationSlow)) {
                 panelState.showShortcuts = true
             }
         } label: {
             HStack {
                 Text("快捷键")
-                    .font(.system(size: 12.5))
+                    .font(Theme.body)
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Theme.captionSemibold)
                     .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
                     .fill(shortcutsRowHovering ? Color.primary.opacity(0.055) : Color.clear)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { shortcutsRowHovering = $0 }
-        .animation(.snappy(duration: 0.15), value: shortcutsRowHovering)
+        .animation(Theme.snappy(Theme.durationFast), value: shortcutsRowHovering)
     }
 
     // MARK: - Advanced
@@ -486,14 +486,14 @@ struct SettingsView: View {
                 // easing curves never quite track each other. Letting the field pop in
                 // instantly and having the window's resize be the only motion sidesteps
                 // that mismatch entirely.
-                withAnimation(.snappy(duration: 0.2)) { showAdvanced.toggle() }
+                withAnimation(.snappy(duration: Theme.durationStandard)) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Theme.footnoteMedium)
                         .foregroundStyle(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(Theme.caption2Semibold)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showAdvanced ? 90 : 0))
                 }
@@ -509,7 +509,7 @@ struct SettingsView: View {
                 ) {
                     TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(Theme.bodyMonospaced)
                         .focused($focusedField, equals: .providerOrder)
                         .accessibilityLabel("供应商路由（可选）")
                 }
@@ -533,7 +533,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(LocalizedStringKey(label))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Theme.footnoteMedium)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 trailing()
@@ -542,11 +542,11 @@ struct SettingsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                         .fill(Color.primary.opacity(0.05))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                         .strokeBorder(
                             focused ? Theme.accent.opacity(0.75) : Color.primary.opacity(0.07),
                             lineWidth: focused ? 1.5 : 1
@@ -554,7 +554,7 @@ struct SettingsView: View {
                 )
             if let hint {
                 Text(LocalizedStringKey(hint))
-                    .font(.system(size: 10))
+                    .font(Theme.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -573,10 +573,10 @@ struct SettingsView: View {
                         ProgressView().controlSize(.small).scaleEffect(0.6)
                     } else {
                         Image(systemName: "bolt.fill")
-                            .font(.system(size: 10))
+                            .font(Theme.caption)
                     }
                     Text("测试连接")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(Theme.bodySmallSemibold)
                 }
                 .foregroundStyle(Theme.accent)
                 .padding(.horizontal, 12)
@@ -597,7 +597,7 @@ struct SettingsView: View {
                 EmptyView()
             case .testing:
                 Text("连接中…")
-                    .font(.system(size: 11.5))
+                    .font(Theme.footnote)
                     .foregroundStyle(.tertiary)
             case .success(let ms):
                 HStack(spacing: 4) {
@@ -605,7 +605,7 @@ struct SettingsView: View {
                         .foregroundStyle(.green)
                     Text(String(format: L("连接正常 · %d ms"), ms))
                 }
-                .font(.system(size: 11.5, weight: .medium))
+                .font(Theme.footnote2Medium)
                 .foregroundStyle(.secondary)
                 .transition(.opacity)
             case .failure(let message):
@@ -615,12 +615,12 @@ struct SettingsView: View {
                     Text(message)
                         .lineLimit(2)
                 }
-                .font(.system(size: 11.5))
+                .font(Theme.footnote)
                 .foregroundStyle(.secondary)
                 .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: 0.2), value: testState)
+        .animation(.snappy(duration: Theme.durationStandard), value: testState)
     }
 
     private func runTest() {

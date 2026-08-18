@@ -54,7 +54,7 @@ struct RootView: View {
         // drawn by PanelContainerView. Sizing them from the content instead means they
         // animate on the content's timeline while the window resizes on AppKit's, and the
         // gap between the two timelines is where the corners flash square.
-        .animation(.snappy(duration: 0.25 * Theme.animationScale), value: panelState.showSettings)
-        .animation(.snappy(duration: 0.25 * Theme.animationScale), value: panelState.showShortcuts)
+        .animation(Theme.snappy(Theme.durationSlow), value: panelState.showSettings)
+        .animation(Theme.snappy(Theme.durationSlow), value: panelState.showShortcuts)
     }
 }

@@ -143,9 +143,9 @@ struct TranslatorView: View {
                 .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: 0.25), value: engine.hasResultSection)
-        .animation(.snappy(duration: 0.25), value: engine.toast)
-        .animation(.snappy(duration: 0.25), value: panelState.showHistory)
+        .animation(.snappy(duration: Theme.durationSlow), value: engine.hasResultSection)
+        .animation(.snappy(duration: Theme.durationSlow), value: engine.toast)
+        .animation(.snappy(duration: Theme.durationSlow), value: panelState.showHistory)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
             let selectAll = notification.object as? Bool == true
             inputFocused = true
@@ -230,7 +230,7 @@ struct TranslatorView: View {
                 // a complete translation — say so right under the result.
                 if engine.interrupted {
                     Label(L("已停止，结果不完整"), systemImage: "stop.circle.fill")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .transition(.opacity)
                 }
@@ -249,10 +249,10 @@ struct TranslatorView: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text("翻译历史")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Theme.footnoteSemibold)
                     .foregroundStyle(.secondary)
                 Text("\(engine.history.count)")
-                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .font(Theme.caption2Rounded)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -263,7 +263,7 @@ struct TranslatorView: View {
                         engine.clearHistory()
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(Theme.caption2Medium)
                     .foregroundStyle(.tertiary)
                 }
             }
@@ -272,9 +272,9 @@ struct TranslatorView: View {
             if engine.history.isEmpty {
                 VStack(spacing: 7) {
                     Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 18, weight: .light))
+                        .font(Theme.emptyState)
                     Text("翻译历史为空")
-                        .font(.system(size: 12))
+                        .font(Theme.bodySmall)
                 }
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -337,7 +337,7 @@ struct TranslatorView: View {
                 .transition(.opacity)
             } else if !engine.input.isEmpty && engine.output.isEmpty {
                 Text("⏎ 翻译")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Theme.footnoteMedium)
                     .foregroundStyle(.tertiary)
                     .transition(.opacity)
             }
@@ -358,13 +358,13 @@ struct TranslatorView: View {
                 isActive: panelState.showHistory,
                 help: panelState.showHistory ? "关闭历史" : "翻译历史"
             ) {
-                withAnimation(.snappy(duration: 0.25)) {
+                withAnimation(.snappy(duration: Theme.durationSlow)) {
                     panelState.showHistory.toggle()
                 }
             }
 
             BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
-                withAnimation(.snappy(duration: 0.25)) {
+                withAnimation(.snappy(duration: Theme.durationSlow)) {
                     panelState.showSettings = true
                 }
             }
@@ -376,9 +376,9 @@ struct TranslatorView: View {
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: 0.22), value: engine.output.isEmpty)
-        .animation(.snappy(duration: 0.22), value: engine.isTranslating)
-        .animation(.snappy(duration: 0.22), value: panelState.showHistory)
+        .animation(.snappy(duration: Theme.durationStandard), value: engine.output.isEmpty)
+        .animation(.snappy(duration: Theme.durationStandard), value: engine.isTranslating)
+        .animation(.snappy(duration: Theme.durationStandard), value: panelState.showHistory)
     }
 }
 
@@ -393,7 +393,7 @@ private struct HistoryRecordRow: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(record.input)
-                    .font(.system(size: 11))
+                    .font(Theme.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Text(record.output)
@@ -406,20 +406,20 @@ private struct HistoryRecordRow: View {
                     Spacer(minLength: 4)
                     Text(relativeTime)
                 }
-                .font(.system(size: 10))
+                .font(Theme.caption)
                 .foregroundStyle(.quaternary)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
                     .fill(hovering ? Color.primary.opacity(0.065) : Color.primary.opacity(0.025))
             )
-            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(.snappy(duration: 0.15), value: hovering)
+        .animation(.snappy(duration: Theme.durationFast), value: hovering)
     }
 }
 

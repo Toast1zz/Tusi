@@ -16,13 +16,13 @@ struct ShortcutsView: View {
 
                 if let error = panelState.shortcutError {
                     Text(error)
-                        .font(.system(size: 10.5))
+                        .font(Theme.caption)
                         .foregroundStyle(.orange)
                         .transition(.opacity)
                 }
             }
-            .animation(.snappy(duration: 0.18), value: panelState.recordingShortcut)
-            .animation(.snappy(duration: 0.18), value: panelState.shortcutError)
+            .animation(Theme.snappy(Theme.durationStandard), value: panelState.recordingShortcut)
+            .animation(Theme.snappy(Theme.durationStandard), value: panelState.shortcutError)
         }
         .padding(18)
         // Leaving the page mid-recording would otherwise swallow the next keystroke
@@ -38,12 +38,12 @@ struct ShortcutsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(.snappy(duration: 0.25)) {
+                withAnimation(Theme.snappy(Theme.durationSlow)) {
                     panelState.showShortcuts = false
                 }
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.bodySmallSemibold)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Color.primary.opacity(0.06)))
@@ -52,7 +52,7 @@ struct ShortcutsView: View {
             .help("返回 (Esc)")
 
             Text("快捷键")
-                .font(.system(size: 14, weight: .semibold))
+                .font(Theme.title)
 
             Spacer()
         }
@@ -67,7 +67,7 @@ struct ShortcutsView: View {
 
         return HStack(spacing: 8) {
             Text(action.label)
-                .font(.system(size: 12.5))
+                .font(Theme.body)
 
             Spacer()
 
@@ -77,7 +77,7 @@ struct ShortcutsView: View {
                     panelState.shortcutError = nil
                 } label: {
                     Image(systemName: "xmark.circle")
-                        .font(.system(size: 11))
+                        .font(Theme.footnote)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -89,7 +89,7 @@ struct ShortcutsView: View {
                     settings.setShortcut(action.defaultCombo, for: action)
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 10))
+                        .font(Theme.caption)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)

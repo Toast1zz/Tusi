@@ -67,7 +67,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         .environmentObject(panelState)
         .environmentObject(updateChecker)
 
-        let container = PanelContainerView(cornerRadius: Theme.cornerRadius)
+        let container = PanelContainerView(cornerRadius: Theme.panelCornerRadius)
         container.frame = panel.contentRect(forFrameRect: panel.frame)
         container.autoresizingMask = [.width, .height]
 
@@ -222,9 +222,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             // the frequent Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
-                    withAnimation(.snappy(duration: 0.25)) { self.panelState.showShortcuts = false }
+                    withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showShortcuts = false }
                 } else if self.panelState.showSettings {
-                    withAnimation(.snappy(duration: 0.25)) { self.panelState.showSettings = false }
+                    withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showSettings = false }
                 } else {
                     self.hide()
                 }
@@ -233,7 +233,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // ⌘, opens settings (not user-configurable — a macOS convention).
             if flags == .command, event.charactersIgnoringModifiers == "," {
-                withAnimation(.snappy(duration: 0.25)) { self.panelState.showSettings = true }
+                withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showSettings = true }
                 return nil
             }
 

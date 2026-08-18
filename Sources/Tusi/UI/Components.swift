@@ -84,7 +84,7 @@ struct BarIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(Theme.bodySmallMedium)
                 .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
                 .offset(y: glyphOffset)
                 .frame(width: 26, height: 26)
@@ -131,15 +131,15 @@ struct DirectionChip: View {
             if isActive {
                 Text(sourceLabel)
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(Theme.arrowBold)
                 Text(targetLabel)
             } else {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Theme.caption2Semibold)
                 Text("自动")
             }
         }
-        .font(.system(size: 11, weight: .semibold, design: .rounded))
+        .font(Theme.footnoteRounded)
         // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
         // both "inactive, not currently the point" — they should sit at the same weight.
         // The capsule background used to paper over the mismatch; plain text doesn't.
@@ -153,7 +153,7 @@ struct DirectionChip: View {
         }
         .contentShape(Capsule())
         .onHover { inside in
-            withAnimation(.snappy(duration: 0.15)) { hovering = inside }
+            withAnimation(Theme.snappy(Theme.durationFast)) { hovering = inside }
         }
         .onTapGesture {
             guard isInteractive else { return }
@@ -161,9 +161,9 @@ struct DirectionChip: View {
         }
         .accessibilityAddTraits(isInteractive ? .isButton : [])
         .help(isInteractive ? L("切换翻译方向") : "")
-        .animation(.snappy(duration: 0.2), value: isActive)
-        .animation(.snappy(duration: 0.2), value: sourceLabel)
-        .animation(.snappy(duration: 0.2), value: isFlipped)
+        .animation(Theme.snappy(Theme.durationStandard), value: isActive)
+        .animation(Theme.snappy(Theme.durationStandard), value: sourceLabel)
+        .animation(Theme.snappy(Theme.durationStandard), value: isFlipped)
     }
 }
 
@@ -184,10 +184,10 @@ struct ToneSelector: View {
             ForEach(Tone.allCases) { option in
                 let selected = option == tone
                 Button {
-                    withAnimation(.snappy(duration: 0.3 * Theme.animationScale)) { tone = option }
+                    withAnimation(Theme.snappy(Theme.durationTone)) { tone = option }
                 } label: {
                     Text(option.label)
-                        .font(.system(size: 10.5, weight: selected ? .semibold : .medium))
+                        .font(selected ? Theme.toneLabel : Theme.caption2Medium)
                         .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         // Without this, these labels could get silently truncated (seen
                         // with the longer English tone names) instead of reporting their
@@ -236,12 +236,12 @@ struct CopyButton: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10.5, weight: .bold))
+                    .font(Theme.caption2Bold)
                 Text(copied ? "已复制" : "复制")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.bodySmallSemibold)
                 if !copied, let shortcutHint, !shortcutHint.isEmpty {
                     Text(shortcutHint)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(Theme.captionMedium)
                         .opacity(0.65)
                 }
             }
@@ -257,8 +257,8 @@ struct CopyButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel(copied ? "已复制" : "复制")
-        .animation(.snappy(duration: 0.22), value: copied)
-        .animation(.snappy(duration: 0.15), value: hovering)
+        .animation(Theme.snappy(Theme.durationStandard), value: copied)
+        .animation(Theme.snappy(Theme.durationFast), value: hovering)
     }
 }
 
@@ -296,6 +296,9 @@ struct StreamingPlaceholder: View {
 
     private func bar(widthFraction: CGFloat) -> some View {
         GeometryReader { proxy in
+            // 4pt, deliberately smaller than the 6pt control radius: skeleton bars are
+            // fine decorative lines, not interactive controls — a tighter corner keeps
+            // them from reading as buttons.
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(Color.primary.opacity(0.09))
                 .frame(width: proxy.size.width * widthFraction)
@@ -317,10 +320,10 @@ struct Toast: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(Theme.bodySmallSemibold)
                 .foregroundStyle(tint)
             Text(text)
-                .font(.system(size: 12, weight: .medium))
+                .font(Theme.bodySmallMedium)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -342,25 +345,25 @@ struct ErrorBox: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
+                .font(Theme.footnote)
                 .foregroundStyle(.orange)
             Text(message)
-                .font(.system(size: 12))
+                .font(Theme.bodySmall)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             Button("重试", action: onRetry)
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
+                .font(Theme.bodySmallSemibold)
                 .foregroundStyle(Theme.accent)
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.radiusToast, style: .continuous)
                 .fill(Color.orange.opacity(0.08))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.radiusToast, style: .continuous)
                 .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
         )
     }

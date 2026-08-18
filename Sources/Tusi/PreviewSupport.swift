@@ -68,7 +68,7 @@ extension AppDelegate {
             )
             panelState.showSettings = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation(.snappy(duration: 0.25 * Theme.animationScale)) {
+                withAnimation(Theme.snappy(Theme.durationSlow)) {
                     self.panelState.showSettings = true
                 }
             }
