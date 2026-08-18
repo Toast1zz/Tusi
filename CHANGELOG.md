@@ -2,6 +2,12 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Swift 6 concurrency readiness: the test-only `sessionOverride` seam is `nonisolated(unsafe)` with documentation, the Carbon hotkey callback captures a `@Sendable` closure instead of the manager, and `PanelController` uses a main-actor-isolated `deinit` so its observers tear down safely. The project now builds clean under `-strict-concurrency=complete` (zero warnings)
+
 ## [1.8.0] - 2026-08-18
 
 ### Added

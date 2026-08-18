@@ -38,7 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem: statusItem
         )
         hotkey = HotkeyManager { [weak self] in
-            self?.togglePanel()
+            // The HotkeyManager already hops the Carbon callback to the main queue
+            // before invoking this closure, so it is safe to assume main-actor
+            // isolation here (Swift 6 requires the explicit assertion).
+            MainActor.assumeIsolated {
+                self?.togglePanel()
+            }
         }
         registerSummonHotkey(settings.shortcut(.summon))
 

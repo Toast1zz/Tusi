@@ -80,6 +80,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         installKeyMonitor()
         installResignObserver()
     }
+    /// `@MainActor deinit` (Swift 5.10+): the deinit runs on the main actor, so it can
+    /// safely access the main-actor-isolated `keyMonitor`/`resignObserver` properties.
+    /// This is required for Swift 6 language mode, which otherwise rejects touching
+    /// actor-isolated state from a nonisolated deinit. AppKit observers are removed
+    /// here because the panel's monitors must be torn down with it.
+    @MainActor
     deinit {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)

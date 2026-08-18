@@ -9,11 +9,14 @@ final class HotkeyManager {
     private var handlerRef: EventHandlerRef?
     /// The combo currently registered, so a failed re-registration can roll back to it.
     private var registeredCombo: KeyCombo?
-    private let callback: () -> Void
+    /// The callback is `@Sendable` so it can be captured by the Carbon event handler
+    /// (which fires on an arbitrary thread) and safely hop to the main actor. It is
+    /// immutable after init, so capturing it in the handler is race-free.
+    private let callback: @Sendable () -> Void
 
     /// Fails only if the Carbon event handler can't be installed (rare). The hotkey
     /// registration itself is done separately via `update(combo:)`, which is retryable.
-    init?(callback: @escaping () -> Void) {
+    init?(callback: @escaping @Sendable () -> Void) {
         self.callback = callback
 
         var eventType = EventTypeSpec(
@@ -27,7 +30,10 @@ final class HotkeyManager {
             { _, _, userData -> OSStatus in
                 guard let userData else { return noErr }
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-                DispatchQueue.main.async { manager.callback() }
+                // Carbon fires on a background thread; hop to main where the UI lives.
+                // `callback` is @Sendable and immutable, so this capture is safe.
+                let callback = manager.callback
+                DispatchQueue.main.async { callback() }
                 return noErr
             },
             1,

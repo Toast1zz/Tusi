@@ -56,7 +56,13 @@ enum TranslationService {
 
     #if DEBUG
     /// Test-only injection point. Never set outside of tests.
-    static var sessionOverride: URLSession?
+    ///
+    /// Marked `nonisolated(unsafe)` because it is global mutable state — Swift 6
+    /// forbids that by default. It is only ever written from tests, which XCTest runs
+    /// serially, and read from `session` (also within the test's `withMockSession`
+    /// scope), so there is no cross-thread access in practice. Do not set it from
+    /// concurrent code.
+    nonisolated(unsafe) static var sessionOverride: URLSession?
     #endif
 
     /// Builds the OpenAI-compatible chat-completions endpoint from the user's base URL.

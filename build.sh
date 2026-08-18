@@ -44,7 +44,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # directory gets overwritten by the next build, each slice must be copied out immediately.
 case "$ARCH_MODE" in
     native)
-        swift build -c release
+        # -strict-concurrency=complete + -warnings-as-errors: any concurrency hazard
+        # (data race, non-Sendable capture) fails the build instead of shipping a
+        # Swift-6 time bomb. See AUDIT.md P0/P1 items.
+        swift build -c release -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
         cp "$(swift build -c release --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
