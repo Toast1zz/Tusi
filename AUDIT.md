@@ -126,11 +126,13 @@ enum Theme {
 
 ## 3. 后端稳定性（Backend Stability）
 
-### 🔴 P0-3：翻译请求无整体超时兜底
+### 🔴 P0-3：翻译请求无整体超时兜底 ✅ 已修复
 
 **证据**：`URLSessionConfiguration.timeoutIntervalForResource = 300`（5 分钟），但**没有请求级超时**。流式传输本身可被 `consumeStream` 的 revision 检查取消，但一个"慢慢滴"的坏流（每 30 秒吐一个 token）会拖满 5 分钟资源超时，期间用户无法重新翻译（虽然可以点停止）。
 
-**建议**：在 `stream()` 的 detached task 里加**首 token 超时**（如 30 秒无数据则抛错），或对总时长设上限。用户感知的"卡住"多在首 token 阶段。
+**修复**：在 `stream()` 加**首 token 看门狗**（30 秒）——服务器接受连接但迟迟不吐数据（挂起网关、模型排队）时，看门狗取消流任务（AsyncBytes 迭代响应任务取消），转为明确的"服务器长时间无响应，请稍后重试"错误。看门狗与读循环共享的标记用 `OSAllocatedUnfairLock` 保护（strict-concurrency 零警告）。真正的用户取消仍以 `CancellationError` 传递，不会误报超时。
+
+**验证**：新增 `testStreamFailsAfterFirstTokenTimeout`（挂起 mock，0.27s 快速失败）和 `testStreamWithImmediateDataIgnoresTimeout`（正常流无丢失/重复）。46 测试全绿。
 
 ### 🟠 P1-4：无自动重试（除 failover）
 
