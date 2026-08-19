@@ -13,6 +13,12 @@ if [[ "${1:-}" == "release" ]]; then
     ARCH_MODE=release
 fi
 
+# -strict-concurrency=complete + -warnings-as-errors: any concurrency hazard
+# (data race, non-Sendable capture) fails the build instead of shipping a
+# Swift-6 time bomb. Applied to EVERY arch mode — not just native — so the
+# release zips users download are gated exactly like the debug loop is.
+CONCURRENCY_FLAGS=(-Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors)
+
 # VERSION contains the short version and build number, separated by whitespace.
 # Environment variables override it for CI/nightly builds.
 DEFAULT_VERSION="1.0.0"
@@ -44,15 +50,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # directory gets overwritten by the next build, each slice must be copied out immediately.
 case "$ARCH_MODE" in
     native)
-        # -strict-concurrency=complete + -warnings-as-errors: any concurrency hazard
-        # (data race, non-Sendable capture) fails the build instead of shipping a
-        # Swift-6 time bomb. See AUDIT.md P0/P1 items.
-        swift build -c release -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+        swift build -c release "${CONCURRENCY_FLAGS[@]}"
         cp "$(swift build -c release --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     arm64)
-        swift build -c release --arch arm64
+        swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64
         cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
@@ -64,9 +67,9 @@ case "$ARCH_MODE" in
         }
         trap cleanup_slices EXIT
 
-        swift build -c release --arch arm64
+        swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64
         cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$arm64_slice"
-        swift build -c release --arch x86_64
+        swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch x86_64
         cp "$(swift build -c release --arch x86_64 --show-bin-path)/Tusi" "$x86_64_slice"
         lipo -create "$arm64_slice" "$x86_64_slice" -output "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"

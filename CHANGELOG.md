@@ -2,12 +2,21 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.0] - 2026-08-19
 
 ### Added
 
 - Transient network failures (TCP reset, 5xx, timeout) are now retried once on the same provider before failing over — a one-off hiccup no longer needs a backup profile to recover
 - First-token timeout for translation streams: a server that accepts the request but never produces data (hung gateway, model queueing) now fails with "服务器长时间无响应，请稍后重试" after 30 seconds instead of leaving the user staring at an endless "working" state (URLSession's request timeout only covers response headers; the old behavior could wait the full 5-minute resource timeout)
+- Results longer than 64,000 characters are now truncated to the cap and flagged "结果过长，已截断，仅保留开头部分" — a rambling model run never grows the panel or the history file without bound, and a capped result skips the auto-copy and the success sound (a run that had to be cut is not a clean completion)
+- Settings shows a brief "API Key 已保存到钥匙串" confirmation after a key lands in the Keychain, so the debounced save no longer feels silent
+- `os.Logger` diagnostics across the translation, update-check, keychain, app-launch and sound paths; failures (stream errors, keychain writes, update checks, history writes) now leave a trail in the unified log (`log stream --predicate 'subsystem == "com.tusi.app"'`)
+- Update-checker network tests: failed / available / up-to-date states are now covered with a mock session
+
+### Changed
+
+- `build.sh` applies `-strict-concurrency=complete -warnings-as-errors` to **every** arch mode (native, arm64, universal) — the release zips are gated exactly like the debug loop, not just the `native` path
+- History rows show the full record text in a hover tooltip, so a long entry is readable without opening it
 
 ### Fixed
 
@@ -179,6 +188,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.9.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.9.0
 [1.7.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.3
 [1.7.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.2
 [1.7.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.1

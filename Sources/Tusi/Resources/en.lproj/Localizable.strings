@@ -19,6 +19,7 @@
 "翻译文风 · 当前模型：%@" = "Tone · Model: %@";
 "停止" = "Stop";
 "已停止，结果不完整" = "Stopped — result is incomplete";
+"结果过长，已截断，仅保留开头部分" = "Result was too long and was truncated — only the beginning is kept";
 "⏎ 翻译" = "⏎ Translate";
 "取消固定" = "Unpin";
 "固定面板（点击外部不关闭）" = "Pin panel (stays open when you click outside)";
@@ -51,6 +52,7 @@
 "有新版本 %@ →" = "New version %@ →";
 "全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出" = "The global summon shortcut couldn't be registered — another app may already be using it. Try a different combination, or use the menu-bar icon instead.";
 "API Key 仅保存在本机钥匙串，不会上传" = "Stored only in your Keychain, never uploaded";
+"API Key 已保存到钥匙串" = "API key saved to Keychain";
 "返回 (Esc)" = "Back (Esc)";
 "当前为主用，优先使用这套" = "This is the primary — tried first";
 "设为主用" = "Make primary";

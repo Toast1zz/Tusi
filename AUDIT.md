@@ -169,3 +169,32 @@ Keychain 保存失败只显示 `keychainError`，但用户改完 key 后**不知
 ---
 
 *审计方法：全量代码阅读 + `-strict-concurrency=complete` 编译 + `-warnings-as-errors` 构建 + 44 测试基线 + 静态分析（字号/动画/间距分布）。*
+
+---
+
+## 2026-08-19 跟进（二轮实施，基线同 v1.8.0）
+
+本轮在上一轮基础上补齐以下项，并修正一个上一轮的表述错误：
+
+### 修正：H1 — build.sh 门禁只覆盖 native
+上一轮声称"release 构建已加入 `-strict-concurrency=complete -warnings-as-errors` 门禁"，**不成立**——该旗标只在 `native` 分支，`arm64`/`universal`/`release`（走递归）全部绕过，发行版无并发防线。已改为公共 `CONCURRENCY_FLAGS` 应用到所有 arch。
+
+### 已完成
+
+| 项 | 内容 | 落地 |
+|---|---|---|
+| H2 / P2-5 | 输出 64K 封顶 + `outputCapped` 标识，截断结果不自动复制、不播成功音，历史文件随之有界 | TranslationEngine + TranslatorView banner + 2 测试 |
+| P2-6 | `os.Logger` 全补：keychain/app/sound 三类目接入（此前只有 translation/update） | Log.swift + SettingsStore/Keychain/AppDelegate/SoundPlayer |
+| P1-5 | API Key 保存成功即时反馈"已保存到钥匙串"（1.6s 自消） | SettingsStore `keychainSaved` + SettingsView |
+| P2-4 | 历史行 hover 完整全文 tooltip | HistoryRecordRow `.help` |
+| M2 | UpdateChecker 可注入 URLSession + failed/available/upToDate 三态测试（此前 0 覆盖） | init 参数 + 3 测试 |
+| L1 | ShortcutsView 残留 `.system(size: 11.5…)` 入 Theme | `shortcutCombo` / `shortcutComboRecording` |
+| L3 | `saveHistory` 编码/写入失败打日志（原静默吞） | TranslationEngine.saveHistory |
+
+验证：`-strict-concurrency=complete -warnings-as-errors` 构建 0 警告；测试 48 → **53 全绿**。
+
+### 有意搁置（非遗漏）
+
+- **P1-3 基线对齐**：纯视觉打磨，现有 pin 已单独修正，收益低且无机可试（需真机目测），未做
+- **M3 方向检测防抖**：`NLLanguageRecognizer` 每键在主线程跑。加防抖会破坏"输入立即切方向"的即时反馈，且现有测试依赖同步检测（`engine.input = …` 后立即断言 `engine.source`）。保留同步，标注为将来 UI 层优化选项
+- **L2 重定向目标校验**：URLSession POST 跨主机重定向会重发 `httpBody`；OpenAI 兼容端点几乎不重定向 POST，概率极低，未加 session 级 delegate（代价>收益）

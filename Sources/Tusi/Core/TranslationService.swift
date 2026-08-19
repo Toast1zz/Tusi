@@ -288,8 +288,13 @@ enum TranslationService {
                     // an actionable error. Genuine consumer cancels fall through as
                     // CancellationError.
                     if didTimeOut.withLock({ $0 }), !gotData.withLock({ $0 }) {
+                        Log.translation.error("stream timed out waiting for first token (host \(config.displayHost, privacy: .public))")
                         continuation.finish(throwing: TranslationError.http(0, L("服务器长时间无响应，请稍后重试")))
+                    } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                        Log.translation.debug("stream cancelled by consumer")
+                        continuation.finish(throwing: error)
                     } else {
+                        Log.translation.error("stream failed: \(error.localizedDescription, privacy: .public) (host \(config.displayHost, privacy: .public))")
                         continuation.finish(throwing: error)
                     }
                 }
@@ -320,13 +325,17 @@ enum TranslationService {
         var request = try makeRequest(config: config, body: body)
         request.timeoutInterval = 15
         let start = Date()
+        Log.translation.debug("testing connection to \(config.displayHost, privacy: .public)")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            Log.translation.error("connection test: invalid response from \(config.displayHost, privacy: .public)")
             throw TranslationError.http(0, L("无效响应"))
         }
         guard http.statusCode == 200 else {
+            Log.translation.error("connection test failed: HTTP \(http.statusCode) from \(config.displayHost, privacy: .public)")
             throw TranslationError.http(http.statusCode, parseErrorMessage(String(data: data, encoding: .utf8) ?? ""))
         }
+        Log.translation.debug("connection test OK to \(config.displayHost, privacy: .public) in \(Int(Date().timeIntervalSince(start) * 1000))ms")
         return Int(Date().timeIntervalSince(start) * 1000)
     }
 

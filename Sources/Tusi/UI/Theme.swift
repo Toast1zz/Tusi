@@ -82,6 +82,12 @@ enum Theme {
     static let toneLabel = Font.system(size: 10.5, weight: .semibold)
     /// 8pt bold — direction arrow.
     static let arrowBold = Font.system(size: 8, weight: .bold)
+    /// 11.5pt medium, rounded — the shortcut combo pill in its resting state.
+    static let shortcutCombo = Font.system(size: 11.5, weight: .medium, design: .rounded)
+    /// 11.5pt medium, default — the same pill while a shortcut is being recorded
+    /// (recording swaps away from the rounded design so the active state reads as
+    /// a fresh field, not a settled badge).
+    static let shortcutComboRecording = Font.system(size: 11.5, weight: .medium)
 
     // MARK: - Corner radii
 

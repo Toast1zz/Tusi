@@ -233,6 +233,12 @@ struct TranslatorView: View {
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .transition(.opacity)
+                } else if engine.outputCapped {
+                    // Same honesty for an overlong result cut at the length cap.
+                    Label(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
+                        .font(Theme.footnoteMedium)
+                        .foregroundStyle(.orange)
+                        .transition(.opacity)
                 }
             }
         }
@@ -420,6 +426,9 @@ private struct HistoryRecordRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.snappy(duration: Theme.durationFast), value: hovering)
+        // Rows truncate to keep the list compact; the hover tooltip shows the full
+        // text so a long record is still fully readable without opening it.
+        .help("\(record.input)\n\n\(record.output)")
     }
 }
 

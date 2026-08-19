@@ -63,8 +63,13 @@ final class SettingsStore: ObservableObject {
     /// Set when a Keychain write failed. The pending snapshot is retained so a later
     /// edit or application shutdown can retry it instead of silently losing the key.
     @Published private(set) var keychainError: String?
+    /// True briefly after API keys land in the Keychain. The save is debounced
+    /// (250ms) and otherwise silent — a one-time confirmation tells the user the
+    /// typed key was actually persisted, instead of leaving them guessing.
+    @Published private(set) var keychainSaved = false
 
     private var keychainSaveTask: Task<Void, Never>?
+    private var keychainSavedTask: Task<Void, Never>?
     private var pendingKeychainKeys: [Int: String]?
     private var profileSaveTask: Task<Void, Never>?
     private var pendingProfiles: [APIProfile]?
@@ -348,8 +353,21 @@ final class SettingsStore: ObservableObject {
             try Keychain.saveKeys(keys)
             pendingKeychainKeys = nil
             keychainError = nil
+            flashKeychainSaved()
         } catch {
             keychainError = error.localizedDescription
+            Log.keychain.error("keychain save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Shows the "saved" confirmation for a beat, then clears it.
+    private func flashKeychainSaved() {
+        keychainSaved = true
+        keychainSavedTask?.cancel()
+        keychainSavedTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            self?.keychainSaved = false
         }
     }
 
@@ -379,6 +397,8 @@ final class SettingsStore: ObservableObject {
 
         keychainSaveTask?.cancel()
         keychainSaveTask = nil
+        keychainSavedTask?.cancel()
+        keychainSavedTask = nil
         if let keys = pendingKeychainKeys {
             saveKeychain(keys)
         }

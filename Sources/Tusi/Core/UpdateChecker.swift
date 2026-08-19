@@ -26,9 +26,15 @@ final class UpdateChecker: ObservableObject {
     /// network state into screenshots — the preview settings suite is isolated, so the
     /// update checker must be too.
     private let isPreview: Bool
+    /// Injectable for tests: production uses `URLSession.shared`; tests hand in a
+    /// mock-backed session (same seam as TranslationService). The request-level
+    /// timeout is set per-request inside `performCheck`, so the shared session's own
+    /// timeout is never relied on.
+    private let session: URLSession
 
-    init(preview: Bool = false) {
+    init(preview: Bool = false, session: URLSession = .shared) {
         isPreview = preview
+        self.session = session
     }
 
     /// A newer version was found. Kept separate from `state` so a passive surface (the
@@ -72,6 +78,7 @@ final class UpdateChecker: ObservableObject {
         guard !Task.isCancelled, activeCheckID == id else { return }
 
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
+            Log.update.error("update check: malformed release URL")
             state = .failed
             checkTask = nil
             return
@@ -81,10 +88,11 @@ final class UpdateChecker: ObservableObject {
         request.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard !Task.isCancelled, activeCheckID == id else { return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   let release = try? JSONDecoder().decode(Release.self, from: data) else {
+                Log.update.error("update check: unexpected response (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
                 state = .failed
                 checkTask = nil
                 return
@@ -94,9 +102,11 @@ final class UpdateChecker: ObservableObject {
                let page = URL(string: release.html_url) {
                 pendingUpdate = (latest, page)
                 state = .available(version: latest, url: page)
+                Log.update.info("update available: \(latest, privacy: .public)")
             } else {
                 pendingUpdate = nil
                 state = .upToDate
+                Log.update.debug("up to date (latest \(latest, privacy: .public))")
             }
             // Only a genuinely completed check counts against the throttle. A failed or
             // superseded check leaves lastCheckKey untouched so the next launch retries.
@@ -110,6 +120,7 @@ final class UpdateChecker: ObservableObject {
             return
         } catch {
             guard activeCheckID == id else { return }
+            Log.update.error("update check failed: \(error.localizedDescription, privacy: .public)")
             state = .failed
             checkTask = nil
         }

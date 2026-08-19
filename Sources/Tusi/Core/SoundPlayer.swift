@@ -127,8 +127,14 @@ final class SoundPlayer {
             forResource: Cue.success.rawValue,
             withExtension: "mp3",
             subdirectory: "Sounds/\(Self.pack)"
-        ) else { return nil }
-        guard let player = try? AVAudioPlayer(contentsOf: url) else { return nil }
+        ) else {
+            Log.sound.error("completion cue asset missing: Sounds/\(Self.pack)/\(Cue.success.rawValue).mp3")
+            return nil
+        }
+        guard let player = try? AVAudioPlayer(contentsOf: url) else {
+            Log.sound.error("could not create AVAudioPlayer for completion cue")
+            return nil
+        }
         player.prepareToPlay()
         cached = player
         return player

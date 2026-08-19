@@ -28,6 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One launch line per run: version, preview mode, config state — enough to
+        // tell "did it even start" and "was it set up" apart in the unified log.
+        // (Locals, not self-access in interpolation: Logger's message is an
+        // autoclosure, and `\(self.settings...)` inside it needs explicit self.)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let isPreview = settings.isPreview
+        let configured = settings.isConfigured
+        Log.app.debug("Tusi \(version) launched (preview=\(isPreview), configured=\(configured))")
         setupMainMenu()
         setupStatusItem()
         panelController = PanelController(

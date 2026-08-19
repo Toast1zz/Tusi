@@ -713,6 +713,44 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.output, chunks.joined())
     }
 
+    func testOverlongOutputIsCappedAndFlagged() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        // 10-char substring × the cap ⇒ far past the ceiling; Character-count must
+        // match the engine's own cap logic.
+        let big = String(repeating: "很长的一段翻译文本，", count: TranslationEngine.maxOutputCharacters)
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(big)
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.state, .done)
+        XCTAssertEqual(engine.output.count, TranslationEngine.maxOutputCharacters)
+        XCTAssertTrue(engine.outputCapped)
+    }
+
+    func testShortOutputIsNotCapped() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("你好")
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "你好")
+        XCTAssertFalse(engine.outputCapped)
+    }
+
     // MARK: - Input cap / keychain recovery / metrics
 
     func testInputIsCappedAtMaximumLength() {
@@ -744,6 +782,72 @@ final class TusiTests: XCTestCase {
         XCTAssertLessThan(metrics.first, 40)
         XCTAssertLessThan(metrics.step, 40)
         XCTAssertLessThan(metrics.first, metrics.step)
+    }
+    // MARK: - UpdateChecker (mock session)
+
+    func testUpdateCheckerFailsOnHTTPError() async throws {
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 500, body: "{}"))
+        defer { Self.resetMockGitHubSession() }
+        checker.check(manual: true)
+        try await Self.waitUntilState(of: checker) { state in
+            if case .failed = state { return true }
+            return false
+        }
+    }
+
+    func testUpdateCheckerSurfacesAvailableDownload() async throws {
+        let body = #"{"tag_name":"v99.0.0","html_url":"https://github.com/Toast1zz/Tusi/releases/tag/v99.0.0"}"#
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        defer { Self.resetMockGitHubSession() }
+        checker.check(manual: true)
+        try await Self.waitUntilState(of: checker) { state in
+            if case .available = state { return true }
+            return false
+        }
+        guard case .available(let version, let url) = checker.state else {
+            return XCTFail("expected available state, got \(checker.state)")
+        }
+        XCTAssertEqual(version, "99.0.0")
+        XCTAssertEqual(url.absoluteString, "https://github.com/Toast1zz/Tusi/releases/tag/v99.0.0")
+        XCTAssertEqual(checker.pendingUpdate?.version, "99.0.0")
+    }
+
+    func testUpdateCheckerReportsUpToDate() async throws {
+        // "0.0.0" is not newer than the test bundle's current version ("0"), so the
+        // release must not be offered and no update must be pending.
+        let body = #"{"tag_name":"0.0.0","html_url":"https://github.com/Toast1zz/Tusi/releases/tag/0.0.0"}"#
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        defer { Self.resetMockGitHubSession() }
+        checker.check(manual: true)
+        try await Self.waitUntilState(of: checker) { $0 == .upToDate }
+        XCTAssertNil(checker.pendingUpdate)
+    }
+
+    private static func mockGitHubSession(statusCode: Int, body: String) -> URLSession {
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
+            return (response, Data(body.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    private static func resetMockGitHubSession() {
+        MockURLProtocol.handler = nil
+    }
+
+    private static func waitUntilState(
+        of checker: UpdateChecker,
+        condition: @escaping (UpdateChecker.State) -> Bool,
+        timeout: TimeInterval = 2
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition(checker.state) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition(checker.state))
     }
 }
 

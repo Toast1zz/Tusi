@@ -110,7 +110,7 @@ struct ShortcutsView: View {
                 // combo.display (e.g. "⇧⌘C") is a String, so this ternary can't rely on
                 // Text's automatic LocalizedStringKey lookup — the other branch needs L().
                 Text(recording ? L("按下新快捷键…") : (combo?.display ?? L("未绑定")))
-                    .font(.system(size: 11.5, weight: .medium, design: recording ? .default : .rounded))
+                    .font(recording ? Theme.shortcutComboRecording : Theme.shortcutCombo)
                     .foregroundStyle(recording ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
                     .frame(minWidth: 62)
                     .padding(.horizontal, 10)

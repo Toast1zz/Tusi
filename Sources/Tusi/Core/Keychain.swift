@@ -67,6 +67,7 @@ enum Keychain {
         } catch {
             // Keep the recovered values in memory for this run, but leave the legacy
             // records intact so the migration can retry next time.
+            Log.keychain.error("legacy API-key migration failed (\(error.localizedDescription, privacy: .public)); will retry on next launch")
         }
         return recovered
     }

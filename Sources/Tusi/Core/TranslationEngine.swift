@@ -67,6 +67,12 @@ final class TranslationEngine: ObservableObject {
     /// a complete translation — the result view marks it as such.
     @Published private(set) var interrupted = false
 
+    /// True when a finished result was truncated to `maxOutputCharacters`. Comes from
+    /// overlong model output (a chatty run that never terminates cleanly), not from the
+    /// user — like `interrupted` it keeps the text but flags it as incomplete, and it
+    /// suppresses the auto-copy and the success sound.
+    @Published private(set) var outputCapped = false
+
     /// Transient banner shown at the bottom of the panel, then auto-dismissed.
     /// Whether primary or backup served the request is an implementation detail —
     /// the only thing worth surfacing is the one-time "primary failed" notice.
@@ -90,6 +96,12 @@ final class TranslationEngine: ObservableObject {
     /// truncated at the boundary. This bounds the request body and the stored
     /// history records (each record holds the full input).
     static let maxInputCharacters = 32_000
+
+    /// Hard ceiling for a completed result (applied after the stream ends). A model
+    /// that rambles far past the input size is cut here — the panel and the history
+    /// file never hold an unbounded string, and the synchronous main-thread history
+    /// write stays small. Cutting is honest: the result is flagged `outputCapped`.
+    static let maxOutputCharacters = 64_000
 
     // MARK: - History persistence
 
@@ -226,6 +238,7 @@ final class TranslationEngine: ObservableObject {
         copied = false
         toast = nil
         interrupted = false
+        outputCapped = false
 
         let chain = settings.resolvedChain
         guard !chain.isEmpty else {
@@ -338,13 +351,25 @@ final class TranslationEngine: ObservableObject {
             // A successful HTTP response with no usable content is a failed attempt.
             guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
             self.output = SmartQuotes.apply(to: self.output)
+            // Overlong output is cut at the cap here (after the stream ends): the
+            // panel and history never hold an unbounded string. A capped result is
+            // honest about being partial — flagged, not silent — and behaves like a
+            // stop: no auto-copy, no success sound (a run that had to be cut is not
+            // a clean completion).
+            let wasCapped = self.output.count > Self.maxOutputCharacters
+            if wasCapped {
+                self.output = String(self.output.prefix(Self.maxOutputCharacters))
+            }
+            self.outputCapped = wasCapped
             self.state = .done
             self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-            if self.settings.autoCopy, !self.output.isEmpty {
+            if !wasCapped, self.settings.autoCopy, !self.output.isEmpty {
                 self.copyToPasteboard()
                 self.flashCopied(auto: true)
             }
-            SoundPlayer.shared.playSuccess()
+            if !wasCapped {
+                SoundPlayer.shared.playSuccess()
+            }
             return true
         }
 
@@ -437,6 +462,7 @@ final class TranslationEngine: ObservableObject {
     func cancelTranslation() {
         translationTask?.cancel()
         translationTask = nil
+        outputCapped = false
         if output.isEmpty {
             interrupted = false
             state = .idle
@@ -462,6 +488,7 @@ final class TranslationEngine: ObservableObject {
         copied = false
         toast = nil
         interrupted = false
+        outputCapped = false
         state = .idle
     }
 
@@ -472,6 +499,7 @@ final class TranslationEngine: ObservableObject {
         self.state = .done
         self.toast = toast
         self.interrupted = false
+        self.outputCapped = false
     }
 
     // MARK: - Clipboard
@@ -539,6 +567,7 @@ final class TranslationEngine: ObservableObject {
         source = record.source
         target = record.target
         interrupted = false
+        outputCapped = false
         state = .done
     }
 
@@ -559,9 +588,18 @@ final class TranslationEngine: ObservableObject {
     private func saveHistory() {
         let records = history
         let url = historyURL
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        guard let data = try? JSONEncoder().encode(records) else {
+            // Encoding a bounded `[Record]` basically never fails, but when it does,
+            // silently dropping the write would lose the user's history with no trail.
+            Log.app.error("history encode failed for \(records.count) records")
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Log.app.error("history write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func loadHistory() {
