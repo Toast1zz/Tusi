@@ -89,6 +89,9 @@ extension AppDelegate {
             panelState.showSettings = false
             engine.input = "这句话应该由备用供应商翻译。"
             engine.translate()
+        case "waiting":
+            panelState.showSettings = false
+            engine.debugPreviewTranslating(input: "得益于全新的架构，这次更新带来了显著的性能提升。")
         default:
             panelState.showSettings = false
             engine.debugPreview(

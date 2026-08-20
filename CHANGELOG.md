@@ -14,6 +14,18 @@ All notable changes to Tusi are documented here. Format follows [Keep a Changelo
 
 - A local (loopback) profile is usable with just an address + model; remote profiles still require an API key. Stale keys from an earlier remote configuration are no longer backfilled into a slot now used for local
 
+## [1.9.1] - 2026-08-20
+
+### Changed
+
+- Local and online translations now share the same presentation rhythm: streamed chunks remain behind the waiting placeholder and the complete result appears at once when translation finishes
+- The copy action appears only after a usable result is available; the in-progress result area consistently shows the waiting placeholder
+
+### Fixed
+
+- Local models no longer receive source text wrapped in `<translate>` markers, preventing smaller models from echoing those tags; boundary cleanup also removes wrappers returned by cached templates or gateways without altering literal tags inside a translation
+- Stopping a translation publishes any buffered partial result once and marks it incomplete, while a failed stream discards partial content and preserves the existing no-splice failover guard
+
 ## [1.9.0] - 2026-08-19
 
 ### Added

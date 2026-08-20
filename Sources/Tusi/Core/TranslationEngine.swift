@@ -88,6 +88,14 @@ final class TranslationEngine: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private var copyResetTask: Task<Void, Never>?
 
+    /// Unpublished accumulation of the in-flight provider's chunks. It is NOT @Published
+    /// and never touches the UI: parts only surface once a request commits atomically
+    /// (normal completion), or when the user deliberately stops a stream that already
+    /// produced content. Keeping it out of `output` is what lets local and online models
+    /// behave the same — the display commits once regardless of how the server delivers
+    /// tokens. Reset at the start of every request and every provider attempt.
+    private var pendingOutput = ""
+
     /// Ring buffer of completed translations (newest first).
     @Published private(set) var history: [Record] = []
     private let historyCapacity = 50
@@ -235,6 +243,7 @@ final class TranslationEngine: ObservableObject {
         copyResetTask?.cancel()
         copyResetTask = nil
         output = ""
+        pendingOutput = ""
         copied = false
         toast = nil
         interrupted = false
@@ -281,6 +290,7 @@ final class TranslationEngine: ObservableObject {
                     return
                 case .emptyResponse:
                     self.output = ""
+                    self.pendingOutput = ""
                     lastError = TranslationError.emptyResponse
                     if position < chain.count - 1 { continue attemptLoop }
                     break attemptLoop
@@ -288,12 +298,14 @@ final class TranslationEngine: ObservableObject {
                     lastError = error
                     // Only fall back before any token landed — retrying mid-stream
                     // would splice two different translations together. If partial
-                    // output arrived, the failure is final for this attempt.
-                    if self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    // output has buffered (even though it's unpublished), the failure
+                    // is final for this attempt; the buffer is discarded.
+                    if self.pendingOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                        position < chain.count - 1 {
-                        self.output = ""
+                        self.pendingOutput = ""
                         continue attemptLoop
                     }
+                    self.pendingOutput = ""
                     break attemptLoop
                 }
             }
@@ -347,19 +359,32 @@ final class TranslationEngine: ObservableObject {
         extra: String,
         requestRevision: UInt
     ) async -> StreamOutcome {
+        /// Commits the buffered content to `output` in one atomic publish, applying the
+        /// punctuation pass, length cap and side effects. Returns false when the
+        /// successful response produced no usable content (a failed attempt).
         func commitIfComplete() -> Bool {
+            let raw = pendingOutput
             // A successful HTTP response with no usable content is a failed attempt.
-            guard !self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-            self.output = SmartQuotes.apply(to: self.output)
+            guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                pendingOutput = ""
+                return false
+            }
+            let cleaned = TranslationService.sanitizeModelOutput(raw)
+            pendingOutput = ""
+            guard !cleaned.isEmpty else { return false }
+            var finalOutput = SmartQuotes.apply(to: cleaned)
             // Overlong output is cut at the cap here (after the stream ends): the
             // panel and history never hold an unbounded string. A capped result is
             // honest about being partial — flagged, not silent — and behaves like a
             // stop: no auto-copy, no success sound (a run that had to be cut is not
             // a clean completion).
-            let wasCapped = self.output.count > Self.maxOutputCharacters
+            let wasCapped = finalOutput.count > Self.maxOutputCharacters
             if wasCapped {
-                self.output = String(self.output.prefix(Self.maxOutputCharacters))
+                finalOutput = String(finalOutput.prefix(Self.maxOutputCharacters))
             }
+            // Publish exactly once. The view deliberately keeps showing the skeleton
+            // until `state` becomes `.done`, so text and the copy button enter together.
+            self.output = finalOutput
             self.outputCapped = wasCapped
             self.state = .done
             self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
@@ -373,6 +398,9 @@ final class TranslationEngine: ObservableObject {
             return true
         }
 
+        // Each distinct attempt (and retry) starts with an empty buffer so a backup (or
+        // a retry) commits only its own tokens — two models' output is never spliced.
+        pendingOutput = ""
         let first = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
         switch first {
         case .completed:
@@ -381,8 +409,10 @@ final class TranslationEngine: ObservableObject {
             return .cancelled
         case .failed(let error):
             // Only retry before any token landed — retrying mid-stream would splice two
-            // different translations together.
-            guard self.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // different translations together. Because output is unpublished until the
+            // end, the "any token landed" test reads the buffer, not the UI. The buffer
+            // is left intact here for the caller's failover decision to see; it clears it.
+            guard pendingOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return .failed(error)
             }
             // Retry only transient failures (TCP reset, 5xx, timeout) — deterministic
@@ -390,7 +420,7 @@ final class TranslationEngine: ObservableObject {
             let transient = (error as? TranslationError)?.isTransient ?? false
             guard transient else { return .failed(error) }
 
-            self.output = ""
+            pendingOutput = ""
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
             let retry = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
@@ -405,43 +435,22 @@ final class TranslationEngine: ObservableObject {
         }
     }
 
-    /// Consumes one provider stream, coalescing chunks so the UI never re-renders
-    /// faster than the flush cadence. A fast SSE stream can deliver hundreds of
-    /// chunks per second; publishing each one individually would re-layout the
-    /// result view at network speed. Chunks accumulate in a buffer, a flush task
-    /// publishes at most once per `flushInterval`, and the tail is flushed before
-    /// returning. Partial output is left in `self.output` on failure so the caller's
-    /// failover logic can see how much landed.
+    /// Consumes one provider's SSE stream into `pendingOutput`. Content is never
+    /// published to `output` here — the caller decides when to commit (once, on success
+    /// or a user stop). Chunks accumulate in the buffer as they arrive, so a fast local
+    /// server can deliver hundreds of tokens with no UI churn at all. Partial content is
+    /// left in `pendingOutput` on failure so the caller's retry/failover logic can see
+    /// whether any token landed.
     private func consumeStream(
         _ stream: AsyncThrowingStream<String, Error>,
         requestRevision: UInt
     ) async -> StreamConsumeOutcome {
-        let flushInterval: Duration = .milliseconds(33)
-        var buffer = ""
-
-        let flusher = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: flushInterval) } catch { return }
-                guard let self, !Task.isCancelled else { return }
-                if !buffer.isEmpty {
-                    self.output += buffer
-                    buffer = ""
-                }
-            }
-        }
-        defer { flusher.cancel() }
-
         do {
             for try await piece in stream {
                 guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
-                buffer += piece
+                pendingOutput += piece
             }
-            flusher.cancel()
             guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
-            if !buffer.isEmpty {
-                self.output += buffer
-                buffer = ""
-            }
             return .completed
         } catch is CancellationError {
             return .cancelled
@@ -449,12 +458,9 @@ final class TranslationEngine: ObservableObject {
             return .cancelled
         } catch {
             guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
-            // Flush whatever arrived so the caller sees the real partial output
-            // (it decides whether that counts as a mid-stream failure).
-            if !buffer.isEmpty {
-                self.output += buffer
-                buffer = ""
-            }
+            // Content stays in `pendingOutput` so the caller can decide whether this
+            // counts as a mid-stream failure (a token already landed) or one to retry/
+            // fail over cleanly.
             return .failed(error)
         }
     }
@@ -463,15 +469,34 @@ final class TranslationEngine: ObservableObject {
         translationTask?.cancel()
         translationTask = nil
         outputCapped = false
-        if output.isEmpty {
+        // Whether anything buffered decides if this stop leaves partial content behind.
+        // During a translation `output` is empty by design; the buffer holds everything
+        // the provider already delivered.
+        let hadContent = !pendingOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hadContent {
+            pendingOutput = ""
             interrupted = false
             state = .idle
         } else {
             // Stopping is deliberate: the partial text stays visible and copyable, but it
             // gets the same punctuation pass a finished result does, and the view marks
             // it as incomplete so it can't be mistaken for a complete translation.
-            output = SmartQuotes.apply(to: output)
+            let cleaned = TranslationService.sanitizeModelOutput(pendingOutput)
+            guard !cleaned.isEmpty else {
+                pendingOutput = ""
+                interrupted = false
+                state = .idle
+                return
+            }
+            var partial = SmartQuotes.apply(to: cleaned)
+            let wasCapped = partial.count > Self.maxOutputCharacters
+            if wasCapped {
+                partial = String(partial.prefix(Self.maxOutputCharacters))
+            }
+            output = partial
+            pendingOutput = ""
             interrupted = true
+            outputCapped = wasCapped
             state = .done
         }
     }
@@ -485,6 +510,7 @@ final class TranslationEngine: ObservableObject {
         copyResetTask?.cancel()
         copyResetTask = nil
         output = ""
+        pendingOutput = ""
         copied = false
         toast = nil
         interrupted = false
@@ -500,6 +526,18 @@ final class TranslationEngine: ObservableObject {
         self.toast = toast
         self.interrupted = false
         self.outputCapped = false
+    }
+
+    /// Puts the panel into a mid-translation state for visual inspection: a non-empty
+    /// input with an empty (unpublished) output and `.translating`. Skip the audible cue.
+    func debugPreviewTranslating(input: String) {
+        pendingOutput = ""
+        self.input = input
+        self.output = ""
+        self.interrupted = false
+        self.outputCapped = false
+        self.copied = false
+        self.state = .translating
     }
 
     // MARK: - Clipboard

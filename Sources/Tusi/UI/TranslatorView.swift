@@ -194,7 +194,7 @@ struct TranslatorView: View {
         switch engine.state {
         case .failed(let message):
             ErrorBox(message: message) { engine.translate() }
-        case .translating where engine.output.isEmpty:
+        case .translating:
             StreamingPlaceholder()
                 .padding(.vertical, 2)
         default:
@@ -375,7 +375,7 @@ struct TranslatorView: View {
                 }
             }
 
-            if !engine.output.isEmpty {
+            if !engine.isTranslating && !engine.output.isEmpty {
                 CopyButton(copied: engine.copied, shortcutHint: settings.shortcut(.copy)?.display) {
                     engine.copyOutput()
                 }

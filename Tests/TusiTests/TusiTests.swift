@@ -20,9 +20,40 @@ final class TusiTests: XCTestCase {
         let prompt = TranslationService.systemPrompt(for: .chinese, tone: .standard)
         // The chat channel defaults to answering user questions; the prompt must
         // explicitly override that or a mixed query gets explained instead of translated.
-        XCTAssertTrue(prompt.contains("text between the <translate> markers"))
+        XCTAssertTrue(prompt.contains("Every user message consists solely of source"))
         XCTAssertTrue(prompt.contains("never answer or explain it"))
         XCTAssertTrue(prompt.contains("A question in the source remains a question"))
+        XCTAssertFalse(prompt.contains("<translate>"), "the protocol must not teach local models to echo wrappers")
+    }
+
+    func testModelOutputSanitizerRemovesOnlyBoundaryTranslateWrappers() {
+        XCTAssertEqual(
+            TranslationService.sanitizeModelOutput("<translate>\nHello world\n</translate>"),
+            "Hello world"
+        )
+        XCTAssertEqual(
+            TranslationService.sanitizeModelOutput("&lt;TRANSLATE&gt;\n你好\n&lt;/TRANSLATE&gt;"),
+            "你好"
+        )
+        XCTAssertEqual(
+            TranslationService.sanitizeModelOutput("Keep <translate>this literal tag</translate> inside."),
+            "Keep <translate>this literal tag</translate> inside."
+        )
+        XCTAssertEqual(TranslationService.sanitizeModelOutput("keep trailing space "), "keep trailing space ")
+    }
+
+    func testChatRequestSendsRawSourceWithoutTranslateWrapper() {
+        let source = "<b>literal source markup</b>\nWhat is this?"
+        let messages = TranslationService.chatMessages(
+            text: source,
+            target: .chinese,
+            tone: .standard,
+            extra: ""
+        )
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[1]["role"], "user")
+        XCTAssertEqual(messages[1]["content"], source)
+        XCTAssertFalse(messages[0]["content", default: ""].contains("<translate>"))
     }
 
     func testStatusItemDoubleClickTogglesOnlyOnce() {
@@ -820,6 +851,151 @@ final class TusiTests: XCTestCase {
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.output, "你好")
         XCTAssertFalse(engine.outputCapped)
+    }
+
+    func testCompletedTranslationDoesNotExposeEchoedTranslateWrapper() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("<translate>\nTranslated text\n</translate>")
+                continuation.finish()
+            }
+        }
+        engine.input = "source"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "Translated text")
+        XCTAssertEqual(engine.history.first?.output, "Translated text")
+    }
+
+    // MARK: - Unpublished buffering & single atomic commit
+
+    func testOutputStaysEmptyUntilStreamCompletes() async throws {
+        // Multiple chunks are buffered; nothing is published to `output` (and no copy
+        // button can appear) until the stream finishes, which is the unified local/
+        // online display rhythm.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        for _ in 0..<100 where continuations.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // Deliver half the chunks; the stream stays open.
+        continuations[0].yield("你")
+        continuations[0].yield("好")
+        // Let the main-actor consume task drain them into the unpublished buffer.
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(engine.state, .translating)
+        XCTAssertTrue(engine.output.isEmpty, "no partial output may be published during translation")
+        XCTAssertFalse(engine.copied)
+
+        continuations[0].yield("世")
+        continuations[0].yield("界")
+        continuations[0].finish()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.state, .done)
+        XCTAssertEqual(engine.output, "你好世界")
+    }
+
+    func testStopWithBufferedContentShowsPartialOnce() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        for _ in 0..<100 where continuations.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        continuations[0].yield("partial ")
+        continuations[0].yield("content")
+        // Let the (main-actor) consume task drain the yielded chunks into the unpublished
+        // buffer before stopping — mirroring a real network where tokens are buffered as
+        // they arrive. Still nothing published while translating.
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(engine.state, .translating)
+        XCTAssertTrue(engine.output.isEmpty)
+
+        engine.cancelTranslation()
+        // The buffered content appears once, marked incomplete, and is copyable.
+        XCTAssertEqual(engine.output, "partial content")
+        XCTAssertEqual(engine.interrupted, true)
+        XCTAssertEqual(engine.state, .done)
+
+        engine.copyOutput()
+        XCTAssertTrue(engine.copied, "stopped partial content must be copyable")
+    }
+
+    func testStopWithNoContentReturnsToIdle() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        for _ in 0..<100 where continuations.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(engine.state, .translating)
+
+        engine.cancelTranslation()
+        XCTAssertEqual(engine.state, .idle)
+        XCTAssertTrue(engine.output.isEmpty)
+        XCTAssertFalse(engine.interrupted)
+    }
+
+    func testChunkThenFailureShowsNoPartialAndSkipsBackup() async throws {
+        // A provider that produces a token and then fails must not show the partial
+        // result, must not fail over to the backup (two spliced translations are worse),
+        // and must land in a failed state.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                continuation.yield("partial")
+                Task {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    continuation.finish(throwing: TranslationError.http(500, "boom"))
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        XCTAssertEqual(calls, 1, "backup must not be tried after a token landed")
+        XCTAssertTrue(engine.output.isEmpty, "partial output must be discarded on failure")
+        if case .failed(let message) = engine.state {
+            XCTAssertFalse(message.contains("备用"), message)
+        } else {
+            XCTFail("expected failed state")
+        }
     }
 
     // MARK: - Input cap / keychain recovery / metrics
