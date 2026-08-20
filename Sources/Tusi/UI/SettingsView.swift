@@ -45,6 +45,13 @@ struct SettingsView: View {
         settings.profiles.indices.contains(editingIndex) ? editingIndex : 0
     }
 
+    /// True when the profile being edited points at a local (loopback) server — used to
+    /// hide the API Key field, since local inference servers don't take one.
+    private var isCurrentProfileLocal: Bool {
+        settings.profiles.indices.contains(editingIndex)
+            && !settings.profiles[editingIndex].config.requiresAuth
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -67,39 +74,61 @@ struct SettingsView: View {
                         .accessibilityLabel("模型")
                 }
                 advancedSection
-                labeledField("API Key") {
-                    HStack(spacing: 5) {
-                        Image(systemName: "lock.fill")
+                if isCurrentProfileLocal {
+                    // Local (loopback) inference servers don't take an API key — Ollama,
+                    // LM Studio, llama.cpp-server. Showing the field here would push users
+                    // to type a fake key; a quiet hint is more honest.
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "desktopcomputer")
                             .font(Theme.caption2)
-                        Text("API Key 仅保存在本机钥匙串，不会上传")
+                            .padding(.top, 1)
+                        Text("本地服务无需 API Key")
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .font(Theme.caption)
                     .foregroundStyle(.secondary)
-                } content: {
-                    HStack(spacing: 6) {
-                        Group {
-                            if showKey {
-                                TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
-                            } else {
-                                SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+                } else {
+                    labeledField("API Key") {
+                        HStack(spacing: 5) {
+                            Image(systemName: "lock.fill")
+                                .font(Theme.caption2)
+                            Text("API Key 仅保存在本机钥匙串，不会上传")
+                        }
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                    } content: {
+                        HStack(spacing: 6) {
+                            Group {
+                                if showKey {
+                                    TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
+                                } else {
+                                    SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
+                                }
                             }
-                        }
-                        .textFieldStyle(.plain)
-                        .font(Theme.bodyMonospaced)
+                            .textFieldStyle(.plain)
+                            .font(Theme.bodyMonospaced)
 
-                        Button {
-                            showKey.toggle()
-                        } label: {
-                            Image(systemName: showKey ? "eye.slash" : "eye")
-                                .font(Theme.footnote)
-                                .foregroundStyle(.tertiary)
+                            Button {
+                                showKey.toggle()
+                            } label: {
+                                Image(systemName: showKey ? "eye.slash" : "eye")
+                                    .font(Theme.footnote)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(showKey ? "隐藏" : "显示")
+                            .accessibilityLabel(showKey ? "隐藏" : "显示")
                         }
-                        .buttonStyle(.plain)
-                        .help(showKey ? "隐藏" : "显示")
-                        .accessibilityLabel(showKey ? "隐藏" : "显示")
+                        .focused($focusedField, equals: .apiKey)
+                        .accessibilityLabel("API Key")
                     }
-                    .focused($focusedField, equals: .apiKey)
-                    .accessibilityLabel("API Key")
                 }
 
                 if let error = settings.keychainError {

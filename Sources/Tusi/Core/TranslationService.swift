@@ -139,7 +139,7 @@ enum TranslationService {
             || lower.hasPrefix("::1")
     }
 
-    private static func isLoopback(_ host: String) -> Bool {
+    static func isLoopback(_ host: String) -> Bool {
         let normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         if normalized == "localhost" || normalized == "::1" { return true }
         // The whole 127.0.0.0/8 range is loopback, not just 127.0.0.1
@@ -153,11 +153,18 @@ enum TranslationService {
 
     private static func makeRequest(config: APIConfig, body: [String: Any]) throws -> URLRequest {
         let apiKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty else { throw TranslationError.emptyKey }
+        if config.requiresAuth, apiKey.isEmpty {
+            throw TranslationError.emptyKey
+        }
         var request = URLRequest(url: try endpoint(for: config))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        // Local (loopback) endpoints — Ollama, LM Studio, llama.cpp-server — don't need
+        // a Bearer token and often object to one they never asked for; only send auth to
+        // endpoints that actually require it.
+        if config.requiresAuth {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: applyProviderOrder(body, config: config))
         return request
     }

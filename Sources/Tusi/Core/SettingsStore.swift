@@ -11,10 +11,21 @@ struct APIConfig: Equatable {
     /// strict gateways must not receive this provider-specific top-level field.
     var providerOrder: String = ""
 
+    /// Whether this endpoint needs an API key. Local (loopback) inference servers —
+    /// Ollama, LM Studio, llama.cpp-server — authenticate differently or not at all, so a
+    /// `localhost` / `127.0.0.0/8` / `::1` endpoint is allowed to have an empty key.
+    /// Anything unresolved (empty or unparseable base URL) conservatively requires auth.
+    var requiresAuth: Bool {
+        !TranslationService.isLoopback(displayHost)
+    }
+
     var isUsable: Bool {
-        !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let valid = !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard valid else { return false }
+        // Local endpoints can omit the key; remote ones must still have one.
+        return !requiresAuth
+            || !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Host of the base URL, used as a display name for the slot ("api.deepseek.com").
@@ -381,6 +392,10 @@ final class SettingsStore: ObservableObject {
         let keys = Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
         guard !keys.isEmpty else { return }
         for (index, profile) in profiles.enumerated() {
+            // Only backfill remote profiles: a loopback (local) profile has no key by
+            // design, and a stale key from an earlier remote configuration of the same
+            // slot must not be resurrected into it.
+            guard profile.config.requiresAuth else { continue }
             if profile.apiKey.isEmpty, let key = keys[index], !key.isEmpty {
                 profiles[index].apiKey = key
             }

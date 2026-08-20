@@ -277,6 +277,77 @@ final class TusiTests: XCTestCase {
         )
     }
 
+    // MARK: - Local endpoints don't require an API key
+
+    func testLocalEndpointIsUsableWithoutAPIKey() {
+        // Loopback servers (Ollama, LM Studio, llama.cpp-server) take no key.
+        let local = APIConfig(baseURL: "http://localhost:11434/v1", apiKey: "", model: "model")
+        XCTAssertFalse(local.requiresAuth)
+        XCTAssertTrue(local.isUsable)
+
+        // The whole 127.0.0.0/8 range is loopback too.
+        let loopback = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "", model: "model")
+        XCTAssertFalse(loopback.requiresAuth)
+        XCTAssertTrue(loopback.isUsable)
+    }
+
+    func testRemoteEndpointStillRequiresAPIKey() {
+        // A remote endpoint without a key is not usable and must require auth.
+        let remote = APIConfig(baseURL: "https://api.deepseek.com/v1", apiKey: "", model: "model")
+        XCTAssertTrue(remote.requiresAuth)
+        XCTAssertFalse(remote.isUsable)
+    }
+
+    func testLocalStreamSendsNoAuthorizationHeader() async throws {
+        // Local endpoints must not carry a Bearer token (many local servers reject or
+        // ignore one they never asked for).
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你好"}}]}
+
+        data: [DONE]
+
+        """
+        var capturedHeader: String? = nil
+        MockURLProtocol.handler = { request in
+            capturedHeader = request.value(forHTTPHeaderField: "Authorization")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(sse.utf8))
+        }
+        let mockConfig = URLSessionConfiguration.ephemeral
+        mockConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: mockConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        let local = APIConfig(baseURL: "http://localhost:11434/v1", apiKey: "", model: "model")
+        var pieces: [String] = []
+        for try await piece in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: local) {
+            pieces.append(piece)
+        }
+        XCTAssertEqual(pieces, ["你好"])
+        XCTAssertNil(capturedHeader, "local endpoint must not send an Authorization header")
+    }
+
+    func testLocalTranslationWithoutKeySucceeds() async throws {
+        // End-to-end through the engine: a loopback profile with no key must translate
+        // (isUsable, no emptyKey thrown, no auth header sent).
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "http://localhost:11434/v1", apiKey: "", model: "model")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("你好")
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "你好")
+    }
+
     func testTranslateWithoutUsableProfileShowsSetupMessage() {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false

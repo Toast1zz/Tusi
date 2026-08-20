@@ -52,6 +52,7 @@
 "有新版本 %@ →" = "New version %@ →";
 "全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出" = "The global summon shortcut couldn't be registered — another app may already be using it. Try a different combination, or use the menu-bar icon instead.";
 "API Key 仅保存在本机钥匙串，不会上传" = "Stored only in your Keychain, never uploaded";
+"本地服务无需 API Key" = "No API key needed for local servers";
 "API Key 已保存到钥匙串" = "API key saved to Keychain";
 "返回 (Esc)" = "Back (Esc)";
 "当前为主用，优先使用这套" = "This is the primary — tried first";

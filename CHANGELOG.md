@@ -2,6 +2,18 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-08-20
+
+### Added
+
+- Local (loopback) endpoints no longer require an API key. Ollama, LM Studio, and llama.cpp-server are OpenAI-compatible and authenticate differently or not at all, so a `localhost` / `127.0.0.0/8` / `::1` base URL now works with an empty key — point Tusi at your local server (e.g. `http://localhost:11434/v1` or `http://localhost:8080/v1`) and it just works, no fake key required
+- Local servers no longer receive a `Bearer` token they never asked for — only remote endpoints get an `Authorization` header
+- Settings hides the API Key field for local endpoints and shows "本地服务无需 API Key" instead, so nobody is pushed to type a placeholder key
+
+### Changed
+
+- A local (loopback) profile is usable with just an address + model; remote profiles still require an API key. Stale keys from an earlier remote configuration are no longer backfilled into a slot now used for local
+
 ## [1.9.0] - 2026-08-19
 
 ### Added
@@ -189,6 +201,7 @@ First tagged release.
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
 [1.9.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.9.0
+[1.10.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.10.0
 [1.7.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.3
 [1.7.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.2
 [1.7.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.1
