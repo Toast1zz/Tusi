@@ -194,6 +194,16 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.target, .japanese)
     }
 
+    func testPresetTargetsAreTheFourCoreLanguagesOnly() {
+        // The multi-language picker intentionally offers only EN / 中 / 日 / 한 — the
+        // languages users actually translate between. Smaller languages are still
+        // *detected* as sources but are not offered as targets.
+        XCTAssertEqual(
+            Set(TranslationLanguage.presets),
+            Set([.english, .chinese, .japanese, .korean])
+        )
+    }
+
     func testLoopback127RangeAllowsHTTP() throws {
         let config = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "key", model: "model")
         XCTAssertEqual(
@@ -544,6 +554,43 @@ final class TusiTests: XCTestCase {
         continuations[1].finish()
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.output, "日本語")
+    }
+
+    func testMultiLanguageTargetSelectableWithEmptyInput() {
+        // The language grid in Settings is visible before anything is typed, so choosing
+        // a target with an empty input must register — it must not be silently dropped.
+        // Regression: setTarget used to return early on empty input, so "日本語" could
+        // never be selected until the user typed something; and once empty input was
+        // allowed, selecting 中文 was still vetoed because the empty-input source
+        // placeholder (Chinese) tripped the "translate X into X" auto-flip.
+        let settings = SettingsStore(preview: true)
+        settings.multiLanguageMode = true
+        let engine = TranslationEngine(settings: settings)
+        XCTAssertTrue(engine.input.isEmpty)
+
+        engine.setTarget(.chinese)
+        XCTAssertEqual(engine.target, .chinese, "中文 must be selectable with empty input")
+
+        engine.setTarget(.japanese)
+        XCTAssertEqual(engine.target, .japanese)
+
+        // In simple (non-multi) mode an explicit target is still ignored.
+        settings.multiLanguageMode = false
+        engine.setTarget(.english)
+        XCTAssertEqual(engine.target, .japanese, "ignored outside multi-language mode")
+    }
+
+    func testMultiLanguageTargetStillAutoFlippedWithRealInputForNoop() {
+        // With actual input, choosing a target identical to the detected source is
+        // still an invalid "translate X into X" and should be corrected to the other
+        // side — the empty-input exception must not leak into real translations.
+        let settings = SettingsStore(preview: true)
+        settings.multiLanguageMode = true
+        let engine = TranslationEngine(settings: settings)
+        engine.input = "这是中文字符串"   // detected source: Chinese
+        XCTAssertEqual(engine.source, .chinese)
+        engine.setTarget(.chinese)       // no-op target → should flip away from Chinese
+        XCTAssertNotEqual(engine.target, .chinese)
     }
 
     func testMultiLanguageModeChangeRestartsTranslationWhileTranslating() async throws {

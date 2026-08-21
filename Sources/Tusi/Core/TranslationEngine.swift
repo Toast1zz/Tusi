@@ -185,8 +185,12 @@ final class TranslationEngine: ObservableObject {
             // If the stored target equals the source, flip it to the most
             // recent distinct target, or fall back to the other side.
             if target == source {
-                // Find the most recent record where target ≠ current source.
-                let lastDifferent = history.first { $0.target != source }?.target
+                // Find the most recent record where target ≠ current source and is still
+                // offered in the picker — older builds may have recorded targets (e.g.
+                // French) that are no longer in the presets list.
+                let lastDifferent = history.first {
+                    $0.target != source && TranslationLanguage.presets.contains($0.target)
+                }?.target
                 target = lastDifferent ?? (source == .english ? .chinese : .english)
             }
         } else {
@@ -212,11 +216,19 @@ final class TranslationEngine: ObservableObject {
     /// (translating into the same language makes no sense). If a translation is in
     /// flight, `translate()` cancels that request and starts the same input again with
     /// the newly selected target.
+    ///
+    /// The target may be chosen with an empty input: the language grid in Settings is
+    /// visible before anything is typed, so a click must register even with no text —
+    /// the chosen target just hasn't kicked off a translation yet.
     func setTarget(_ language: TranslationLanguage) {
-        guard settings.multiLanguageMode, !input.isEmpty else { return }
+        guard settings.multiLanguageMode else { return }
         let previousTarget = target
         target = language
-        if target == source { updateDirection() }
+        // Avoid a no-op "translate X into X" — but only when there is real input to
+        // translate. With an empty input the detected source is just a placeholder
+        // (usually Chinese), so it must not veto the user's explicit target choice:
+        // let them select 中文 even before typing anything.
+        if target == source, !input.isEmpty { updateDirection() }
         guard target != previousTarget else { return }
         if isTranslating { translate() }
     }

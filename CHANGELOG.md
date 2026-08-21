@@ -2,6 +2,24 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.4] - 2026-08-20
+
+### Changed
+
+- Multi-language mode now offers only the four core targets — 中文 / English / 日本語 / 한국어 — instead of the full 17-language grid. That keeps the picker to a single row and matches how these modes are actually used; other languages can still be detected as the source of the input, they just aren't offered as a translation target. The direction auto-correct only falls back to targets still in the picker, so older history entries (e.g. a French choice from a previous build) can no longer surface an unselectable target
+
+## [1.9.3] - 2026-08-20
+
+### Fixed
+
+- Multi-language mode: selecting 中文 (or any language equal to the empty-input source placeholder) no longer gets auto-flipped away. With an empty input the detected source is just a placeholder (usually Chinese), so it no longer vetoes the user's explicit target choice — the target now sticks whether you pick 中文, 日本語 or anything else before typing. The "translate X into X" auto-correct still applies once there is real input
+
+## [1.9.2] - 2026-08-20
+
+### Fixed
+
+- Multi-language mode: choosing a target language no longer fails when the input is empty. The target-language grid in Settings is visible before any text is typed, but selecting one (e.g. 日本語) was silently ignored until the input contained text — the selection now registers immediately, so switching to Japanese works from a fresh panel
+
 ## [1.10.0] - 2026-08-20
 
 ### Added

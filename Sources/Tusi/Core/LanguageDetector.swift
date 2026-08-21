@@ -95,11 +95,11 @@ struct TranslationLanguage: Codable, Equatable, Hashable {
     )
 
     /// All preset languages, used for the language picker in multi-language mode.
+    /// Deliberately a short list: translation quality and intent are clearest for these
+    /// four; anything else can still be *detected* as a source, but is not offered as a
+    /// target.
     static let presets: [TranslationLanguage] = [
-        .english, .chinese, .japanese, .korean,
-        .french, .german, .spanish, .portuguese,
-        .italian, .russian, .arabic, .hindi,
-        .vietnamese, .thai, .indonesian, .turkish, .dutch
+        .english, .chinese, .japanese, .korean
     ]
     /// Fallback for NLLanguage values not in the presets list.
     static func fromNLLanguage(_ nl: NLLanguage) -> TranslationLanguage {
