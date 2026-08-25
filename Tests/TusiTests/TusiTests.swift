@@ -317,6 +317,33 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(engine.localModelAvailable)
     }
 
+    func testSlotLabelShowsShortBrandNameNotFullHost() {
+        // The tabs now share the settings row equally (SettingsView.slotTab); a full
+        // domain would eat a disproportionate share, so the label strips the generic
+        // "api." subdomain and the trailing TLD down to just the brand.
+        let settings = SettingsStore(preview: true)
+        settings.profiles[0] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "k", model: "m")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.commandcode.ai/provider/v1", apiKey: "k", model: "m")
+        XCTAssertEqual(settings.label(for: 0), "deepseek")
+        XCTAssertEqual(settings.label(for: 1), "commandcode")
+    }
+
+    func testSlotLabelHandlesShortDomainsAndLocalAddresses() {
+        let settings = SettingsStore(preview: true)
+        settings.profiles[0] = APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "k", model: "m")
+        settings.profiles[1] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "m")
+        // A two-label domain has no separate "brand" subdomain to strip — dropping the
+        // TLD alone still leaves the actual brand name.
+        XCTAssertEqual(settings.label(for: 0), "openrouter")
+        // IPs have no host structure to extract a name from; shown as-is.
+        XCTAssertEqual(settings.label(for: 1), "127.0.0.1")
+    }
+
+    func testSlotLabelForUnconfiguredSlot() {
+        let settings = SettingsStore(preview: true)
+        XCTAssertEqual(settings.label(for: 0), "未配置")
+    }
+
     func testLoopback127RangeAllowsHTTP() throws {
         let config = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "key", model: "model")
         XCTAssertEqual(

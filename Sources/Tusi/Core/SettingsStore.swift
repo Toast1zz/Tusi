@@ -483,12 +483,34 @@ final class SettingsStore: ObservableObject {
         return chain
     }
 
-    /// Slot label for the tabs. Truncated here rather than with a fixed-width
-    /// frame so the tab capsule hugs its text instead of reserving dead space.
+    /// Slot label for the tabs: the provider's short name (e.g. "deepseek",
+    /// "commandcode") rather than the full host — the tabs now share the row equally
+    /// (see SettingsView.slotTab), so a full domain like "api.commandcode.ai" ate a
+    /// disproportionate share of a tab that also has to fit a role label and dot.
     func label(for index: Int) -> String {
         let host = profiles[index].config.displayHost
         guard !host.isEmpty else { return L("未配置") }
-        guard host.count > 22 else { return host }
-        return host.prefix(11) + "…" + host.suffix(8)
+        let short = Self.shortHostName(host)
+        guard short.count > 16 else { return short }
+        return short.prefix(9) + "…" + short.suffix(6)
+    }
+
+    /// Strips the common "api."/"www." subdomain and the trailing TLD from a host,
+    /// leaving just the brand: "api.deepseek.com" → "deepseek",
+    /// "openrouter.ai" → "openrouter". IPs and single-label hosts (localhost, a bare
+    /// LAN address) have no such structure and are returned unchanged.
+    private static func shortHostName(_ host: String) -> String {
+        var parts = host.split(separator: ".").map(String.init)
+        guard parts.count > 1, !parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) else {
+            return host
+        }
+        let genericPrefixes: Set<String> = ["api", "www", "app"]
+        if parts.count > 2, let first = parts.first, genericPrefixes.contains(first.lowercased()) {
+            parts.removeFirst()
+        }
+        if parts.count > 1 {
+            parts.removeLast()
+        }
+        return parts.joined(separator: ".")
     }
 }
