@@ -278,10 +278,10 @@ final class TranslationEngine: ObservableObject {
 
     // MARK: - Translate
 
-    func translate() {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
+    /// Cancels any in-flight request and clears everything a fresh attempt must not
+    /// inherit (stale output, toasts, copy confirmation). Shared by both branches of
+    /// `translate()` below — they only differ in which provider(s) they talk to.
+    private func resetForNewRequest() {
         translationTask?.cancel()
         translationTask = nil
         toastTask?.cancel()
@@ -294,6 +294,59 @@ final class TranslationEngine: ObservableObject {
         toast = nil
         interrupted = false
         outputCapped = false
+    }
+
+    /// Whether the dedicated local-model slot is filled in enough to use — read by
+    /// Settings to gate the "translate with this model" toggle.
+    var localModelAvailable: Bool {
+        settings.profiles[SettingsStore.localProfileIndex].isUsable
+    }
+
+    func translate() {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        resetForNewRequest()
+
+        let target = target
+        let source = source
+        let sourceLabel = sourceLabel
+        let tone = settings.tone
+        let extra = settings.extraInstruction
+        let requestRevision = inputRevision
+
+        // The local-model slot is a standing mode switch (flipped in Settings), not a
+        // per-request choice — when it's on, this slot is the ONLY thing translate()
+        // talks to: no primary/backup, no race, no failover. See
+        // `SettingsStore.localProfileIndex` and `SettingsStore.useLocalModel`.
+        if settings.useLocalModel {
+            guard localModelAvailable else {
+                state = .failed(L("本地模型尚未配置，请先在设置中填写"))
+                return
+            }
+            state = .translating
+            let link = (index: SettingsStore.localProfileIndex, config: settings.profiles[SettingsStore.localProfileIndex].config)
+            translationTask = Task { [weak self] in
+                guard let self else { return }
+                let outcome = await self.consumeWithRetry(
+                    link: link, text: text, target: target, source: source, sourceLabel: sourceLabel,
+                    tone: tone, extra: extra, requestRevision: requestRevision
+                )
+                switch outcome {
+                case .cancelled, .succeeded:
+                    return
+                case .emptyResponse:
+                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+                    self.output = ""
+                    self.state = .failed(TranslationError.emptyResponse.localizedDescription)
+                case .failed(let error):
+                    guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+                    self.output = ""
+                    self.state = .failed(error.localizedDescription)
+                }
+            }
+            return
+        }
 
         let chain = settings.resolvedChain
         guard !chain.isEmpty else {
@@ -304,17 +357,42 @@ final class TranslationEngine: ObservableObject {
         }
 
         state = .translating
-        let target = target
-        let source = source
-        let sourceLabel = sourceLabel
-        let tone = settings.tone
-        let extra = settings.extraInstruction
-        let requestRevision = inputRevision
 
         translationTask = Task { [weak self] in
             guard let self else { return }
             var lastError: Error?
             var triedBackup = false
+
+            // Racing replaces the sequential attempt loop entirely, but only when both
+            // slots are genuinely comparable: two usable, non-loopback endpoints. A
+            // loopback slot (near-zero network latency) would trivially win every race
+            // regardless of answer quality, so its presence just falls through to the
+            // ordinary primary→backup behavior below, unaffected by this setting.
+            if self.settings.raceFastestEnabled,
+               chain.count == 2,
+               chain[0].config.requiresAuth,
+               chain[1].config.requiresAuth {
+                let outcome = await self.raceForFastest(
+                    linkA: chain[0], linkB: chain[1], text: text, target: target, source: source,
+                    sourceLabel: sourceLabel, tone: tone, extra: extra, requestRevision: requestRevision
+                )
+                switch outcome {
+                case .cancelled:
+                    return
+                case .succeeded:
+                    return
+                case .emptyResponse:
+                    self.output = ""
+                    lastError = TranslationError.emptyResponse
+                case .failed(let error):
+                    lastError = error
+                }
+                guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
+                self.output = ""
+                let message = lastError?.localizedDescription ?? L("翻译失败")
+                self.state = .failed(String(format: L("两个供应商都失败了 · %@"), message))
+                return
+            }
 
             attemptLoop: for (position, link) in chain.enumerated() {
                 if position > 0 { triedBackup = true }
@@ -390,6 +468,53 @@ final class TranslationEngine: ObservableObject {
         case cancelled
     }
 
+    /// Commits whatever is currently in `pendingOutput` as the finished result:
+    /// punctuation pass, length cap, then one atomic publish plus its completion side
+    /// effects (history, auto-copy, success sound). Returns false when there was no
+    /// usable content (a "successful" response that said nothing is a failed attempt).
+    /// Shared by the sequential attempt path and the race path — both need the exact
+    /// same "is this actually usable" and "publish exactly once" semantics.
+    private func commitPendingOutput(
+        text: String,
+        source: TranslationLanguage,
+        sourceLabel: String,
+        target: TranslationLanguage,
+        tone: Tone
+    ) -> Bool {
+        let raw = pendingOutput
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            pendingOutput = ""
+            return false
+        }
+        let cleaned = TranslationService.sanitizeModelOutput(raw)
+        pendingOutput = ""
+        guard !cleaned.isEmpty else { return false }
+        var finalOutput = SmartQuotes.apply(to: cleaned)
+        // Overlong output is cut at the cap here (after the stream ends): the
+        // panel and history never hold an unbounded string. A capped result is
+        // honest about being partial — flagged, not silent — and behaves like a
+        // stop: no auto-copy, no success sound (a run that had to be cut is not
+        // a clean completion).
+        let wasCapped = finalOutput.count > Self.maxOutputCharacters
+        if wasCapped {
+            finalOutput = String(finalOutput.prefix(Self.maxOutputCharacters))
+        }
+        // Publish exactly once. The view deliberately keeps showing the skeleton
+        // until `state` becomes `.done`, so text and the copy button enter together.
+        self.output = finalOutput
+        self.outputCapped = wasCapped
+        self.state = .done
+        self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
+        if !wasCapped, self.settings.autoCopy, !self.output.isEmpty {
+            self.copyToPasteboard()
+            self.flashCopied(auto: true)
+        }
+        if !wasCapped {
+            SoundPlayer.shared.playSuccess()
+        }
+        return true
+    }
+
     /// Consumes one provider's stream and commits the result on success. Transient
     /// failures (TCP reset, 5xx, timeout) get one quick retry on the same provider —
     /// cheaper than failing over, and often the hiccup is one-off. Returns the
@@ -405,52 +530,13 @@ final class TranslationEngine: ObservableObject {
         extra: String,
         requestRevision: UInt
     ) async -> StreamOutcome {
-        /// Commits the buffered content to `output` in one atomic publish, applying the
-        /// punctuation pass, length cap and side effects. Returns false when the
-        /// successful response produced no usable content (a failed attempt).
-        func commitIfComplete() -> Bool {
-            let raw = pendingOutput
-            // A successful HTTP response with no usable content is a failed attempt.
-            guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                pendingOutput = ""
-                return false
-            }
-            let cleaned = TranslationService.sanitizeModelOutput(raw)
-            pendingOutput = ""
-            guard !cleaned.isEmpty else { return false }
-            var finalOutput = SmartQuotes.apply(to: cleaned)
-            // Overlong output is cut at the cap here (after the stream ends): the
-            // panel and history never hold an unbounded string. A capped result is
-            // honest about being partial — flagged, not silent — and behaves like a
-            // stop: no auto-copy, no success sound (a run that had to be cut is not
-            // a clean completion).
-            let wasCapped = finalOutput.count > Self.maxOutputCharacters
-            if wasCapped {
-                finalOutput = String(finalOutput.prefix(Self.maxOutputCharacters))
-            }
-            // Publish exactly once. The view deliberately keeps showing the skeleton
-            // until `state` becomes `.done`, so text and the copy button enter together.
-            self.output = finalOutput
-            self.outputCapped = wasCapped
-            self.state = .done
-            self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-            if !wasCapped, self.settings.autoCopy, !self.output.isEmpty {
-                self.copyToPasteboard()
-                self.flashCopied(auto: true)
-            }
-            if !wasCapped {
-                SoundPlayer.shared.playSuccess()
-            }
-            return true
-        }
-
         // Each distinct attempt (and retry) starts with an empty buffer so a backup (or
         // a retry) commits only its own tokens — two models' output is never spliced.
         pendingOutput = ""
         let first = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
         switch first {
         case .completed:
-            return commitIfComplete() ? .succeeded : .emptyResponse
+            return commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone) ? .succeeded : .emptyResponse
         case .cancelled:
             return .cancelled
         case .failed(let error):
@@ -472,7 +558,7 @@ final class TranslationEngine: ObservableObject {
             let retry = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
             switch retry {
             case .completed:
-                return commitIfComplete() ? .succeeded : .emptyResponse
+                return commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone) ? .succeeded : .emptyResponse
             case .cancelled:
                 return .cancelled
             case .failed(let retryError):
@@ -508,6 +594,101 @@ final class TranslationEngine: ObservableObject {
             // counts as a mid-stream failure (a token already landed) or one to retry/
             // fail over cleanly.
             return .failed(error)
+        }
+    }
+
+    // MARK: - Race for fastest
+
+    /// Outcome of one race leg. Mirrors `StreamConsumeOutcome`, but carries its own
+    /// local buffer instead of writing into the shared `pendingOutput`: two legs run
+    /// concurrently, and only the winner's content should ever become the committed
+    /// buffer. `cancelTranslation()` reading `pendingOutput` mid-race therefore just
+    /// sees "" and reports "no content" — a manual stop during a race abandons both
+    /// legs rather than guessing which one's partial text to show, which is fine
+    /// because a race only ever runs before a winner exists.
+    private enum RaceLegOutcome {
+        case completed(String)
+        case failed(Error)
+        case cancelled
+    }
+
+    private func consumeRaceLeg(
+        _ stream: AsyncThrowingStream<String, Error>,
+        requestRevision: UInt
+    ) async -> RaceLegOutcome {
+        var buffer = ""
+        do {
+            for try await piece in stream {
+                guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+                buffer += piece
+            }
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+            return .completed(buffer)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return .cancelled
+        } catch {
+            guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+            return .failed(error)
+        }
+    }
+
+    /// Fires `linkA` and `linkB` concurrently and commits whichever finishes first with
+    /// usable content; the still-running loser is cancelled the moment a winner is
+    /// chosen. Callers must only reach this with two non-loopback links — see
+    /// `SettingsStore.raceFastestEnabled`'s doc comment for why loopback is excluded.
+    ///
+    /// Deliberately no retry: a leg that fails just loses the race. Retrying it would
+    /// only delay a result the other leg may already be able to provide; if the other
+    /// leg also fails, both errors were tried anyway, exactly as a sequential two-slot
+    /// attempt would.
+    private func raceForFastest(
+        linkA: (index: Int, config: APIConfig),
+        linkB: (index: Int, config: APIConfig),
+        text: String,
+        target: TranslationLanguage,
+        source: TranslationLanguage,
+        sourceLabel: String,
+        tone: Tone,
+        extra: String,
+        requestRevision: UInt
+    ) async -> StreamOutcome {
+        pendingOutput = ""
+        // Built here, on the main actor, and only captured (not called) inside the
+        // child tasks below: `stream` itself is a non-Sendable closure property, so
+        // invoking it from inside `addTask` would need to hop back to the main actor
+        // anyway — starting both streams up front makes that hop happen once, up
+        // front, instead of racing to acquire it twice.
+        let streamA = self.stream(text, target, tone, extra, linkA.config)
+        let streamB = self.stream(text, target, tone, extra, linkB.config)
+        return await withTaskGroup(of: RaceLegOutcome.self) { group -> StreamOutcome in
+            group.addTask {
+                await self.consumeRaceLeg(streamA, requestRevision: requestRevision)
+            }
+            group.addTask {
+                await self.consumeRaceLeg(streamB, requestRevision: requestRevision)
+            }
+
+            var firstError: Error?
+            while let outcome = await group.next() {
+                switch outcome {
+                case .completed(let buffer):
+                    self.pendingOutput = buffer
+                    let usable = self.commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
+                    group.cancelAll()
+                    return usable ? .succeeded : .emptyResponse
+                case .cancelled:
+                    // A global cancellation (user stop, newer input) — the other leg
+                    // will see the same signal on its own next check regardless.
+                    group.cancelAll()
+                    return .cancelled
+                case .failed(let error):
+                    firstError = firstError ?? error
+                    // Keep waiting: the other leg is still racing and may still win.
+                }
+            }
+            return .failed(firstError ?? TranslationError.emptyResponse)
         }
     }
 

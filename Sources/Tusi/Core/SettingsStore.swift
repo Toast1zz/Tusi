@@ -66,10 +66,22 @@ final class SettingsStore: ObservableObject {
     /// too, so preview runs keep their history in a scratch location as well.
     let isPreview: Bool
 
-    /// Exactly two slots: index 0 and index 1.
+    /// Three slots: index 0 and 1 are the primary/backup pair used by ordinary
+    /// automatic translation (and the race feature below); index 2 is a standalone
+    /// local-model slot that never participates in that automatic flow — see
+    /// `localProfileIndex`.
     @Published var profiles: [APIProfile] {
         didSet { persistProfiles(previous: oldValue) }
     }
+
+    /// The dedicated local-model slot. Deliberately outside the primary/backup pair:
+    /// it is never part of `resolvedChain`, never raced, never a failover target —
+    /// invoked only by the user explicitly asking to translate with it. Having a
+    /// dedicated slot means primary/backup are expected to be online providers by
+    /// convention, not just by the runtime `requiresAuth` check `raceFastestEnabled`
+    /// still does defensively (nothing stops a user from typing a loopback URL into
+    /// slot 0/1 anyway — that check stays as the real guarantee).
+    static let localProfileIndex = 2
 
     /// Set when a Keychain write failed. The pending snapshot is retained so a later
     /// edit or application shutdown can retry it instead of silently losing the key.
@@ -93,6 +105,27 @@ final class SettingsStore: ObservableObject {
     }
     @Published var fallbackEnabled: Bool {
         didSet { defaults.set(fallbackEnabled, forKey: "fallbackEnabled") }
+    }
+    /// Race primary and backup concurrently and commit whichever answers first,
+    /// instead of trying them strictly in order. Off by default: this doubles the
+    /// number of requests sent per translation whenever both slots are usable, which
+    /// is a real cost/quota trade-off the user must opt into, not a free win.
+    ///
+    /// Only ever applies when BOTH slots are non-loopback (`requiresAuth == true`) —
+    /// a local model's near-zero network latency would trivially win every race
+    /// regardless of whether its answers are actually good enough, which defeats the
+    /// point of racing two comparable online providers. When either slot is local,
+    /// this setting has no effect and the ordinary sequential primary→backup behavior
+    /// (governed by `fallbackEnabled`) applies unchanged.
+    @Published var raceFastestEnabled: Bool {
+        didSet { defaults.set(raceFastestEnabled, forKey: "raceFastestEnabled") }
+    }
+    /// Standing mode switch, flipped from the local-model slot's own Settings tab —
+    /// when on, `translate()` talks ONLY to `localProfileIndex`: no primary/backup, no
+    /// race, no failover. This is the entire manual-only contract for that slot; there
+    /// is no other trigger anywhere in the app.
+    @Published var useLocalModel: Bool {
+        didSet { defaults.set(useLocalModel, forKey: "useLocalModel") }
     }
     @Published var autoCopy: Bool {
         didSet { defaults.set(autoCopy, forKey: "autoCopy") }
@@ -184,6 +217,8 @@ final class SettingsStore: ObservableObject {
 
         primaryIndex = defaults.object(forKey: "primaryIndex") as? Int == 1 ? 1 : 0
         fallbackEnabled = defaults.object(forKey: "fallbackEnabled") as? Bool ?? true
+        raceFastestEnabled = defaults.bool(forKey: "raceFastestEnabled")
+        useLocalModel = defaults.bool(forKey: "useLocalModel")
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
@@ -203,7 +238,7 @@ final class SettingsStore: ObservableObject {
         shortcuts = Self.loadShortcuts(defaults: defaults)
         disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        profiles = isPreview ? [APIProfile(), APIProfile()] : Self.loadProfiles(defaults: defaults)
+        profiles = isPreview ? [APIProfile(), APIProfile(), APIProfile()] : Self.loadProfiles(defaults: defaults)
 
         // Sync the persisted sound preferences into the shared player. Must come after
         // every stored property is initialized (reading `soundEnabled`/`soundVolume`
@@ -285,7 +320,7 @@ final class SettingsStore: ObservableObject {
         // One read for both slots — see Keychain for why that matters.
         let keys = Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
 
-        return (0...1).map { index in
+        return (0...localProfileIndex).map { index in
             APIProfile(
                 baseURL: defaults.string(forKey: "baseURL.\(index)") ?? "",
                 apiKey: keys[index] ?? "",
@@ -430,7 +465,10 @@ final class SettingsStore: ObservableObject {
 
     var fallbackIndex: Int { primaryIndex == 0 ? 1 : 0 }
 
-    var isConfigured: Bool { profiles.contains { $0.isUsable } }
+    /// Whether the automatic primary/backup pair has anything usable — deliberately
+    /// excludes the local-model slot, since filling in only that slot leaves ordinary
+    /// ⏎-to-translate still unconfigured (the local slot is manual-only).
+    var isConfigured: Bool { profiles[0].isUsable || profiles[1].isUsable }
 
     /// Slots to try, in order: primary first, then the fallback if enabled and filled in.
     /// Unusable slots are skipped so a half-filled backup never breaks a working primary.

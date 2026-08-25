@@ -19,10 +19,11 @@ extension AppDelegate {
         panelState.pinned = true
         panelController.show()
         switch preview {
-        case "settings", "update-available", "update-latest", "shortcuts":
+        case "settings", "update-available", "update-latest", "shortcuts", "settings-local":
             settings.profiles = [
                 APIProfile(baseURL: "https://api.deepseek.com", apiKey: "sk-preview", model: "deepseek-chat"),
                 APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
+                APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
             ]
             panelState.showSettings = true
             if preview == "update-available" {
@@ -31,12 +32,15 @@ extension AppDelegate {
                 updateChecker.debugSetState(.upToDate)
             } else if preview == "shortcuts" {
                 panelState.showShortcuts = true
+            } else if preview == "settings-local" {
+                panelState.settingsProfileIndex = SettingsStore.localProfileIndex
             }
         case "empty":
             panelState.showSettings = false
         case "quotetest":
             settings.profiles = [
                 APIProfile(baseURL: "http://127.0.0.1:8806/v1", apiKey: "sk-x", model: "m"),
+                APIProfile(),
                 APIProfile(),
             ]
             settings.autoCopy = true
@@ -85,6 +89,7 @@ extension AppDelegate {
             settings.profiles = [
                 APIProfile(baseURL: "http://127.0.0.1:8801/v1", apiKey: "sk-x", model: "broken-model"),
                 APIProfile(baseURL: "http://127.0.0.1:8802/v1", apiKey: "sk-x", model: "backup-model"),
+                APIProfile(),
             ]
             panelState.showSettings = false
             engine.input = "这句话应该由备用供应商翻译。"

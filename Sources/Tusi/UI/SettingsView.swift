@@ -38,11 +38,15 @@ struct SettingsView: View {
         nonmutating set { panelState.settingsProfileIndex = newValue }
     }
 
-    /// Indexing guard: `profiles` is a two-slot invariant maintained by the UI, but a
-    /// stale `settingsProfileIndex` must degrade to slot 0 instead of crashing on an
-    /// out-of-range subscript if the invariant ever breaks.
+    /// Indexing guard: `profiles` is a fixed three-slot invariant (primary, backup,
+    /// local) maintained by the UI, but a stale `settingsProfileIndex` must degrade to
+    /// slot 0 instead of crashing on an out-of-range subscript if it ever breaks.
     private var safeEditingIndex: Int {
         settings.profiles.indices.contains(editingIndex) ? editingIndex : 0
+    }
+
+    private var isEditingLocalSlot: Bool {
+        editingIndex == SettingsStore.localProfileIndex
     }
 
     /// True when the profile being edited points at a local (loopback) server — used to
@@ -172,6 +176,21 @@ struct SettingsView: View {
             .controlSize(.mini)
             .font(Theme.body)
 
+            // Its own row (not folded into the group above) because the caption below
+            // is load-bearing: this setting doubles outbound requests whenever both
+            // slots are usable remote APIs, and that cost trade-off must be visible at
+            // the point of opting in, not buried in a tooltip.
+            VStack(alignment: .leading, spacing: 6) {
+                settingToggle("主备同时请求，取最快结果", isOn: $settings.raceFastestEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(Theme.body)
+                Text("仅当主备都填了远程 API 时生效，本地模型不参与竞速。会让每次翻译同时向两边发起请求，请留意计费。")
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // The sound preference gets its own row so it reads as a distinct sense
             // channel, not a translation behavior. Switching it off is deliberately
             // silent (muting must not announce itself); switching it on plays one quiet
@@ -255,32 +274,55 @@ struct SettingsView: View {
     private var slotTabs: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                ForEach(0...1, id: \.self) { index in
+                ForEach(0...SettingsStore.localProfileIndex, id: \.self) { index in
                     slotTab(index)
                 }
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: 6) {
-                if settings.primaryIndex == editingIndex {
-                    Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
+            if isEditingLocalSlot {
+                // No primary/backup role applies here: the only thing this slot does
+                // is answer to this one switch. No separate manual-trigger UI exists
+                // anywhere else in the panel — this toggle is the entire contract.
+                VStack(alignment: .leading, spacing: 4) {
+                    settingToggle("翻译时使用这个模型", isOn: $settings.useLocalModel)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(Theme.caption2Medium)
+                    // Deliberately not disabled when the slot is empty: flipping the
+                    // switch is harmless either way (translate() already shows a clear
+                    // "not configured" error if fired with nothing filled in below),
+                    // and a plain Text + .onTapGesture toggle target (see
+                    // settingToggle) doesn't reliably honor `.disabled()` anyway.
+                    Text(settings.profiles[SettingsStore.localProfileIndex].isUsable
+                         ? "开启后 ⏎ 翻译只会用这个模型，不再走主用/备用或竞速；关闭后不受影响"
+                         : "开启后还需要填好下面的接口地址和模型")
                         .font(Theme.caption)
                         .foregroundStyle(.tertiary)
-                } else {
-                    Button {
-                        withAnimation(.snappy(duration: Theme.durationStandard)) {
-                            settings.primaryIndex = editingIndex
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    if settings.primaryIndex == editingIndex {
+                        Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
+                            .font(Theme.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Button {
+                            withAnimation(.snappy(duration: Theme.durationStandard)) {
+                                settings.primaryIndex = editingIndex
+                            }
+                        } label: {
+                            Label("设为主用", systemImage: "arrow.up.circle")
+                                .font(Theme.caption2Medium)
+                                .foregroundStyle(Theme.accent)
                         }
-                    } label: {
-                        Label("设为主用", systemImage: "arrow.up.circle")
-                            .font(Theme.caption2Medium)
-                            .foregroundStyle(Theme.accent)
-                    }
-                    .buttonStyle(.plain)
+                        .buttonStyle(.plain)
 
-                    Text(settings.fallbackEnabled ? "· 现在是主用失败后的备用" : "· 备用已关闭，这套不会被使用")
-                        .font(Theme.caption)
-                        .foregroundStyle(.quaternary)
+                        Text(settings.fallbackEnabled ? "· 现在是主用失败后的备用" : "· 备用已关闭，这套不会被使用")
+                            .font(Theme.caption)
+                            .foregroundStyle(.quaternary)
+                    }
                 }
             }
         }
@@ -289,6 +331,7 @@ struct SettingsView: View {
     private func slotTab(_ index: Int) -> some View {
         let selected = editingIndex == index
         let isPrimary = settings.primaryIndex == index
+        let isLocal = index == SettingsStore.localProfileIndex
         return Button {
             withAnimation(.snappy(duration: Theme.durationStandard)) { editingIndex = index }
         } label: {
@@ -298,7 +341,7 @@ struct SettingsView: View {
                           ? AnyShapeStyle(Theme.success)
                           : AnyShapeStyle(Color.secondary.opacity(0.35)))
                     .frame(width: 5, height: 5)
-                Text(isPrimary ? "主用" : "备用")
+                Text(isLocal ? "本地模型" : (isPrimary ? "主用" : "备用"))
                     .font(Theme.footnote2Semibold)
                 Text(settings.label(for: index))
                     .font(Theme.caption)

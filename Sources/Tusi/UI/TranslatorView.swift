@@ -378,11 +378,22 @@ struct TranslatorView: View {
 
     // MARK: - Language picker
 
-    /// One row of capsules: 「自动」(simple CN↔EN) plus each preset target. Selecting a
-    /// pill IS the mode decision — no separate multi-language switch exists anymore.
-    /// The trailing「互换」appears only in auto mode, for the rare "detector picked the
-    /// wrong side" correction that used to live on the chip itself.
+    /// One row of capsules: 「自动」(simple CN↔EN) plus each preset target, and (in auto
+    /// mode) 「互换」. Selecting a language pill IS the mode decision — no separate
+    /// multi-language switch exists anymore.
+    ///
+    /// Wrapped in a horizontal ScrollView rather than a bare HStack: an HStack that runs
+    /// out of room silently crushes its `Text` children down to a bare "…" with zero
+    /// characters showing instead of erroring — that's happened for real in this exact
+    /// row once already. Scrolling degrades instead of destroying legibility, and costs
+    /// nothing at any width where everything already fits.
     private var languagePickerRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            languagePickerPills
+        }
+    }
+
+    private var languagePickerPills: some View {
         HStack(spacing: 6) {
             LanguagePill(
                 label: L("自动"),

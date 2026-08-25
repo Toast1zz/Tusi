@@ -232,6 +232,91 @@ final class TusiTests: XCTestCase {
         )
     }
 
+    // MARK: - Dedicated local-model slot
+
+    func testLocalModelSlotIsExcludedFromIsConfigured() {
+        // Filling in only the local slot must not satisfy "is there anything for
+        // ordinary ⏎-to-translate to use" — that slot is manual-only.
+        let settings = SettingsStore(preview: true)
+        XCTAssertFalse(settings.isConfigured)
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        XCTAssertFalse(settings.isConfigured)
+
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        XCTAssertTrue(settings.isConfigured)
+    }
+
+    func testLocalModelSlotIsExcludedFromResolvedChain() {
+        // Even usable, the local slot must never appear in the automatic chain — it
+        // never races, never fails over, never gets tried by translate().
+        let settings = SettingsStore(preview: true)
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        XCTAssertEqual(settings.resolvedChain.map(\.index), [0])
+    }
+
+    func testUseLocalModelSendsOnlyToThatSlotAndIgnoresChain() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.useLocalModel = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "backup")
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+
+        var calledModels: [String] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            calledModels.append(config.model)
+            return AsyncThrowingStream { continuation in
+                continuation.yield("本地结果")
+                continuation.finish()
+            }
+        }
+        XCTAssertTrue(engine.localModelAvailable)
+
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.output, "本地结果")
+        XCTAssertEqual(calledModels, ["local"], "only the local slot may be contacted")
+    }
+
+    func testUseLocalModelFailsClearlyWhenSlotNotConfigured() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.useLocalModel = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in continuation.finish() }
+        }
+        engine.input = "hi"
+        engine.translate()
+        guard case .failed(let message) = engine.state else {
+            return XCTFail("expected immediate failed state, got \(engine.state)")
+        }
+        XCTAssertTrue(message.contains("本地模型"), message)
+        XCTAssertEqual(calls, 0, "an unconfigured local slot must not be contacted, and the usable primary must not be used as a fallback")
+    }
+
+    func testLocalModelAvailableReflectsSlotUsability() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        XCTAssertFalse(engine.localModelAvailable)
+
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        XCTAssertTrue(engine.localModelAvailable)
+    }
+
     func testLoopback127RangeAllowsHTTP() throws {
         let config = APIConfig(baseURL: "http://127.0.0.2:11434/v1", apiKey: "key", model: "model")
         XCTAssertEqual(
@@ -488,6 +573,92 @@ final class TusiTests: XCTestCase {
         } else {
             XCTFail("expected failed state")
         }
+    }
+
+    // MARK: - Race for fastest
+
+    func testRaceFastestCommitsWinnerWithoutWaitingForLoser() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "fast")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "slow")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "fast" {
+                return AsyncThrowingStream { continuation in
+                    continuation.yield("快的结果")
+                    continuation.finish()
+                }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(60))
+                    continuation.yield("慢的结果")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        // The winner must be visible well before the loser's 60ms would elapse.
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "快的结果")
+
+        // Let the loser finish naturally in the background and confirm it never
+        // overwrites the already-committed result or double-records history.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(engine.output, "快的结果")
+        XCTAssertEqual(engine.history.count, 1)
+    }
+
+    func testRaceFastestSkippedWhenEitherSlotIsLoopback() async throws {
+        // A local model's near-zero network latency would trivially win every race
+        // regardless of answer quality, so racing must not engage at all when either
+        // slot is loopback — sequential primary-first behavior applies instead.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "remote")
+
+        var remoteCalls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "remote" { remoteCalls += 1 }
+            return AsyncThrowingStream { continuation in
+                continuation.yield("结果")
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "结果")
+        // A real race fires both legs immediately; sequential ordering never calls the
+        // backup once the primary already succeeded.
+        XCTAssertEqual(remoteCalls, 0, "loopback in the chain must fall back to sequential ordering, not race")
+    }
+
+    func testRaceFastestBothFailProducesCombinedErrorMessage() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.finish(throwing: TranslationError.http(500, "boom"))
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        guard case .failed(let message) = engine.state else {
+            return XCTFail("expected failed state")
+        }
+        XCTAssertTrue(message.contains("两个供应商都失败了"), message)
     }
 
     func testTransientFailureRetriesSameProviderOnceThenSucceeds() async throws {
