@@ -243,6 +243,12 @@ struct TranslatorView: View {
                             .font(Theme.contentFont)
                             .lineSpacing(3)
                             .textSelection(.enabled)
+                            // Matches TextEditor's default 5pt NSTextView line-fragment
+                            // inset (see the input placeholder's identical padding and
+                            // editorTextWidth's -10 above) so the result text's left
+                            // edge lines up with the input's, instead of sitting 5pt
+                            // further left.
+                            .padding(.leading, 5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 GeometryReader { geometry in
