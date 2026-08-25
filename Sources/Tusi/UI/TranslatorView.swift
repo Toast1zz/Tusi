@@ -105,7 +105,10 @@ struct TranslatorView: View {
         let text: String
         let width: CGFloat
     }
-    private static var inputMeasureCache: [InputMeasureKey: CGFloat] = [:]
+    // @MainActor: only ever touched from `body`/view computed properties, which SwiftUI
+    // already runs on the main actor — explicit here so it reads the same as the rest of
+    // this project's Swift 6 concurrency annotations instead of looking like an oversight.
+    @MainActor private static var inputMeasureCache: [InputMeasureKey: CGFloat] = [:]
     private static let inputMeasureCacheLimit = 64
 
     private var inputHeight: CGFloat {

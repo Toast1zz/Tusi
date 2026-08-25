@@ -108,6 +108,11 @@ final class HotkeyManager {
         return false
     }
 
+    // Carbon's event handler can fire on any thread, and there's a theoretical window
+    // between that callback running and `deinit` removing the handler. This is safe in
+    // practice only because this object lives exactly as long as the app (owned by
+    // AppDelegate, never recreated mid-session) — it must not be freed early for some
+    // other refactor's convenience, or that window becomes real.
     deinit {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let handlerRef { RemoveEventHandler(handlerRef) }

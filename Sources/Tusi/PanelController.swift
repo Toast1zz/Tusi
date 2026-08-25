@@ -344,7 +344,14 @@ final class PanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         let width = min(max(panel.frame.width, Theme.panelMinWidth), Theme.panelMaxWidth)
         guard abs(width - panelState.panelWidth) > 0.5 else { return }
+        // Live-updates the UI binding every tick of the drag, but does NOT persist —
+        // `settings.panelWidth`'s didSet writes UserDefaults synchronously, and a drag
+        // fires this dozens of times. Persisting happens once, in
+        // `windowDidEndLiveResize`, when the user actually settles on a width.
         panelState.panelWidth = width
-        settings.panelWidth = width
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        settings.panelWidth = panelState.panelWidth
     }
 }
