@@ -92,6 +92,19 @@ extension AppDelegate {
         case "waiting":
             panelState.showSettings = false
             engine.debugPreviewTranslating(input: "得益于全新的架构，这次更新带来了显著的性能提升。")
+        case "picker", "picker-multi":
+            // Inline target-language picker pinned open for screenshot checks;
+            // "picker-multi" additionally selects an explicit target (multi mode).
+            panelState.showSettings = false
+            engine.debugPreview(
+                input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
+                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",
+                toast: nil
+            )
+            if preview == "picker-multi" {
+                engine.selectExplicitTarget(.japanese)
+            }
+            panelState.showLanguagePicker = true
         default:
             panelState.showSettings = false
             engine.debugPreview(

@@ -41,8 +41,8 @@
 "翻译完成后自动复制" = "Copy automatically when translation finishes";
 "登录时启动" = "Launch at login";
 "自动检查更新" = "Check for updates automatically";
-"多语言模式" = "Multi-language mode";
-"目标语言" = "Target language";
+"选择目标语言" = "Choose target language";
+"互换" = "Swap";
 
 /* MARK: - Update checking */
 "检查更新" = "Check for Updates";

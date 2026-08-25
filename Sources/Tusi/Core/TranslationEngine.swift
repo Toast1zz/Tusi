@@ -243,13 +243,37 @@ final class TranslationEngine: ObservableObject {
         if isTranslating { translate() }
     }
 
-    /// Applies a change made to the settings toggle. The setting is already updated
-    /// by the time SwiftUI calls this method, so direction calculation reads the new
-    /// mode. Restarting a live request is important here: otherwise the request's
-    /// captured target and the settings UI can disagree until the next translation.
+    /// Applies a change made to the mode flag. The setting is already updated by the
+    /// time this is called, so direction calculation reads the new mode. Restarting a
+    /// live request is important here: otherwise the request's captured target and the
+    /// picker UI can disagree until the next translation.
     func multiLanguageModeDidChange() {
         updateDirection()
         if isTranslating { translate() }
+    }
+
+    // MARK: - Panel language picker
+
+    /// The panel's inline picker chose「自动」: back to simple auto-detected CN↔EN.
+    /// Owns the mode flag so the picker has a single call per pill and the
+    /// mode-change restart semantics can't be forgotten at a call site.
+    func selectAutoTarget() {
+        guard settings.multiLanguageMode else { return }
+        settings.multiLanguageMode = false
+        multiLanguageModeDidChange()
+    }
+
+    /// The panel's inline picker chose an explicit target language. Entering
+    /// multi-language mode implicitly — picking a concrete target IS the mode,
+    /// there is no separate switch anymore.
+    func selectExplicitTarget(_ language: TranslationLanguage) {
+        if !settings.multiLanguageMode {
+            settings.multiLanguageMode = true
+            // No multiLanguageModeDidChange() here: setTarget below re-derives the
+            // direction and restarts an in-flight request itself — calling both would
+            // restart twice, the first time against a stale target.
+        }
+        setTarget(language)
     }
 
     // MARK: - Translate

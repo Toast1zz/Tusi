@@ -194,6 +194,34 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.target, .japanese)
     }
 
+    func testSelectExplicitTargetEntersMultiLanguageModeImplicitly() {
+        // The panel picker has no separate mode switch: picking a concrete target IS
+        // entering multi-language mode.
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        XCTAssertFalse(settings.multiLanguageMode)
+
+        engine.input = "hello world"
+        engine.selectExplicitTarget(.japanese)
+        XCTAssertTrue(settings.multiLanguageMode)
+        XCTAssertEqual(engine.target, .japanese)
+    }
+
+    func testSelectAutoTargetReturnsToDetectedDirection() {
+        // 「自动」leaves multi-language mode and re-derives the direction from the
+        // current input (English input → Chinese target).
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+
+        engine.input = "hello world"
+        engine.selectExplicitTarget(.japanese)
+        XCTAssertEqual(engine.target, .japanese)
+
+        engine.selectAutoTarget()
+        XCTAssertFalse(settings.multiLanguageMode)
+        XCTAssertEqual(engine.target, .chinese)
+    }
+
     func testPresetTargetsAreTheFourCoreLanguagesOnly() {
         // The multi-language picker intentionally offers only EN / 中 / 日 / 한 — the
         // languages users actually translate between. Smaller languages are still

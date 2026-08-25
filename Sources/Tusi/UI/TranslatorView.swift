@@ -158,13 +158,23 @@ struct TranslatorView: View {
                     .padding(.top, 12)
             }
 
+            // Inline target picker: expands ABOVE the bottom bar (never a popover — a
+            // popup makes the panel resign key and trip the click-outside auto-hide,
+            // the same constraint ToneSelector documents).
+            if panelState.showLanguagePicker {
+                languagePickerRow
+                    .padding(.horizontal, 16)
+                    .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             // Horizontal padding matches inputArea/resultArea/SoftDivider above (16, not
             // 12) so the copy button's right edge lines up with the clear button's and
             // with the input/result text's own right margin — one consistent margin for
             // the whole panel instead of the bottom row sitting 4pt closer to the edge.
             bottomBar
                 .padding(.horizontal, 16)
-                .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
+                .padding(.top, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
                 .padding(.bottom, 10)
         }
         .overlay(alignment: .bottom) {
@@ -182,7 +192,11 @@ struct TranslatorView: View {
         .animation(.snappy(duration: Theme.durationSlow), value: engine.hasResultSection)
         .animation(.snappy(duration: Theme.durationSlow), value: engine.toast)
         .animation(.snappy(duration: Theme.durationSlow), value: panelState.showHistory)
+        .animation(.snappy(duration: Theme.durationStandard), value: panelState.showLanguagePicker)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
+            // Every panel show reposts this; a picker left open last time must not
+            // greet the next invocation already expanded.
+            panelState.showLanguagePicker = false
             let selectAll = notification.object as? Bool == true
             inputFocused = true
             guard selectAll else { return }
@@ -191,6 +205,10 @@ struct TranslatorView: View {
                 (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectAll(nil)
             }
         }
+        // The picker is a transient choice row; a page change (history/settings) is a
+        // context switch that should fold it away rather than leave it hanging.
+        .onChange(of: panelState.showHistory) { _, _ in panelState.showLanguagePicker = false }
+        .onChange(of: panelState.showSettings) { _, _ in panelState.showLanguagePicker = false }
         // Switching tone is a request to see the text in that tone, so re-run it —
         // but only when there's already a result the change would apply to.
         .onChange(of: settings.tone) { _, _ in
@@ -358,6 +376,59 @@ struct TranslatorView: View {
         }
     }
 
+    // MARK: - Language picker
+
+    /// One row of capsules: 「自动」(simple CN↔EN) plus each preset target. Selecting a
+    /// pill IS the mode decision — no separate multi-language switch exists anymore.
+    /// The trailing「互换」appears only in auto mode, for the rare "detector picked the
+    /// wrong side" correction that used to live on the chip itself.
+    private var languagePickerRow: some View {
+        HStack(spacing: 6) {
+            LanguagePill(
+                label: L("自动"),
+                selected: !settings.multiLanguageMode,
+                icon: "sparkles"
+            ) {
+                engine.selectAutoTarget()
+                closePicker()
+            }
+
+            ForEach(TranslationLanguage.presets, id: \.self) { language in
+                LanguagePill(
+                    label: language.displayName,
+                    selected: settings.multiLanguageMode && engine.target == language
+                ) {
+                    engine.selectExplicitTarget(language)
+                    closePicker()
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if !settings.multiLanguageMode {
+                LanguagePill(
+                    label: L("互换"),
+                    selected: engine.flipped,
+                    icon: "arrow.left.arrow.right"
+                ) {
+                    engine.flipDirection()
+                    closePicker()
+                }
+                // flipDirection is a guarded no-op in exactly these cases; disabling
+                // keeps the pill honest instead of silently swallowing the click.
+                .disabled(engine.input.isEmpty || engine.isTranslating)
+                .opacity(engine.input.isEmpty || engine.isTranslating ? 0.4 : 1)
+                .help(L("切换翻译方向"))
+            }
+        }
+    }
+
+    private func closePicker() {
+        withAnimation(.snappy(duration: Theme.durationStandard)) {
+            panelState.showLanguagePicker = false
+        }
+    }
+
     private var bottomBar: some View {
         HStack(spacing: 8) {
             DirectionChip(
@@ -365,10 +436,12 @@ struct TranslatorView: View {
                 target: engine.target,
                 isActive: !engine.input.isEmpty,
                 isFlipped: engine.flipped,
-                // Disabled while translating: the in-flight request already captured
-                // its target, so a flip would make the chip disagree with the result.
-                isInteractive: !settings.multiLanguageMode && !engine.isTranslating,
-                onFlip: { engine.flipDirection() }
+                isExpanded: panelState.showLanguagePicker,
+                onTap: {
+                    withAnimation(.snappy(duration: Theme.durationStandard)) {
+                        panelState.showLanguagePicker.toggle()
+                    }
+                }
             )
 
             // Tone occupies the slot the model name used to: it's an action, the model

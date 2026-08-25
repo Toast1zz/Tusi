@@ -172,13 +172,6 @@ struct SettingsView: View {
             .controlSize(.mini)
             .font(Theme.body)
 
-            VStack(alignment: .leading, spacing: 10) {
-                settingToggle("多语言模式", isOn: $settings.multiLanguageMode)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(Theme.body)
-
             // The sound preference gets its own row so it reads as a distinct sense
             // channel, not a translation behavior. Switching it off is deliberately
             // silent (muting must not announce itself); switching it on plays one quiet
@@ -189,38 +182,6 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(Theme.body)
-
-            // The target picker is an inline grid, not a menu: a popup would make the
-            // panel resign key and trip the click-outside auto-hide (same constraint
-            // ToneSelector documents).
-            if settings.multiLanguageMode {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("目标语言")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.secondary)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
-                        ForEach(TranslationLanguage.presets, id: \.self) { language in
-                            let selected = language == engine.target
-                            Button {
-                                engine.setTarget(language)
-                            } label: {
-                                Text(language.displayName)
-                                    .font(Theme.footnote)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.7)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.vertical, 5)
-                            .padding(.horizontal, 6)
-                            .background(
-                                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.05)))
-                            )
-                            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                        }
-                    }
-                }
-            }
 
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
@@ -239,9 +200,6 @@ struct SettingsView: View {
             testTasks.removeAll()
             testStates.removeAll()
             testGenerations.removeAll()
-        }
-        .onChange(of: settings.multiLanguageMode) { _, _ in
-            engine.multiLanguageModeDidChange()
         }
         .onChange(of: editingIndex) { _, _ in
             showKey = false

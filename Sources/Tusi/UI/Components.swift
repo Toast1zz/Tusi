@@ -107,20 +107,19 @@ struct BarIconButton: View {
 /// hasn't detected a language yet — so it reads "自动", and only resolves to "中 → EN"
 /// (or the reverse) once there's input to judge.
 ///
-/// In simple CN↔EN mode the chip doubles as a manual override for the rare case the
-/// auto-detected direction is wrong: hovering gives it the same capsule affordance the
-/// other clickable controls wear, and tapping flips the direction for the current input.
-/// The flip is scoped to the input — any edit returns to auto-detection. In multi-language
-/// mode there is no "opposite side" to flip to, so the chip is a plain label again.
+/// Direction chip: shows the current translation direction (`中 → EN`) and opens the
+/// inline target-language picker when tapped. The picker is the single control for
+/// both "auto CN↔EN" and "explicit target" — there is no separate mode switch. The
+/// chevron rotates with the picker so the chip reads as expandable, not as a label.
 struct DirectionChip: View {
     let sourceLabel: String
     let target: TranslationLanguage
     let isActive: Bool
-    /// Manual direction override engaged (chip tapped in simple mode).
+    /// Manual direction override engaged (flipped via the picker row in auto mode).
     let isFlipped: Bool
-    /// Whether tapping is offered at all. Simple CN↔EN mode only.
-    var isInteractive: Bool = false
-    var onFlip: (() -> Void)? = nil
+    /// Whether the inline picker this chip controls is currently expanded.
+    let isExpanded: Bool
+    var onTap: (() -> Void)? = nil
 
     @State private var hovering = false
 
@@ -128,11 +127,9 @@ struct DirectionChip: View {
 
     var body: some View {
         // A real Button (not onTapGesture + .isButton trait) so Tab and VoiceOver can
-        // actually activate it, not just announce it as one. `.disabled` when not
-        // interactive removes it from the tab order entirely, matching the previous
-        // guarded-no-op behavior instead of leaving a focusable dead control.
+        // actually activate it, not just announce it as one.
         Button {
-            onFlip?()
+            onTap?()
         } label: {
             HStack(spacing: 5) {
                 if isActive {
@@ -145,6 +142,10 @@ struct DirectionChip: View {
                         .font(Theme.caption2Semibold)
                     Text("自动")
                 }
+                Image(systemName: "chevron.down")
+                    .font(Theme.caption2Semibold)
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
             }
             .font(Theme.footnoteRounded)
             // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
@@ -154,21 +155,53 @@ struct DirectionChip: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2.5)
             .background {
-                if hovering || isFlipped {
-                    Capsule().fill(Color.primary.opacity(isFlipped ? 0.08 : 0.05))
+                if hovering || isFlipped || isExpanded {
+                    Capsule().fill(Color.primary.opacity(isFlipped || isExpanded ? 0.08 : 0.05))
                 }
             }
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(!isInteractive)
         .onHover { inside in
             withAnimation(Theme.snappy(Theme.durationFast)) { hovering = inside }
         }
-        .help(isInteractive ? L("切换翻译方向") : "")
+        .help(L("选择目标语言"))
         .animation(Theme.snappy(Theme.durationStandard), value: isActive)
         .animation(Theme.snappy(Theme.durationStandard), value: sourceLabel)
         .animation(Theme.snappy(Theme.durationStandard), value: isFlipped)
+        .animation(Theme.snappy(Theme.durationStandard), value: isExpanded)
+    }
+}
+
+/// One capsule in the inline target-language picker row. Mirrors the capsule style the
+/// old Settings grid used (accent fill when selected, quiet fill otherwise) so the
+/// control reads as kin to ToneSelector rather than a new visual species.
+struct LanguagePill: View {
+    let label: String
+    let selected: Bool
+    var icon: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(Theme.caption2Semibold)
+                }
+                Text(label)
+                    .font(Theme.footnote)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .background(
+                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.05)))
+            )
+            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
