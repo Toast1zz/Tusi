@@ -2,6 +2,32 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-08-25
+
+### Added
+
+- Race mode ("谁快用谁" in Settings): when both primary and backup are usable remote APIs, fires a request to both concurrently and commits whichever answers first, cancelling the other. Off by default (it doubles outbound requests per translation while both slots are usable) and never engages when either slot is a local/loopback endpoint, which would trivially win every race regardless of answer quality. A companion "完成后提示谁更快" switch (on by default whenever racing is on, independently toggleable) flashes a one-time toast at the top of the panel naming the winner
+- A dedicated third profile slot for a local model, fully separate from the primary/backup pair — it never races, never fails over, never enters the automatic chain. A single switch on its own Settings tab, "翻译时使用这个模型", is the entire manual-only contract: on, ⏎ translates only through that slot; off, nothing changes
+- The multi-language target picker moved out of Settings and into the panel itself: tapping the direction chip expands an inline row of language pills (plus a swap action in auto mode) right above the bottom bar, so switching targets no longer requires leaving the translator view
+- A stream that goes idle mid-response (a token or two, then silence) is now caught by a 45-second idle watchdog, instead of only guarding against nothing arriving at all — the previous behavior left a stalled stream running until URLSession's 300-second resource timeout
+- A stream ending without the `[DONE]` sentinel is no longer automatically treated as truncated: a non-null `finish_reason` on the last chunk is accepted as completion too, for gateways that close the connection cleanly instead of sending the sentinel
+- Pasting text past the 32,000-character input cap now shows a toast ("已截断至 32000 字") instead of truncating silently
+
+### Changed
+
+- Settings' three profile tabs (主用/备用/本地模型) now share their row equally and show a short provider name ("deepseek", "commandcode") instead of the full host, which no longer fits once three tabs split one row
+- "附加要求（可选）" is now collapsible, matching "高级选项" — collapsed by default unless it already holds a value
+- Every row in the lower half of Settings (toggles, sound row, race controls) now shares one consistent vertical rhythm instead of three separately-spaced blocks
+- History records are capped at 4,000 characters per field when archived, bounding the worst-case synchronous write; the current panel's own input/output are unaffected
+- The panel now respects System Settings ▸ Accessibility ▸ Reduce Motion, and its height is clamped to the current screen so a long result on a small display can't push its bottom edge off-screen
+- `DirectionChip` is a real button now, reachable and activatable by Tab/VoiceOver instead of only by mouse
+
+### Fixed
+
+- The API Key field's focus highlight, which never actually appeared due to a misdirected `.focused()` modifier
+- The Keychain "saved" confirmation, which was fully wired up but never surfaced anywhere in the UI
+- The translated result's left edge, which sat 5pt to the left of the source text's due to a `TextEditor` inset the result view wasn't accounting for
+
 ## [1.9.4] - 2026-08-20
 
 ### Changed
