@@ -917,12 +917,13 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.history.first?.output, "Translated text")
     }
 
-    // MARK: - Unpublished buffering & single atomic commit
+    // MARK: - Progressive streaming & single atomic final commit
 
-    func testOutputStaysEmptyUntilStreamCompletes() async throws {
-        // Multiple chunks are buffered; nothing is published to `output` (and no copy
-        // button can appear) until the stream finishes, which is the unified local/
-        // online display rhythm.
+    func testOutputStreamsProgressivelyThenCommitsCleanFinal() async throws {
+        // Chunks are mirrored into `output` as they arrive (real streaming), but the
+        // stream finishing still re-derives `output` once more from the full buffer
+        // with the punctuation/sanitize pass and length cap applied — the same single
+        // atomic "final" commit as before, layered on top of progressive display.
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
@@ -938,13 +939,14 @@ final class TusiTests: XCTestCase {
         for _ in 0..<100 where continuations.isEmpty {
             try await Task.sleep(for: .milliseconds(10))
         }
-        // Deliver half the chunks; the stream stays open.
+        // Deliver half the chunks, spaced past the ~33ms flush interval so each one
+        // gets its own throttled publish instead of being coalesced into the first.
         continuations[0].yield("你")
+        try await Task.sleep(for: .milliseconds(80))
         continuations[0].yield("好")
-        // Let the main-actor consume task drain them into the unpublished buffer.
-        try await Task.sleep(for: .milliseconds(50))
+        try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(engine.state, .translating)
-        XCTAssertTrue(engine.output.isEmpty, "no partial output may be published during translation")
+        XCTAssertEqual(engine.output, "你好", "partial output should be visible while streaming")
         XCTAssertFalse(engine.copied)
 
         continuations[0].yield("世")
@@ -953,6 +955,34 @@ final class TusiTests: XCTestCase {
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.state, .done)
         XCTAssertEqual(engine.output, "你好世界")
+    }
+
+    func testFailedAttemptClearsStreamedPartialOutput() async throws {
+        // A provider that streams some content and then fails must not leave that
+        // partial text on screen — a failed attempt reads as "still working" or
+        // "failed", never as a silently-kept partial answer.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        for _ in 0..<100 where continuations.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        continuations[0].yield("partial")
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(engine.output, "partial")
+
+        continuations[0].finish(throwing: TranslationError.truncatedStream)
+        try await waitUntilFailed(engine)
+        XCTAssertTrue(engine.output.isEmpty, "a failed attempt must clear streamed partial output")
     }
 
     func testStopWithBufferedContentShowsPartialOnce() async throws {
@@ -972,16 +1002,16 @@ final class TusiTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         continuations[0].yield("partial ")
+        try await Task.sleep(for: .milliseconds(80))
         continuations[0].yield("content")
-        // Let the (main-actor) consume task drain the yielded chunks into the unpublished
-        // buffer before stopping — mirroring a real network where tokens are buffered as
-        // they arrive. Still nothing published while translating.
-        try await Task.sleep(for: .milliseconds(50))
+        // Let the throttled flush publish the streamed chunks before stopping.
+        try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(engine.state, .translating)
-        XCTAssertTrue(engine.output.isEmpty)
+        XCTAssertEqual(engine.output, "partial content")
 
         engine.cancelTranslation()
-        // The buffered content appears once, marked incomplete, and is copyable.
+        // The buffered content appears once (re-derived via the same sanitize pass),
+        // marked incomplete, and is copyable.
         XCTAssertEqual(engine.output, "partial content")
         XCTAssertEqual(engine.interrupted, true)
         XCTAssertEqual(engine.state, .done)

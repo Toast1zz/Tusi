@@ -317,6 +317,14 @@ struct Toast: View {
         Toast(icon: "arrow.triangle.branch", text: L("主用连接失败，已用备用翻译"), tint: AnyShapeStyle(Color.orange))
     }
 
+    static func truncatedInput() -> Toast {
+        Toast(
+            icon: "scissors",
+            text: String(format: L("已截断至 %d 字"), TranslationEngine.maxInputCharacters),
+            tint: AnyShapeStyle(Color.secondary)
+        )
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
