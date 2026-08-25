@@ -258,6 +258,13 @@ enum TranslationService {
     /// the streaming body that follows. `var` (not `let`) so tests can shorten it.
     nonisolated(unsafe) static var firstTokenTimeout: TimeInterval = 30
 
+    /// Seconds of silence allowed between chunks once streaming has already started.
+    /// The first-token watchdog above only guards the "nothing ever arrived" case; a
+    /// server that sends a few tokens and then goes quiet mid-response has no other
+    /// backstop besides URLSession's 300s resource timeout, which leaves the user
+    /// staring at stalled output for minutes. `var` so tests can shorten it.
+    nonisolated(unsafe) static var idleTimeout: TimeInterval = 45
+
     static func stream(text: String, target: TranslationLanguage, tone: Tone, extra: String, config: APIConfig) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             // Detached: the SSE read + per-chunk JSON decode runs on the cooperative
@@ -265,16 +272,19 @@ enum TranslationService {
             // fast or large stream never janks the panel. `continuation` is Sendable;
             // yielding from any thread is safe.
             //
-            // First-token watchdog: a server that accepts the connection but never
-            // produces a payload line (model queueing, a hung gateway) must not leave
-            // the user staring at an endless "working" state. URLSession's request
-            // timeout covers only the response headers — once the body starts, nothing
-            // bounds the wait except the 5-minute resource timeout. The watchdog
-            // cancels the stream task after `firstTokenTimeout` with no data; the
+            // Idle watchdog: a server that accepts the connection but never produces a
+            // payload line (model queueing, a hung gateway) — or one that streams a few
+            // tokens and then goes quiet mid-response — must not leave the user staring
+            // at an endless "working" state. URLSession's request timeout covers only
+            // the response headers — once the body starts, nothing bounds the wait
+            // except the 5-minute resource timeout. The watchdog re-arms on every chunk
+            // (`lastChunkAt`) and cancels the stream task once either `firstTokenTimeout`
+            // (before any token) or `idleTimeout` (after) elapses with no new data; the
             // cancellation interrupts the `bytes.lines` iteration (AsyncBytes honors
             // task cancellation), which surfaces as CancellationError and becomes the
             // timeout error below.
             let gotData = OSAllocatedUnfairLock(initialState: false)
+            let lastChunkAt = OSAllocatedUnfairLock(initialState: Date())
             let didTimeOut = OSAllocatedUnfairLock(initialState: false)
             let task = Task.detached { [gotData, didTimeOut] in
                 do {
@@ -312,6 +322,7 @@ enum TranslationService {
 
                     let decoder = JSONDecoder()
                     var sawDone = false
+                    var sawFinish = false
                     for try await rawLine in bytes.lines {
                         try Task.checkCancellation()
                         let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -322,28 +333,38 @@ enum TranslationService {
                             break
                         }
                         guard let data = payload.data(using: .utf8),
-                              let chunk = try? decoder.decode(StreamChunk.self, from: data),
-                              let piece = chunk.choices.first?.delta.content,
-                              !piece.isEmpty
+                              let chunk = try? decoder.decode(StreamChunk.self, from: data)
                         else { continue }
+                        // Some OpenAI-compatible gateways close the connection cleanly
+                        // right after the finishing chunk instead of sending `[DONE]`.
+                        // A non-null finish_reason is just as valid a completion signal.
+                        if let reason = chunk.choices.first?.finishReason, !reason.isEmpty {
+                            sawFinish = true
+                        }
+                        guard let piece = chunk.choices.first?.delta.content, !piece.isEmpty else { continue }
                         gotData.withLock { $0 = true }
+                        lastChunkAt.withLock { $0 = Date() }
                         continuation.yield(piece)
                     }
-                    // A clean close without the [DONE] sentinel means the connection
+                    // A clean close without [DONE] or a finish_reason means the connection
                     // ended before the result did (some local gateways drop the stream
                     // this way). A truncated result must not be presented as complete —
                     // the caller's mid-stream failure path already discards partial
                     // output, so this follows the same contract.
-                    guard sawDone else { throw TranslationError.truncatedStream }
+                    guard sawDone || sawFinish else { throw TranslationError.truncatedStream }
                     continuation.finish()
                 } catch {
                     // A watchdog-initiated cancellation (server silent for
                     // firstTokenTimeout) is a timeout, not a user cancel: surface it as
                     // an actionable error. Genuine consumer cancels fall through as
                     // CancellationError.
-                    if didTimeOut.withLock({ $0 }), !gotData.withLock({ $0 }) {
-                        Log.translation.error("stream timed out waiting for first token (host \(config.displayHost, privacy: .public))")
-                        continuation.finish(throwing: TranslationError.http(0, L("服务器长时间无响应，请稍后重试")))
+                    if didTimeOut.withLock({ $0 }) {
+                        let hadStarted = gotData.withLock { $0 }
+                        Log.translation.error("stream timed out \(hadStarted ? "mid-stream (idle)" : "waiting for first token", privacy: .public) (host \(config.displayHost, privacy: .public))")
+                        let message = hadStarted
+                            ? L("服务器长时间未返回新内容，连接已中断，请重试")
+                            : L("服务器长时间无响应，请稍后重试")
+                        continuation.finish(throwing: TranslationError.http(0, message))
                     } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
                         Log.translation.debug("stream cancelled by consumer")
                         continuation.finish(throwing: error)
@@ -353,12 +374,22 @@ enum TranslationService {
                     }
                 }
             }
-            // Watchdog lives outside the task so it can hold a reference to it.
+            // Watchdog lives outside the task so it can hold a reference to it. Loops
+            // rather than sleeping once: each chunk pushes `lastChunkAt` forward, so on
+            // waking the watchdog re-checks how much idle time is actually left and
+            // either fires or sleeps the remainder — it self-corrects instead of racing
+            // a single fixed timer against however many chunks arrived during the sleep.
             let watchdog = Task {
-                try? await Task.sleep(for: .seconds(Self.firstTokenTimeout))
-                if !gotData.withLock({ $0 }), !Task.isCancelled {
-                    didTimeOut.withLock { $0 = true }
-                    task.cancel()
+                while !Task.isCancelled {
+                    let elapsed = Date().timeIntervalSince(lastChunkAt.withLock { $0 })
+                    let timeout = gotData.withLock({ $0 }) ? Self.idleTimeout : Self.firstTokenTimeout
+                    let remaining = timeout - elapsed
+                    guard remaining > 0 else {
+                        didTimeOut.withLock { $0 = true }
+                        task.cancel()
+                        return
+                    }
+                    try? await Task.sleep(for: .seconds(remaining))
                 }
             }
             continuation.onTermination = { _ in
@@ -417,6 +448,11 @@ enum TranslationService {
         struct Choice: Decodable {
             struct Delta: Decodable { let content: String? }
             let delta: Delta
+            let finishReason: String?
+            enum CodingKeys: String, CodingKey {
+                case delta
+                case finishReason = "finish_reason"
+            }
         }
         let choices: [Choice]
     }

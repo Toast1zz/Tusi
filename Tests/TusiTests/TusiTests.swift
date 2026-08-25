@@ -728,6 +728,26 @@ final class TusiTests: XCTestCase {
         }
     }
 
+    func testStreamCompletesOnFinishReasonWithoutDoneSentinel() async throws {
+        // Some OpenAI-compatible gateways close the connection cleanly right after the
+        // finishing chunk instead of sending [DONE]. A non-null finish_reason must be
+        // accepted as completion on its own — this must NOT throw truncatedStream.
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你"}}]}
+
+        data: {"choices":[{"delta":{"content":"好"},"finish_reason":"stop"}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["你", "好"])
+        }
+    }
+
     func testStreamSurfacesHTTPErrorWithParsedMessage() async throws {
         try await withMockSession(sse: #"{"error":{"message":"bad key"}}"#, statusCode: 401) {
             let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
