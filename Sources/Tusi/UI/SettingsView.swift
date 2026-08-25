@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var testGenerations: [Int: Int] = [:]
     @State private var shortcutsRowHovering = false
     @State private var advancedExpandedOverride: [Int: Bool] = [:]
+    @State private var extraInstructionExpandedOverride: Bool?
 
     private enum FocusedField: Hashable {
         case baseURL
@@ -155,53 +156,52 @@ struct SettingsView: View {
 
             SoftDivider()
 
-            labeledField("附加要求（可选）", hint: "对所有翻译生效，例如统一术语、保留格式") {
-                TextField("例：commit 统一译作「提交」", text: $settings.extraInstruction, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(Theme.body)
-                    .lineLimit(1...3)
-            }
+            extraInstructionSection
 
             SoftDivider()
 
             shortcutsNavRow
 
+            // One VStack, one spacing value, for every row on the page from here down
+            // (including the multi-line race unit below) — three separately-spaced
+            // blocks used to rely on the outer page spacing (14) between them and an
+            // inner spacing (10) within them, which read as uneven rhythm rather than
+            // a deliberate grouping.
             VStack(alignment: .leading, spacing: 10) {
                 settingToggle("主用失败时自动切换到备用", isOn: $settings.fallbackEnabled)
                 settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
                 settingToggle("登录时启动", isOn: $settings.launchAtLogin)
                 updateSettingRow
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(Theme.body)
-
-            // The sound preference gets its own row so it reads as a distinct sense
-            // channel, not a translation behavior. Switching it off is deliberately
-            // silent (muting must not announce itself); switching it on plays one quiet
-            // toggle-on cue as confirmation.
-            VStack(alignment: .leading, spacing: 10) {
+                // The sound preference reads as a distinct sense channel, not a
+                // translation behavior, but shares the same row rhythm as everything
+                // else here. Switching it off is deliberately silent (muting must not
+                // announce itself); switching it on plays one quiet toggle-on cue.
                 soundToggleRow
+
+                // The caption is load-bearing: this setting doubles outbound requests
+                // whenever both slots are usable remote APIs, and that cost trade-off
+                // must be visible at the point of opting in, not buried in a tooltip.
+                // Nested spacing (4) between the toggle and its own caption/sub-toggle
+                // stays tighter than the 10 between unrelated rows, but the whole
+                // group is still just one child of the outer VStack — one 10pt gap to
+                // its neighbors, same as every other row.
+                VStack(alignment: .leading, spacing: 4) {
+                    settingToggle("谁快用谁", isOn: $settings.raceFastestEnabled)
+                    Text("同时向主备发起请求，请留意计费")
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if settings.raceFastestEnabled {
+                        settingToggle("完成后提示谁更快", isOn: $settings.raceToastEnabled)
+                            .padding(.top, 2)
+                            .transition(.opacity)
+                    }
+                }
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(Theme.body)
-
-            // Last row on the page (not folded into the toggle group above) because
-            // the caption below is load-bearing: this setting doubles outbound
-            // requests whenever both slots are usable remote APIs, and that cost
-            // trade-off must be visible at the point of opting in, not buried in a
-            // tooltip.
-            VStack(alignment: .leading, spacing: 6) {
-                settingToggle("主备同时请求，取最快结果", isOn: $settings.raceFastestEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .font(Theme.body)
-                Text("仅当主备都填了远程 API 时生效，本地模型不参与竞速。会让每次翻译同时向两边发起请求，请留意计费。")
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            .animation(.snappy(duration: Theme.durationStandard), value: settings.raceFastestEnabled)
 
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
@@ -556,6 +556,67 @@ struct SettingsView: View {
                         .font(Theme.bodyMonospaced)
                         .focused($focusedField, equals: .providerOrder)
                         .accessibilityLabel("供应商路由（可选）")
+                }
+                .transition(.identity)
+            }
+        }
+    }
+
+    /// Defaults to expanded when there's already an instruction saved (so it isn't
+    /// hidden on first sight), but a manual toggle always wins after that — same
+    /// override pattern as `showAdvanced`, just not per-slot since the instruction
+    /// applies to every profile.
+    private var showExtraInstruction: Bool {
+        get {
+            extraInstructionExpandedOverride
+                ?? !settings.extraInstruction.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        nonmutating set { extraInstructionExpandedOverride = newValue }
+    }
+
+    /// Collapsed by default for the same reason `advancedSection` is: most users never
+    /// touch it, so it shouldn't cost every user a field + explanation line by default.
+    private var extraInstructionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy(duration: Theme.durationStandard)) { showExtraInstruction.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Text("附加要求（可选）")
+                        .font(Theme.footnoteMedium)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(Theme.caption2Semibold)
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(showExtraInstruction ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showExtraInstruction {
+                // Not `labeledField`: that helper renders its own "附加要求（可选）"
+                // label row, which the collapse header above already is — reusing it
+                // here would print the same text twice.
+                VStack(alignment: .leading, spacing: 5) {
+                    TextField("例：commit 统一译作「提交」", text: $settings.extraInstruction, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(Theme.body)
+                        .lineLimit(1...3)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                        )
+                    Text("对所有翻译生效，例如统一术语、保留格式")
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .transition(.identity)
             }

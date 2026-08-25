@@ -388,7 +388,7 @@ final class TranslationEngine: ObservableObject {
                     // demanding attention — same rhythm as the existing fallback toast.
                     // The short slot label ("deepseek"), not the full host, so the
                     // toast stays a glance rather than a sentence.
-                    if let winnerIndex {
+                    if self.settings.raceToastEnabled, let winnerIndex {
                         self.flashToast(.raceWon(self.settings.label(for: winnerIndex)))
                     }
                     return

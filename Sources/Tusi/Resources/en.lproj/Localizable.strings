@@ -43,8 +43,9 @@
 "自动检查更新" = "Check for updates automatically";
 "选择目标语言" = "Choose target language";
 "互换" = "Swap";
-"主备同时请求，取最快结果" = "Race primary and backup, use whichever answers first";
-"仅当主备都填了远程 API 时生效，本地模型不参与竞速。会让每次翻译同时向两边发起请求，请留意计费。" = "Only applies when both primary and backup are remote APIs — local models never race. Sends a request to both on every translation, so watch your billing.";
+"谁快用谁" = "Race for the fastest";
+"同时向主备发起请求，请留意计费" = "Sends a request to both primary and backup — watch your billing";
+"完成后提示谁更快" = "Show which one won";
 "本地模型" = "Local";
 "独立 slot，手动触发翻译时才会用到" = "A standalone slot — only used when you trigger it manually";
 "用本地模型翻译这次" = "Translate this with the local model";

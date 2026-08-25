@@ -120,6 +120,13 @@ final class SettingsStore: ObservableObject {
     @Published var raceFastestEnabled: Bool {
         didSet { defaults.set(raceFastestEnabled, forKey: "raceFastestEnabled") }
     }
+    /// Whether a race's winner gets named in a one-time toast (Toast.raceWon). On by
+    /// default when racing itself is on — racing silently otherwise looks identical
+    /// to ordinary translation, which is confusing the first few times. Independent
+    /// key so turning the toast off doesn't also turn off racing itself.
+    @Published var raceToastEnabled: Bool {
+        didSet { defaults.set(raceToastEnabled, forKey: "raceToastEnabled") }
+    }
     /// Standing mode switch, flipped from the local-model slot's own Settings tab —
     /// when on, `translate()` talks ONLY to `localProfileIndex`: no primary/backup, no
     /// race, no failover. This is the entire manual-only contract for that slot; there
@@ -218,6 +225,7 @@ final class SettingsStore: ObservableObject {
         primaryIndex = defaults.object(forKey: "primaryIndex") as? Int == 1 ? 1 : 0
         fallbackEnabled = defaults.object(forKey: "fallbackEnabled") as? Bool ?? true
         raceFastestEnabled = defaults.bool(forKey: "raceFastestEnabled")
+        raceToastEnabled = defaults.object(forKey: "raceToastEnabled") as? Bool ?? true
         useLocalModel = defaults.bool(forKey: "useLocalModel")
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
