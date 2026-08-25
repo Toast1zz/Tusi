@@ -95,7 +95,7 @@ struct SettingsView: View {
                             .fill(Color.primary.opacity(0.05))
                     )
                 } else {
-                    labeledField("API Key") {
+                    labeledField("API Key", focused: focusedField == .apiKey) {
                         HStack(spacing: 5) {
                             Image(systemName: "lock.fill")
                                 .font(Theme.caption2)
@@ -114,6 +114,14 @@ struct SettingsView: View {
                             }
                             .textFieldStyle(.plain)
                             .font(Theme.bodyMonospaced)
+                            .focused($focusedField, equals: .apiKey)
+
+                            if settings.keychainSaved {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(Theme.footnote)
+                                    .foregroundStyle(.green)
+                                    .transition(.scale(scale: 0.7).combined(with: .opacity))
+                            }
 
                             Button {
                                 showKey.toggle()
@@ -126,7 +134,7 @@ struct SettingsView: View {
                             .help(showKey ? "隐藏" : "显示")
                             .accessibilityLabel(showKey ? "隐藏" : "显示")
                         }
-                        .focused($focusedField, equals: .apiKey)
+                        .animation(.snappy(duration: Theme.durationFast), value: settings.keychainSaved)
                         .accessibilityLabel("API Key")
                     }
                 }
