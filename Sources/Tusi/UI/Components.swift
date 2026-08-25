@@ -364,13 +364,14 @@ struct Toast: View {
     }
 
     /// One-time, informational (not a warning — `.secondary`, not `.orange` like
-    /// `fellBack`) notice for `SettingsStore.raceFastestEnabled`: names whichever
-    /// provider answered first, so racing isn't a silent black box, without implying
-    /// anything went wrong.
-    static func raceWon(_ host: String) -> Toast {
+    /// `fellBack`) notice for `SettingsStore.raceFastestEnabled`. `label` is already
+    /// the short per-slot name (e.g. "deepseek", from `SettingsStore.label(for:)`),
+    /// not the full host — kept to a glance, not a sentence, since it fires on every
+    /// successful race rather than a rare event.
+    static func raceWon(_ label: String) -> Toast {
         Toast(
             icon: "bolt.fill",
-            text: host.isEmpty ? L("已使用响应更快的一方") : String(format: L("%@ 更快"), host),
+            text: label.isEmpty ? L("更快") : String(format: L("%@ 更快"), label),
             tint: AnyShapeStyle(Color.secondary)
         )
     }

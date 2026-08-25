@@ -376,7 +376,7 @@ final class TranslationEngine: ObservableObject {
                chain.count == 2,
                chain[0].config.requiresAuth,
                chain[1].config.requiresAuth {
-                let (outcome, winner) = await self.raceForFastest(
+                let (outcome, winnerIndex) = await self.raceForFastest(
                     linkA: chain[0], linkB: chain[1], text: text, target: target, source: source,
                     sourceLabel: sourceLabel, tone: tone, extra: extra, requestRevision: requestRevision
                 )
@@ -386,8 +386,10 @@ final class TranslationEngine: ObservableObject {
                 case .succeeded:
                     // Quiet, one-time, non-blocking: names who answered first without
                     // demanding attention — same rhythm as the existing fallback toast.
-                    if let winner {
-                        self.flashToast(.raceWon(winner.displayHost))
+                    // The short slot label ("deepseek"), not the full host, so the
+                    // toast stays a glance rather than a sentence.
+                    if let winnerIndex {
+                        self.flashToast(.raceWon(self.settings.label(for: winnerIndex)))
                     }
                     return
                 case .emptyResponse:
@@ -652,8 +654,9 @@ final class TranslationEngine: ObservableObject {
     /// only delay a result the other leg may already be able to provide; if the other
     /// leg also fails, both errors were tried anyway, exactly as a sequential two-slot
     /// attempt would.
-    /// Result of `raceForFastest`: the outcome, plus (only on `.succeeded`) which link
-    /// actually won — used to name the winner in the one-time race-result toast.
+    /// Result of `raceForFastest`: the outcome, plus (only on `.succeeded`) which
+    /// slot index actually won — used to look up its short label (via
+    /// `SettingsStore.label(for:)`) for the one-time race-result toast.
     private func raceForFastest(
         linkA: (index: Int, config: APIConfig),
         linkB: (index: Int, config: APIConfig),
@@ -664,7 +667,7 @@ final class TranslationEngine: ObservableObject {
         tone: Tone,
         extra: String,
         requestRevision: UInt
-    ) async -> (outcome: StreamOutcome, winner: APIConfig?) {
+    ) async -> (outcome: StreamOutcome, winnerIndex: Int?) {
         pendingOutput = ""
         // Built here, on the main actor, and only captured (not called) inside the
         // child tasks below: `stream` itself is a non-Sendable closure property, so
@@ -673,22 +676,22 @@ final class TranslationEngine: ObservableObject {
         // front, instead of racing to acquire it twice.
         let streamA = self.stream(text, target, tone, extra, linkA.config)
         let streamB = self.stream(text, target, tone, extra, linkB.config)
-        return await withTaskGroup(of: (APIConfig, RaceLegOutcome).self) { group -> (StreamOutcome, APIConfig?) in
+        return await withTaskGroup(of: (Int, RaceLegOutcome).self) { group -> (StreamOutcome, Int?) in
             group.addTask {
-                (linkA.config, await self.consumeRaceLeg(streamA, requestRevision: requestRevision))
+                (linkA.index, await self.consumeRaceLeg(streamA, requestRevision: requestRevision))
             }
             group.addTask {
-                (linkB.config, await self.consumeRaceLeg(streamB, requestRevision: requestRevision))
+                (linkB.index, await self.consumeRaceLeg(streamB, requestRevision: requestRevision))
             }
 
             var firstError: Error?
-            while let (config, outcome) = await group.next() {
+            while let (index, outcome) = await group.next() {
                 switch outcome {
                 case .completed(let buffer):
                     self.pendingOutput = buffer
                     let usable = self.commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
                     group.cancelAll()
-                    return (usable ? .succeeded : .emptyResponse, usable ? config : nil)
+                    return (usable ? .succeeded : .emptyResponse, usable ? index : nil)
                 case .cancelled:
                     // A global cancellation (user stop, newer input) — the other leg
                     // will see the same signal on its own next check regardless.

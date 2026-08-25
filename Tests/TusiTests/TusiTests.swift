@@ -641,13 +641,14 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestFlashesToastNamingTheWinner() async throws {
-        // Racing isn't a silent black box: a one-time toast names whichever host
-        // actually answered first, not the loser.
+        // Racing isn't a silent black box: a one-time toast names (with the short
+        // per-slot label, not the full host) whichever provider actually answered
+        // first, not the loser.
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.raceFastestEnabled = true
-        settings.profiles[0] = APIProfile(baseURL: "https://fast.example.com/v1", apiKey: "k1", model: "fast")
-        settings.profiles[1] = APIProfile(baseURL: "https://slow.example.com/v1", apiKey: "k2", model: "slow")
+        settings.profiles[0] = APIProfile(baseURL: "https://api.fast.com/v1", apiKey: "k1", model: "fast")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.slow.com/v1", apiKey: "k2", model: "slow")
 
         let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
             if config.model == "fast" {
@@ -668,7 +669,7 @@ final class TusiTests: XCTestCase {
         engine.translate()
         try await waitUntilDone(engine)
 
-        XCTAssertEqual(engine.toast, .raceWon("fast.example.com"))
+        XCTAssertEqual(engine.toast, .raceWon("fast"))
     }
 
     func testRaceFastestSkippedWhenEitherSlotIsLoopback() async throws {

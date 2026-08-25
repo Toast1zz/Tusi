@@ -116,7 +116,7 @@ extension AppDelegate {
                 input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",
                 toast: preview == "fallback" ? .fellBack
-                    : preview == "racewon" ? .raceWon("api.deepseek.com")
+                    : preview == "racewon" ? .raceWon("deepseek")
                     : nil
             )
         }
