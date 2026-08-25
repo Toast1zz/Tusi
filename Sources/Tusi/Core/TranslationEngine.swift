@@ -109,6 +109,13 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var history: [Record] = []
     private let historyCapacity = 50
 
+    /// Per-field cap applied only when archiving into `history` — the panel's own
+    /// input/output for the current translation are never touched. Bounds the worst
+    /// case for the synchronous history write: without this, 50 records at the input/
+    /// output ceilings (32k + 64k each) could reach ~10MB of JSON, and `saveHistory`
+    /// encodes and writes on the main thread by design (see its doc comment).
+    private static let historyFieldCharacterLimit = 4_000
+
     /// Hard ceiling for the input box. Pasted documents longer than this are
     /// truncated at the boundary. This bounds the request body and the stored
     /// history records (each record holds the full input).
@@ -627,8 +634,8 @@ final class TranslationEngine: ObservableObject {
     private func pushHistory(input: String, output: String, source: TranslationLanguage, sourceLabel: String, target: TranslationLanguage, tone: Tone) {
         let record = Record(
             id: UUID(),
-            input: input,
-            output: output,
+            input: String(input.prefix(Self.historyFieldCharacterLimit)),
+            output: String(output.prefix(Self.historyFieldCharacterLimit)),
             sourceLabel: sourceLabel,
             source: source,
             target: target,

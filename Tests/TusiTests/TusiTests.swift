@@ -647,6 +647,33 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.history[0].input, "a")
     }
 
+    func testLongResultIsTruncatedInHistoryButNotInPanel() async throws {
+        // Bounds the worst case for the synchronous history write (50 records at the
+        // input/output ceilings would be ~10MB of JSON) by capping each field on
+        // archive — the current panel's full input/output must be unaffected.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let longInput = String(repeating: "a", count: 5_000)
+        let longOutput = String(repeating: "b", count: 5_000)
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(longOutput)
+                continuation.finish()
+            }
+        }
+        engine.input = longInput
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.input.count, 5_000, "the panel's own input must not be truncated")
+        XCTAssertEqual(engine.output.count, 5_000, "the panel's own output must not be truncated")
+
+        let record = try XCTUnwrap(engine.history.first)
+        XCTAssertEqual(record.input.count, 4_000)
+        XCTAssertEqual(record.output.count, 4_000)
+    }
+
     func testClearHistoryPersistsEmptyFile() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false

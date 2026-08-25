@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: swift test
+        run: swift test
+
+      - name: release build gate (strict concurrency, warnings-as-errors)
+        run: ./build.sh release
