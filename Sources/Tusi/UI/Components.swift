@@ -363,6 +363,18 @@ struct Toast: View {
         )
     }
 
+    /// One-time, informational (not a warning — `.secondary`, not `.orange` like
+    /// `fellBack`) notice for `SettingsStore.raceFastestEnabled`: names whichever
+    /// provider answered first, so racing isn't a silent black box, without implying
+    /// anything went wrong.
+    static func raceWon(_ host: String) -> Toast {
+        Toast(
+            icon: "bolt.fill",
+            text: host.isEmpty ? L("已使用响应更快的一方") : String(format: L("%@ 更快"), host),
+            tint: AnyShapeStyle(Color.secondary)
+        )
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: icon)

@@ -176,21 +176,6 @@ struct SettingsView: View {
             .controlSize(.mini)
             .font(Theme.body)
 
-            // Its own row (not folded into the group above) because the caption below
-            // is load-bearing: this setting doubles outbound requests whenever both
-            // slots are usable remote APIs, and that cost trade-off must be visible at
-            // the point of opting in, not buried in a tooltip.
-            VStack(alignment: .leading, spacing: 6) {
-                settingToggle("主备同时请求，取最快结果", isOn: $settings.raceFastestEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .font(Theme.body)
-                Text("仅当主备都填了远程 API 时生效，本地模型不参与竞速。会让每次翻译同时向两边发起请求，请留意计费。")
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
             // The sound preference gets its own row so it reads as a distinct sense
             // channel, not a translation behavior. Switching it off is deliberately
             // silent (muting must not announce itself); switching it on plays one quiet
@@ -201,6 +186,22 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(Theme.body)
+
+            // Last row on the page (not folded into the toggle group above) because
+            // the caption below is load-bearing: this setting doubles outbound
+            // requests whenever both slots are usable remote APIs, and that cost
+            // trade-off must be visible at the point of opting in, not buried in a
+            // tooltip.
+            VStack(alignment: .leading, spacing: 6) {
+                settingToggle("主备同时请求，取最快结果", isOn: $settings.raceFastestEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(Theme.body)
+                Text("仅当主备都填了远程 API 时生效，本地模型不参与竞速。会让每次翻译同时向两边发起请求，请留意计费。")
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
@@ -276,8 +277,8 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 ForEach(0...SettingsStore.localProfileIndex, id: \.self) { index in
                     slotTab(index)
+                        .frame(maxWidth: .infinity)
                 }
-                Spacer(minLength: 0)
             }
 
             if isEditingLocalSlot {
@@ -343,12 +344,17 @@ struct SettingsView: View {
                     .frame(width: 5, height: 5)
                 Text(isLocal ? "本地模型" : (isPrimary ? "主用" : "备用"))
                     .font(Theme.footnote2Semibold)
+                    .fixedSize()
+                // No `.fixedSize()` here (unlike the role label): the three tabs now
+                // share the row equally, so the host name is exactly the part that
+                // should give way and truncate on a long one, not force the capsule
+                // wider than its equal share.
                 Text(settings.label(for: index))
                     .font(Theme.caption)
                     .opacity(0.7)
                     .lineLimit(1)
-                    .fixedSize()
             }
+            .frame(maxWidth: .infinity)
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)

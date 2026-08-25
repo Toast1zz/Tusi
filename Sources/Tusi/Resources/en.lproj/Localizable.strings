@@ -93,6 +93,9 @@
 "已复制" = "Copied";
 "复制" = "Copy";
 "主用连接失败，已用备用翻译" = "Primary connection failed — used backup instead";
+"已截断至 %d 字" = "Truncated to %d characters";
+"已使用响应更快的一方" = "Used whichever answered first";
+"%@ 更快" = "%@ was faster";
 "重试" = "Retry";
 
 /* MARK: - ShortcutAction labels */

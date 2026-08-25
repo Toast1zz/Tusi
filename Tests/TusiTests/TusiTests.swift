@@ -613,6 +613,37 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.history.count, 1)
     }
 
+    func testRaceFastestFlashesToastNamingTheWinner() async throws {
+        // Racing isn't a silent black box: a one-time toast names whichever host
+        // actually answered first, not the loser.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://fast.example.com/v1", apiKey: "k1", model: "fast")
+        settings.profiles[1] = APIProfile(baseURL: "https://slow.example.com/v1", apiKey: "k2", model: "slow")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "fast" {
+                return AsyncThrowingStream { continuation in
+                    continuation.yield("快的结果")
+                    continuation.finish()
+                }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(60))
+                    continuation.yield("慢的结果")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.toast, .raceWon("fast.example.com"))
+    }
+
     func testRaceFastestSkippedWhenEitherSlotIsLoopback() async throws {
         // A local model's near-zero network latency would trivially win every race
         // regardless of answer quality, so racing must not engage at all when either

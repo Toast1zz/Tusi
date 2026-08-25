@@ -80,6 +80,10 @@ final class TranslationEngine: ObservableObject {
     enum Toast: Equatable {
         case fellBack
         case truncatedInput
+        /// Race for fastest (SettingsStore.raceFastestEnabled) picked a winner —
+        /// carries the winning provider's display host so the one-time notice can
+        /// name it, e.g. "api.deepseek.com 更快".
+        case raceWon(String)
     }
     @Published private(set) var toast: Toast?
 
@@ -372,7 +376,7 @@ final class TranslationEngine: ObservableObject {
                chain.count == 2,
                chain[0].config.requiresAuth,
                chain[1].config.requiresAuth {
-                let outcome = await self.raceForFastest(
+                let (outcome, winner) = await self.raceForFastest(
                     linkA: chain[0], linkB: chain[1], text: text, target: target, source: source,
                     sourceLabel: sourceLabel, tone: tone, extra: extra, requestRevision: requestRevision
                 )
@@ -380,6 +384,11 @@ final class TranslationEngine: ObservableObject {
                 case .cancelled:
                     return
                 case .succeeded:
+                    // Quiet, one-time, non-blocking: names who answered first without
+                    // demanding attention — same rhythm as the existing fallback toast.
+                    if let winner {
+                        self.flashToast(.raceWon(winner.displayHost))
+                    }
                     return
                 case .emptyResponse:
                     self.output = ""
@@ -643,6 +652,8 @@ final class TranslationEngine: ObservableObject {
     /// only delay a result the other leg may already be able to provide; if the other
     /// leg also fails, both errors were tried anyway, exactly as a sequential two-slot
     /// attempt would.
+    /// Result of `raceForFastest`: the outcome, plus (only on `.succeeded`) which link
+    /// actually won — used to name the winner in the one-time race-result toast.
     private func raceForFastest(
         linkA: (index: Int, config: APIConfig),
         linkB: (index: Int, config: APIConfig),
@@ -653,7 +664,7 @@ final class TranslationEngine: ObservableObject {
         tone: Tone,
         extra: String,
         requestRevision: UInt
-    ) async -> StreamOutcome {
+    ) async -> (outcome: StreamOutcome, winner: APIConfig?) {
         pendingOutput = ""
         // Built here, on the main actor, and only captured (not called) inside the
         // child tasks below: `stream` itself is a non-Sendable closure property, so
@@ -662,33 +673,33 @@ final class TranslationEngine: ObservableObject {
         // front, instead of racing to acquire it twice.
         let streamA = self.stream(text, target, tone, extra, linkA.config)
         let streamB = self.stream(text, target, tone, extra, linkB.config)
-        return await withTaskGroup(of: RaceLegOutcome.self) { group -> StreamOutcome in
+        return await withTaskGroup(of: (APIConfig, RaceLegOutcome).self) { group -> (StreamOutcome, APIConfig?) in
             group.addTask {
-                await self.consumeRaceLeg(streamA, requestRevision: requestRevision)
+                (linkA.config, await self.consumeRaceLeg(streamA, requestRevision: requestRevision))
             }
             group.addTask {
-                await self.consumeRaceLeg(streamB, requestRevision: requestRevision)
+                (linkB.config, await self.consumeRaceLeg(streamB, requestRevision: requestRevision))
             }
 
             var firstError: Error?
-            while let outcome = await group.next() {
+            while let (config, outcome) = await group.next() {
                 switch outcome {
                 case .completed(let buffer):
                     self.pendingOutput = buffer
                     let usable = self.commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
                     group.cancelAll()
-                    return usable ? .succeeded : .emptyResponse
+                    return (usable ? .succeeded : .emptyResponse, usable ? config : nil)
                 case .cancelled:
                     // A global cancellation (user stop, newer input) — the other leg
                     // will see the same signal on its own next check regardless.
                     group.cancelAll()
-                    return .cancelled
+                    return (.cancelled, nil)
                 case .failed(let error):
                     firstError = firstError ?? error
                     // Keep waiting: the other leg is still racing and may still win.
                 }
             }
-            return .failed(firstError ?? TranslationError.emptyResponse)
+            return (.failed(firstError ?? TranslationError.emptyResponse), nil)
         }
     }
 
@@ -783,6 +794,7 @@ final class TranslationEngine: ObservableObject {
         switch kind {
         case .fellBack: duration = 2.4
         case .truncatedInput: duration = 2.0
+        case .raceWon: duration = 2.2
         }
         toastTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(duration))

@@ -183,6 +183,7 @@ struct TranslatorView: View {
                     switch toast {
                     case .fellBack: Toast.fellBack()
                     case .truncatedInput: Toast.truncatedInput()
+                    case .raceWon(let host): Toast.raceWon(host)
                     }
                 }
                 .padding(.bottom, 48)
