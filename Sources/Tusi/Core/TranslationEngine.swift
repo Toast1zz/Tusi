@@ -90,20 +90,14 @@ final class TranslationEngine: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private var copyResetTask: Task<Void, Never>?
 
-    /// Accumulation of the in-flight provider's chunks, raw (pre-sanitize, pre-quote-pass).
-    /// Mirrored into the published `output` at a throttled rate while streaming so the
-    /// user sees progress, but the *authoritative* value the caller commits from is always
-    /// this buffer, not `output` — the final commit re-derives `output` from `pendingOutput`
-    /// with the punctuation pass and length cap applied, so the displayed text always ends
-    /// up clean even though the streamed intermediate frames were raw. Reset at the start
-    /// of every request and every provider attempt (alongside `lastStreamFlush`).
+    /// Unpublished accumulation of the in-flight provider's chunks. It is NOT @Published
+    /// and never touches the UI: parts only surface once a request commits atomically
+    /// (normal completion), or when the user deliberately stops a stream that already
+    /// produced content. Keeping it out of `output` is what lets local and online models
+    /// behave the same — the display commits once regardless of how fast or in how many
+    /// pieces the provider delivers tokens. Reset at the start of every request and every
+    /// provider attempt.
     private var pendingOutput = ""
-
-    /// Timestamp of the last throttled publish of `pendingOutput` into `output`. `nil`
-    /// forces an immediate flush on the next chunk (used at the start of each attempt so
-    /// the first token appears without waiting a full interval).
-    private var lastStreamFlush: Date?
-    private let streamFlushInterval: TimeInterval = 1.0 / 30.0
 
     /// Ring buffer of completed translations (newest first).
     @Published private(set) var history: [Record] = []
@@ -324,9 +318,6 @@ final class TranslationEngine: ObservableObject {
                     break attemptLoop
                 case .failed(let error):
                     lastError = error
-                    // A failed attempt must not leave its streamed partial text on screen —
-                    // "still translating" must never look like "here's your answer".
-                    self.output = ""
                     // Only fall back before any token landed — retrying mid-stream
                     // would splice two different translations together. If partial
                     // output has buffered (even though it's unpublished), the failure
@@ -413,9 +404,8 @@ final class TranslationEngine: ObservableObject {
             if wasCapped {
                 finalOutput = String(finalOutput.prefix(Self.maxOutputCharacters))
             }
-            // Overwrites whatever raw partial text the streaming flush left in `output`
-            // with the cleaned, capped final version — same field, but this is the one
-            // publish whose content is authoritative rather than a throttled snapshot.
+            // Publish exactly once. The view deliberately keeps showing the skeleton
+            // until `state` becomes `.done`, so text and the copy button enter together.
             self.output = finalOutput
             self.outputCapped = wasCapped
             self.state = .done
@@ -433,7 +423,6 @@ final class TranslationEngine: ObservableObject {
         // Each distinct attempt (and retry) starts with an empty buffer so a backup (or
         // a retry) commits only its own tokens — two models' output is never spliced.
         pendingOutput = ""
-        lastStreamFlush = nil
         let first = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
         switch first {
         case .completed:
@@ -454,7 +443,6 @@ final class TranslationEngine: ObservableObject {
             guard transient else { return .failed(error) }
 
             pendingOutput = ""
-            lastStreamFlush = nil
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
             let retry = await consumeStream(stream(text, target, tone, extra, link.config), requestRevision: requestRevision)
@@ -483,7 +471,6 @@ final class TranslationEngine: ObservableObject {
             for try await piece in stream {
                 guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
                 pendingOutput += piece
-                flushStreamingOutput()
             }
             guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
             return .completed
@@ -498,17 +485,6 @@ final class TranslationEngine: ObservableObject {
             // fail over cleanly.
             return .failed(error)
         }
-    }
-
-    /// Publishes the raw buffer to `output` at ~30fps while a stream is in flight, so the
-    /// panel shows text arriving instead of a skeleton for the whole request. The first
-    /// chunk of every attempt flushes immediately (`lastStreamFlush` starts `nil`) so the
-    /// first token appears right away rather than waiting out a full interval.
-    private func flushStreamingOutput() {
-        let now = Date()
-        if let last = lastStreamFlush, now.timeIntervalSince(last) < streamFlushInterval { return }
-        lastStreamFlush = now
-        output = pendingOutput
     }
 
     func cancelTranslation() {

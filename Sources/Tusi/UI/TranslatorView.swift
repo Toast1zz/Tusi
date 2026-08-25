@@ -230,10 +230,7 @@ struct TranslatorView: View {
         switch engine.state {
         case .failed(let message):
             ErrorBox(message: message) { engine.translate() }
-        // Before the first token lands, `output` is still empty — show the skeleton.
-        // Once tokens start streaming in, fall through to the same text view the
-        // finished state uses, so the transition from "arriving" to "done" is seamless.
-        case .translating where engine.output.isEmpty:
+        case .translating:
             StreamingPlaceholder()
                 .padding(.vertical, 2)
         default:
