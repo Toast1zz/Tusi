@@ -85,7 +85,7 @@ final class SettingsStore: ObservableObject {
     private var profileSaveTask: Task<Void, Never>?
     private var pendingProfiles: [APIProfile]?
 
-    @Published var panelWidth: CGFloat = 470 {
+    @Published var panelWidth: CGFloat = Theme.panelMinWidth {
         didSet { defaults.set(Double(panelWidth), forKey: "panelWidth") }
     }
     @Published var primaryIndex: Int {
@@ -197,7 +197,7 @@ final class SettingsStore: ObservableObject {
         soundVolume = min(max(defaults.object(forKey: "soundVolume") as? Double ?? 0.7, 0), 1)
         let storedWidth = defaults.double(forKey: "panelWidth")
         if storedWidth > 0 {
-            panelWidth = min(max(CGFloat(storedWidth), 470), 700)
+            panelWidth = min(max(CGFloat(storedWidth), Theme.panelMinWidth), Theme.panelMaxWidth)
         }
         extraInstruction = defaults.string(forKey: "extraInstruction") ?? ""
         shortcuts = Self.loadShortcuts(defaults: defaults)

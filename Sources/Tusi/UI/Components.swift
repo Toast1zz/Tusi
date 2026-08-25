@@ -127,39 +127,44 @@ struct DirectionChip: View {
     private var targetLabel: String { target.symbol }
 
     var body: some View {
-        HStack(spacing: 5) {
-            if isActive {
-                Text(sourceLabel)
-                Image(systemName: "arrow.right")
-                    .font(Theme.arrowBold)
-                Text(targetLabel)
-            } else {
-                Image(systemName: "sparkles")
-                    .font(Theme.caption2Semibold)
-                Text("自动")
+        // A real Button (not onTapGesture + .isButton trait) so Tab and VoiceOver can
+        // actually activate it, not just announce it as one. `.disabled` when not
+        // interactive removes it from the tab order entirely, matching the previous
+        // guarded-no-op behavior instead of leaving a focusable dead control.
+        Button {
+            onFlip?()
+        } label: {
+            HStack(spacing: 5) {
+                if isActive {
+                    Text(sourceLabel)
+                    Image(systemName: "arrow.right")
+                        .font(Theme.arrowBold)
+                    Text(targetLabel)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(Theme.caption2Semibold)
+                    Text("自动")
+                }
             }
-        }
-        .font(Theme.footnoteRounded)
-        // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
-        // both "inactive, not currently the point" — they should sit at the same weight.
-        // The capsule background used to paper over the mismatch; plain text doesn't.
-        .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2.5)
-        .background {
-            if hovering || isFlipped {
-                Capsule().fill(Color.primary.opacity(isFlipped ? 0.08 : 0.05))
+            .font(Theme.footnoteRounded)
+            // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
+            // both "inactive, not currently the point" — they should sit at the same weight.
+            // The capsule background used to paper over the mismatch; plain text doesn't.
+            .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background {
+                if hovering || isFlipped {
+                    Capsule().fill(Color.primary.opacity(isFlipped ? 0.08 : 0.05))
+                }
             }
+            .contentShape(Capsule())
         }
-        .contentShape(Capsule())
+        .buttonStyle(.plain)
+        .disabled(!isInteractive)
         .onHover { inside in
             withAnimation(Theme.snappy(Theme.durationFast)) { hovering = inside }
         }
-        .onTapGesture {
-            guard isInteractive else { return }
-            onFlip?()
-        }
-        .accessibilityAddTraits(isInteractive ? .isButton : [])
         .help(isInteractive ? L("切换翻译方向") : "")
         .animation(Theme.snappy(Theme.durationStandard), value: isActive)
         .animation(Theme.snappy(Theme.durationStandard), value: sourceLabel)

@@ -28,12 +28,44 @@ struct TranslatorView: View {
     // Measured empirically: the first line is 19pt and every line after adds 22pt.
     private let firstLineHeight: CGFloat
     private let lineStep: CGFloat
+    /// Exact height of one `HistoryRecordRow`, measured (not guessed) from the same
+    /// AppKit metrics as the other line-height math below — see `measureHistoryRowHeight`.
+    private let historyRowHeight: CGFloat
     init() {
         let metrics = Self.measureLineMetrics()
         firstLineHeight = metrics.first
         lineStep = metrics.step
+        historyRowHeight = Self.measureHistoryRowHeight(firstLineHeight: metrics.first, lineStep: metrics.step)
     }
     private func height(lines: Int) -> CGFloat { firstLineHeight + CGFloat(lines - 1) * lineStep }
+
+    /// Measures a single line's height for a given system font size — the same
+    /// `boundingRect` technique `measureLineMetrics()` uses for the content font,
+    /// generalized to the smaller fonts `HistoryRecordRow` uses for its label and
+    /// footer lines.
+    private static func measureSingleLineHeight(fontSize: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize)
+        let text = NSAttributedString(string: "A", attributes: [.font: font])
+        let rect = text.boundingRect(
+            with: NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        )
+        return ceil(rect.height)
+    }
+
+    /// Derives `HistoryRecordRow`'s exact height from its actual layout (Theme.footnote
+    /// title line + Theme.contentFont 2-line output + Theme.caption footer line, VStack
+    /// spacing 5, vertical padding 7) instead of a hardcoded estimate. CJK and Latin text
+    /// measure to different line heights, and this project has already been burned once
+    /// by a font-size change silently clipping a hardcoded row height.
+    private static func measureHistoryRowHeight(firstLineHeight: CGFloat, lineStep: CGFloat) -> CGFloat {
+        let titleLineHeight = measureSingleLineHeight(fontSize: 11)  // Theme.footnote
+        let footerLineHeight = measureSingleLineHeight(fontSize: 10)  // Theme.caption
+        let outputTwoLineHeight = firstLineHeight + lineStep  // Theme.contentFont, lineLimit(2)
+        let interLineSpacing: CGFloat = 5 * 2  // VStack(spacing: 5) between the 3 stacked lines
+        let verticalPadding: CGFloat = 7 * 2
+        return titleLineHeight + outputTwoLineHeight + footerLineHeight + interLineSpacing + verticalPadding
+    }
 
     /// Internal for tests: asserts the derived metrics stay sane.
     static func measureLineMetrics() -> (first: CGFloat, step: CGFloat) {
@@ -253,7 +285,8 @@ struct TranslatorView: View {
     // MARK: - History
     private var historyViewportHeight: CGFloat {
         guard !engine.history.isEmpty else { return 112 }
-        return min(320, 28 + CGFloat(engine.history.count) * 86)
+        let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows
+        return min(320, 28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing))
     }
     private var historyList: some View {
         VStack(spacing: 0) {

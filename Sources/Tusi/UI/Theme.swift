@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Central design tokens for Tusi. Every visual constant that repeats across the UI
@@ -23,6 +24,12 @@ enum Theme {
     /// The panel's physical surface corner. Larger than any inner control radius so
     /// nested corners stay visually distinct.
     static let panelCornerRadius: CGFloat = 20
+
+    /// Panel width bounds, shared by `PanelController`'s init/resize handling and the
+    /// persisted-width clamp in `SettingsStore` — one source instead of the same two
+    /// literals typed out at four call sites.
+    static let panelMinWidth: CGFloat = 470
+    static let panelMaxWidth: CGFloat = 700
 
     /// The shared content font for the translator input and result text.
     static let contentFont = Font.system(size: 15)
@@ -115,8 +122,14 @@ enum Theme {
     /// frame by frame. 1 in normal runs.
     static let animationScale: Double = ProcessInfo.processInfo.environment["TUSI_SLOWMO"] != nil ? 10 : 1
 
-    /// Standard snappy animation curve with a given duration.
+    /// Standard snappy animation curve with a given duration. Honors System Settings ▸
+    /// Accessibility ▸ Display ▸ Reduce Motion: this app animates a lot (page pushes,
+    /// pill sliding, panel resizing, toasts), and ignoring that setting would make every
+    /// one of them a standing annoyance for users who turned it on.
     static func snappy(_ duration: Double) -> Animation {
-        .snappy(duration: duration * animationScale)
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            return .linear(duration: 0)
+        }
+        return .snappy(duration: duration * animationScale)
     }
 }

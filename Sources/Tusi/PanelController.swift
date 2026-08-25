@@ -33,7 +33,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         self.updateChecker = updateChecker
         self.statusItem = statusItem
 
-        let width = min(max(settings.panelWidth, 470), 700)
+        let width = min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
         panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView, .resizable],
@@ -46,8 +46,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         settings.panelWidth = width
         panelState.panelWidth = width
         panel.delegate = self
-        panel.minSize = NSSize(width: 470, height: 100)
-        panel.maxSize = NSSize(width: 700, height: 2000)
+        panel.minSize = NSSize(width: Theme.panelMinWidth, height: 100)
+        panel.maxSize = NSSize(width: Theme.panelMaxWidth, height: 2000)
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -164,7 +164,13 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Called by SwiftUI whenever the measured content height changes.
     /// Keeps the top edge anchored so the panel grows downward.
     private func setContentHeight(_ height: CGFloat) {
-        let clamped = max(height, 100)
+        var clamped = max(height, 100)
+        // A tall result (many lines) plus a small screen (a compact external display,
+        // a projector) could otherwise push the panel's bottom edge off the visible
+        // area — `panel.maxSize` alone (2000pt) doesn't know about the actual screen.
+        if let screenHeight = panel.screen?.visibleFrame.height {
+            clamped = min(clamped, screenHeight)
+        }
         guard abs(clamped - desiredHeight) > 0.5 else { return }
         desiredHeight = clamped
 
@@ -178,8 +184,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         // 0.25s ease-out per line would stack dozens of overlapping animations and
         // lag the text. Set the frame directly during streaming (the engine already
         // coalesces updates to ~30/s); the eased animation is reserved for discrete
-        // layout jumps (history toggle, mode switch).
-        if engine.isTranslating {
+        // layout jumps (history toggle, mode switch). Reduce Motion collapses it to an
+        // instant resize too — this app resizes the panel constantly, and animating
+        // through that setting is a standing annoyance, not a nicety.
+        if engine.isTranslating || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.setFrame(frame, display: true)
         } else {
             NSAnimationContext.runAnimationGroup { context in
@@ -328,13 +336,13 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(
-            width: min(max(frameSize.width, 470), 700),
+            width: min(max(frameSize.width, Theme.panelMinWidth), Theme.panelMaxWidth),
             height: desiredHeight
         )
     }
 
     func windowDidResize(_ notification: Notification) {
-        let width = min(max(panel.frame.width, 470), 700)
+        let width = min(max(panel.frame.width, Theme.panelMinWidth), Theme.panelMaxWidth)
         guard abs(width - panelState.panelWidth) > 0.5 else { return }
         panelState.panelWidth = width
         settings.panelWidth = width
