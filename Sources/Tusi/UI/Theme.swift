@@ -151,9 +151,15 @@ enum Theme {
     // curves need to move in lockstep during a fold/unfold, or the window and its
     // content visibly drift apart mid-animation.
 
-    /// The one curve every non-spring animation in the app uses: fast start, clean
-    /// deceleration, zero overshoot.
-    private static let curve: (Double, Double, Double, Double) = (0.2, 0.8, 0.3, 1.0)
+    /// The one curve every non-spring animation in the app uses: the standard "ease
+    /// out" shape (macOS/CSS/CA's own `easeOut` uses the same numbers), not a
+    /// hand-picked one. An earlier version of this used (0.2, 0.8, 0.3, 1.0), which
+    /// reaches 80% of the distance in the first 20% of the duration and crawls through
+    /// the remaining 80% of the time for the last 20% — mathematically zero overshoot,
+    /// but that front-loaded a "snap, then slowly creep to settle" shape that read as
+    /// jumpy/multi-phase in practice (reported directly against the settings folds).
+    /// This shape decelerates far more evenly across the full duration.
+    private static let curve: (Double, Double, Double, Double) = (0.25, 0.1, 0.25, 1.0)
 
     /// AppKit equivalent of `curve`, for `NSAnimationContext` (PanelController's window
     /// resize) — same shape as every SwiftUI animation below, so the window and its
