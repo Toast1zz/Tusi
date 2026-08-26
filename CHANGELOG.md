@@ -2,6 +2,21 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-08-26
+
+### Changed
+
+- Replaced every spring-based UI animation (`.snappy`, used for folds, page pushes, toggles, panel resizing, toasts) with a single deceleration-curve motion system — a tool panel's chrome is a state switch, not a direct-manipulation gesture, and shouldn't overshoot. Most call sites had actually been bypassing the app's Reduce-Motion/TUSI_SLOWMO handling entirely (a raw `.snappy(duration:)` instead of the wrapped helper); the new system routes everything through one entry point so neither can be silently skipped again, enforced by a CI check
+- The settings page's three profile tabs, all `Color.primary.opacity(…)` fills, and the corner-radius scale were each collapsed from several near-duplicate values (picked at different times, indistinguishable to the eye) down to a small set of named tokens
+- The inline language-picker pills now react to hover, matching every other control in that row
+- Toasts (fallback notice, input-truncation notice, race-winner notice) now all appear from the same spot at the top of the panel instead of two different overlays, and slide in rather than scale in
+- Page transitions between the translator, settings, and shortcuts pages now use a parallax retreat (the outgoing page travels half the distance while fading) instead of both pages travelling the full panel width past each other
+
+### Fixed
+
+- The settings page's collapsible "高级选项"/"附加要求" sections no longer animate their own reveal — the field pops in immediately and the panel's own window resize (now using a standard, evenly-decelerating ease-out curve instead of a hand-picked one that front-loaded most of the motion into the first fifth of the duration) is the only visible motion, which is what actually reads as a clean fold instead of a multi-phase one
+- The race-toast sub-toggle's label now lines up with every other settings row instead of sitting indented
+
 ## [1.11.0] - 2026-08-25
 
 ### Added
@@ -256,6 +271,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.11.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.1
 [1.11.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.0
 [1.10.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.10.0
 [1.9.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.9.0
