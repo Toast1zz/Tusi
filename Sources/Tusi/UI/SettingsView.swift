@@ -192,8 +192,10 @@ struct SettingsView: View {
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                     if settings.raceFastestEnabled {
+                        // Flush with every other row's label, not indented: an indent
+                        // here just reads as misalignment against the caption line
+                        // above and every sibling toggle, not as "this is a sub-item".
                         settingToggle("完成后提示谁更快", isOn: $settings.raceToastEnabled)
-                            .padding(.leading, 12)
                             .padding(.top, 2)
                             .transition(.opacity)
                     }
@@ -525,18 +527,19 @@ struct SettingsView: View {
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // Content and chevron share Theme.stateChange (0.18s), NOT
-                // Theme.layoutChange (0.22s) like the window resize below —
-                // deliberately the two-timeline fallback the plan called for, not an
-                // oversight. Content driven by the panel's own AppKit-side resize
-                // (PanelController mirrors Theme.layoutChange's curve/duration via
-                // Theme.caTimingFunction) still visibly lagged: SwiftUI reports the
-                // in-flight height continuously while it animates, and each report
-                // re-targets the AppKit resize mid-flight, which reads as a bounce
-                // even though neither curve itself overshoots. Settling the content
-                // faster than the window means the window is chasing a value that
-                // stops moving after ~180ms instead of a full 220ms of continuous
-                // retargeting — content lands, window catches up ~40ms later.
+                // Tried animating the field's opacity in lockstep with the window
+                // resize (twice — once on one shared timeline, once on two
+                // deliberately offset ones). Both produced a visible three-phase
+                // motion (page shifts, then the field pops, then it settles):
+                // SwiftUI reports this fold's in-flight height to the window
+                // continuously while ANY part of it is mid-animation, so as long as
+                // the field's own appearance is animated at all, the window is
+                // chasing a moving target and shows it. Back to the original
+                // approach instead: only the chevron animates here, the field pops
+                // in at full opacity immediately, and the window's own (now
+                // non-bouncy since Theme.layoutChange replaced the old spring curve)
+                // resize is the ONLY motion — one timeline, because there is only
+                // one thing left to animate.
                 withAnimation(Theme.stateChange) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
@@ -564,7 +567,7 @@ struct SettingsView: View {
                         .focused($focusedField, equals: .providerOrder)
                         .accessibilityLabel("供应商路由（可选）")
                 }
-                .transition(.opacity)
+                .transition(.identity)
             }
         }
     }
@@ -586,11 +589,12 @@ struct SettingsView: View {
     private var extraInstructionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // See advancedSection's comment: content+chevron settle on
-                // Theme.stateChange (faster) while the window resize independently
-                // runs on Theme.layoutChange, so the window is chasing a target that
-                // stops moving well before its own animation ends, instead of a
-                // continuously-retargeted resize for the whole fold duration.
+                // See advancedSection's comment: only the chevron animates here, the
+                // field pops in immediately, and the window's own resize is the only
+                // motion — animating the field too (tried two variants of it) made
+                // the window visibly chase a moving target and produced a three-phase
+                // "page shifts, then pops, then settles" motion instead of one clean
+                // resize.
                 withAnimation(Theme.stateChange) { showExtraInstruction.toggle() }
             } label: {
                 HStack(spacing: 5) {
@@ -630,7 +634,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .transition(.opacity)
+                .transition(.identity)
             }
         }
     }
