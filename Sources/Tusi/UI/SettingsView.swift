@@ -525,14 +525,19 @@ struct SettingsView: View {
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // One timeline for the whole fold: the field's opacity, this chevron's
-                // rotation, and the panel's own AppKit-side window resize all share
-                // Theme.layoutChange's curve and duration now (PanelController mirrors
-                // it via Theme.caTimingFunction), so they read as one motion instead of
-                // three. The chevron gets its own `.animation(stateChange, …)` below to
-                // snap a beat faster than the fold itself — a common native pattern
-                // (the disclosure triangle leads, the content follows).
-                withAnimation(Theme.layoutChange) { showAdvanced.toggle() }
+                // Content and chevron share Theme.stateChange (0.18s), NOT
+                // Theme.layoutChange (0.22s) like the window resize below —
+                // deliberately the two-timeline fallback the plan called for, not an
+                // oversight. Content driven by the panel's own AppKit-side resize
+                // (PanelController mirrors Theme.layoutChange's curve/duration via
+                // Theme.caTimingFunction) still visibly lagged: SwiftUI reports the
+                // in-flight height continuously while it animates, and each report
+                // re-targets the AppKit resize mid-flight, which reads as a bounce
+                // even though neither curve itself overshoots. Settling the content
+                // faster than the window means the window is chasing a value that
+                // stops moving after ~180ms instead of a full 220ms of continuous
+                // retargeting — content lands, window catches up ~40ms later.
+                withAnimation(Theme.stateChange) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
@@ -542,7 +547,6 @@ struct SettingsView: View {
                         .font(Theme.caption2Semibold)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showAdvanced ? 90 : 0))
-                        .animation(Theme.stateChange, value: showAdvanced)
                 }
                 .contentShape(Rectangle())
             }
@@ -582,10 +586,12 @@ struct SettingsView: View {
     private var extraInstructionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // See advancedSection's comment: one Theme.layoutChange timeline for
-                // the fold + the panel's window resize, with the chevron animating a
-                // beat faster via its own `.animation(stateChange, …)`.
-                withAnimation(Theme.layoutChange) { showExtraInstruction.toggle() }
+                // See advancedSection's comment: content+chevron settle on
+                // Theme.stateChange (faster) while the window resize independently
+                // runs on Theme.layoutChange, so the window is chasing a target that
+                // stops moving well before its own animation ends, instead of a
+                // continuously-retargeted resize for the whole fold duration.
+                withAnimation(Theme.stateChange) { showExtraInstruction.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("附加要求（可选）")
@@ -595,7 +601,6 @@ struct SettingsView: View {
                         .font(Theme.caption2Semibold)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showExtraInstruction ? 90 : 0))
-                        .animation(Theme.stateChange, value: showExtraInstruction)
                 }
                 .contentShape(Rectangle())
             }
