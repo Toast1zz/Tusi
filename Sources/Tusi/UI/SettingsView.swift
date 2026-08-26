@@ -524,13 +524,14 @@ struct SettingsView: View {
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // Only the chevron animates here — the field below deliberately doesn't
-                // (see its comment): cross-fading it fights the panel's own window-resize
-                // animation, which runs on AppKit's timeline, not SwiftUI's, and the two
-                // easing curves never quite track each other. Letting the field pop in
-                // instantly and having the window's resize be the only motion sidesteps
-                // that mismatch entirely.
-                withAnimation(Theme.stateChange) { showAdvanced.toggle() }
+                // One timeline for the whole fold: the field's opacity, this chevron's
+                // rotation, and the panel's own AppKit-side window resize all share
+                // Theme.layoutChange's curve and duration now (PanelController mirrors
+                // it via Theme.caTimingFunction), so they read as one motion instead of
+                // three. The chevron gets its own `.animation(stateChange, …)` below to
+                // snap a beat faster than the fold itself — a common native pattern
+                // (the disclosure triangle leads, the content follows).
+                withAnimation(Theme.layoutChange) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
@@ -540,6 +541,7 @@ struct SettingsView: View {
                         .font(Theme.caption2Semibold)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showAdvanced ? 90 : 0))
+                        .animation(Theme.stateChange, value: showAdvanced)
                 }
                 .contentShape(Rectangle())
             }
@@ -557,7 +559,7 @@ struct SettingsView: View {
                         .focused($focusedField, equals: .providerOrder)
                         .accessibilityLabel("供应商路由（可选）")
                 }
-                .transition(.identity)
+                .transition(.opacity)
             }
         }
     }
@@ -579,7 +581,10 @@ struct SettingsView: View {
     private var extraInstructionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                withAnimation(Theme.stateChange) { showExtraInstruction.toggle() }
+                // See advancedSection's comment: one Theme.layoutChange timeline for
+                // the fold + the panel's window resize, with the chevron animating a
+                // beat faster via its own `.animation(stateChange, …)`.
+                withAnimation(Theme.layoutChange) { showExtraInstruction.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("附加要求（可选）")
@@ -589,6 +594,7 @@ struct SettingsView: View {
                         .font(Theme.caption2Semibold)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showExtraInstruction ? 90 : 0))
+                        .animation(Theme.stateChange, value: showExtraInstruction)
                 }
                 .contentShape(Rectangle())
             }
@@ -618,7 +624,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .transition(.identity)
+                .transition(.opacity)
             }
         }
     }

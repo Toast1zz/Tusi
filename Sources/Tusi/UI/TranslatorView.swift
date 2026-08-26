@@ -177,36 +177,27 @@ struct TranslatorView: View {
                 .padding(.top, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
                 .padding(.bottom, 10)
         }
-        .overlay(alignment: .bottom) {
-            if let toast = engine.toast {
-                switch toast {
-                case .fellBack:
-                    Toast.fellBack()
-                        .padding(.bottom, 48)
-                        .transition(.scale(scale: 0.85).combined(with: .opacity))
-                case .truncatedInput:
-                    Toast.truncatedInput()
-                        .padding(.bottom, 48)
-                        .transition(.scale(scale: 0.85).combined(with: .opacity))
-                case .raceWon:
-                    EmptyView()
-                }
-            }
-        }
         .overlay(alignment: .top) {
-            // .raceWon renders here instead of the bottom overlay above: it fires on
-            // every successful race (not a rare event like the other toasts), and the
-            // bottom spot sits right over the result text the user just asked to
-            // read. The top of the panel is the input they already typed and aren't
-            // reading right now, so a brief cover there costs nothing.
-            if case .raceWon(let host) = engine.toast {
-                Toast.raceWon(host)
-                    .padding(.top, 10)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            // All toasts live at the top now, one overlay instead of two split by
+            // case: the bottom spot sits right over the result text the user just
+            // asked to read, and that was true for fellBack/truncatedInput too, not
+            // just raceWon — the top only ever covers the input they already typed
+            // and aren't rereading. A slide-down-and-fade (not scale) reads as a
+            // notification arriving, not a bubble popping.
+            if let toast = engine.toast {
+                Group {
+                    switch toast {
+                    case .fellBack: Toast.fellBack()
+                    case .truncatedInput: Toast.truncatedInput()
+                    case .raceWon(let host): Toast.raceWon(host)
+                    }
+                }
+                .padding(.top, 10)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(Theme.layoutChange, value: engine.hasResultSection)
-        .animation(Theme.layoutChange, value: engine.toast)
+        .animation(Theme.stateChange, value: engine.toast)
         .animation(Theme.layoutChange, value: panelState.showHistory)
         .animation(Theme.layoutChange, value: panelState.showLanguagePicker)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in

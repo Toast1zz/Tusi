@@ -107,10 +107,18 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func show() {
         position()
-        panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        panel.animator().alphaValue = 1
+        // Reduce Motion skips the fade-in entirely rather than just speeding it up —
+        // this is the app's most frequent animation (summoned constantly, via a global
+        // hotkey), and a user who turned the setting on wants the panel there
+        // immediately, not a still-perceptible cross-fade every single time.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.alphaValue = 1
+        } else {
+            panel.alphaValue = 0
+            panel.animator().alphaValue = 1
+        }
 
         if !hasShownOnce {
             hasShownOnce = true

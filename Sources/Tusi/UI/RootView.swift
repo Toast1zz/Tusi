@@ -23,20 +23,20 @@ struct RootView: View {
                     ShortcutsView()
                         .transition(.asymmetric(
                             insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .trailing).combined(with: .opacity)
+                            removal: retreat(.trailing)
                         ))
                 } else {
                     SettingsView()
                         .transition(.asymmetric(
                             insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .trailing).combined(with: .opacity)
+                            removal: retreat(.trailing)
                         ))
                 }
             } else {
                 TranslatorView()
                     .transition(.asymmetric(
                         insertion: .move(edge: .leading).combined(with: .opacity),
-                        removal: .move(edge: .leading).combined(with: .opacity)
+                        removal: retreat(.leading)
                     ))
             }
         }
@@ -56,5 +56,16 @@ struct RootView: View {
         // gap between the two timelines is where the corners flash square.
         .animation(Theme.pageTransition, value: panelState.showSettings)
         .animation(Theme.pageTransition, value: panelState.showShortcuts)
+    }
+
+    /// The outgoing page's half of a page-push transition. A full-width `.move` on
+    /// both pages made the middle of the transition feel crowded — two pages both
+    /// travelling the panel's full width past each other at once. Classic navigation-
+    /// stack parallax: the page leaving travels half as far and fades while the page
+    /// arriving still travels the full distance, so the incoming page reads as the one
+    /// actually "doing" the transition.
+    private func retreat(_ edge: Edge) -> AnyTransition {
+        let distance = panelState.panelWidth * 0.5
+        return .offset(x: edge == .leading ? -distance : distance).combined(with: .opacity)
     }
 }
