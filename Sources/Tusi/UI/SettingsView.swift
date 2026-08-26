@@ -139,7 +139,7 @@ struct SettingsView: View {
                             .help(showKey ? "隐藏" : "显示")
                             .accessibilityLabel(showKey ? "隐藏" : "显示")
                         }
-                        .animation(.snappy(duration: Theme.durationFast), value: settings.keychainSaved)
+                        .animation(Theme.microMotion, value: settings.keychainSaved)
                         .accessibilityLabel("API Key")
                     }
                 }
@@ -201,7 +201,7 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(Theme.body)
-            .animation(.snappy(duration: Theme.durationStandard), value: settings.raceFastestEnabled)
+            .animation(Theme.stateChange, value: settings.raceFastestEnabled)
 
             if panelState.globalHotkeyFailed {
                 HStack(spacing: 5) {
@@ -241,7 +241,7 @@ struct SettingsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(.snappy(duration: Theme.durationSlow)) {
+                withAnimation(Theme.pageTransition) {
                     panelState.showSettings = false
                 }
             } label: {
@@ -310,7 +310,7 @@ struct SettingsView: View {
                             .foregroundStyle(.tertiary)
                     } else {
                         Button {
-                            withAnimation(.snappy(duration: Theme.durationStandard)) {
+                            withAnimation(Theme.stateChange) {
                                 settings.primaryIndex = editingIndex
                             }
                         } label: {
@@ -334,7 +334,7 @@ struct SettingsView: View {
         let isPrimary = settings.primaryIndex == index
         let isLocal = index == SettingsStore.localProfileIndex
         return Button {
-            withAnimation(.snappy(duration: Theme.durationStandard)) { editingIndex = index }
+            withAnimation(Theme.stateChange) { editingIndex = index }
         } label: {
             HStack(spacing: 5) {
                 Circle()
@@ -451,7 +451,7 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: Theme.durationStandard), value: updateChecker.state)
+        .animation(Theme.stateChange, value: updateChecker.state)
     }
 
     /// The short, non-actionable states shown inline next to the check button. An available
@@ -480,7 +480,7 @@ struct SettingsView: View {
     /// keeps this page from ballooning with a full per-action row list.
     private var shortcutsNavRow: some View {
         Button {
-            withAnimation(.snappy(duration: Theme.durationSlow)) {
+            withAnimation(Theme.pageTransition) {
                 panelState.showShortcuts = true
             }
         } label: {
@@ -501,7 +501,7 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .onHover { shortcutsRowHovering = $0 }
-        .animation(Theme.snappy(Theme.durationFast), value: shortcutsRowHovering)
+        .animation(Theme.microMotion, value: shortcutsRowHovering)
     }
 
     // MARK: - Advanced
@@ -530,7 +530,7 @@ struct SettingsView: View {
                 // easing curves never quite track each other. Letting the field pop in
                 // instantly and having the window's resize be the only motion sidesteps
                 // that mismatch entirely.
-                withAnimation(.snappy(duration: Theme.durationStandard)) { showAdvanced.toggle() }
+                withAnimation(Theme.stateChange) { showAdvanced.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
@@ -579,7 +579,7 @@ struct SettingsView: View {
     private var extraInstructionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                withAnimation(.snappy(duration: Theme.durationStandard)) { showExtraInstruction.toggle() }
+                withAnimation(Theme.stateChange) { showExtraInstruction.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Text("附加要求（可选）")
@@ -725,7 +725,7 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: Theme.durationStandard), value: testState)
+        .animation(Theme.stateChange, value: testState)
     }
 
     private func runTest() {

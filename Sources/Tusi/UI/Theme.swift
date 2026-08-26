@@ -108,28 +108,71 @@ enum Theme {
     static let radiusToast: CGFloat = 10
 
     // MARK: - Animation
+    //
+    // A tool panel's chrome (folds, page pushes, toggles, panel resizing) is a state
+    // switch, not a direct-manipulation gesture — it should decelerate cleanly and
+    // never overshoot. SwiftUI's `.snappy` is a spring with built-in bounce, which is
+    // the wrong shape for that: it reads as "bouncy" precisely where the system
+    // conventions (Spotlight, menus, popovers) read as "crisp". Every animation in this
+    // app goes through `motion(_:)` below except `selectionSlide`, the one place a
+    // spring is actually correct (a pill sliding to a new position has real inertia).
+    //
+    // `motion(_:)` and `caTimingFunction` are built from the SAME control points on
+    // purpose: PanelController's AppKit-side window resize and this file's SwiftUI
+    // curves need to move in lockstep during a fold/unfold, or the window and its
+    // content visibly drift apart mid-animation.
 
-    /// Fast feedback: hover states, icon micro-interactions.
-    static let durationFast: Double = 0.15
-    /// Standard transitions: toggles, tabs, small layout changes.
-    static let durationStandard: Double = 0.2
-    /// Larger transitions: view changes, panel chrome.
-    static let durationSlow: Double = 0.25
-    /// Tone selector's sliding pill — slightly longer for the matched-geometry motion.
-    static let durationTone: Double = 0.3
+    /// The one curve every non-spring animation in the app uses: fast start, clean
+    /// deceleration, zero overshoot.
+    private static let curve: (Double, Double, Double, Double) = (0.2, 0.8, 0.3, 1.0)
+
+    /// AppKit equivalent of `curve`, for `NSAnimationContext` (PanelController's window
+    /// resize) — same shape as every SwiftUI animation below, so the window and its
+    /// content stay in sync during a layout change instead of drifting apart on two
+    /// different timing curves.
+    static var caTimingFunction: CAMediaTimingFunction {
+        CAMediaTimingFunction(controlPoints: Float(curve.0), Float(curve.1), Float(curve.2), Float(curve.3))
+    }
 
     /// TUSI_SLOWMO stretches every panel animation so transitions can be inspected
     /// frame by frame. 1 in normal runs.
     static let animationScale: Double = ProcessInfo.processInfo.environment["TUSI_SLOWMO"] != nil ? 10 : 1
 
-    /// Standard snappy animation curve with a given duration. Honors System Settings ▸
-    /// Accessibility ▸ Display ▸ Reduce Motion: this app animates a lot (page pushes,
-    /// pill sliding, panel resizing, toasts), and ignoring that setting would make every
-    /// one of them a standing annoyance for users who turned it on.
-    static func snappy(_ duration: Double) -> Animation {
+    /// Every non-spring animation's sole entry point. Honors System Settings ▸
+    /// Accessibility ▸ Display ▸ Reduce Motion — this app animates a lot (page pushes,
+    /// folds, panel resizing, toasts), and ignoring that setting would make every one of
+    /// them a standing annoyance for users who turned it on. Checked in exactly one
+    /// place so it can never be forgotten at a call site.
+    private static func motion(_ duration: Double) -> Animation {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             return .linear(duration: 0)
         }
-        return .snappy(duration: duration * animationScale)
+        return .timingCurve(curve.0, curve.1, curve.2, curve.3, duration: duration * animationScale)
+    }
+
+    /// Hover states, icon micro-interactions — the fastest, most frequent feedback.
+    static var microMotion: Animation { motion(0.12) }
+    /// Toggles, selection changes, chevrons, toasts — a discrete state flipping.
+    static var stateChange: Animation { motion(0.18) }
+    /// Content folding/unfolding, rows appearing or disappearing, panel height
+    /// following content. Also the duration `PanelController` mirrors on the AppKit
+    /// side via `layoutChangeDuration` + `caTimingFunction`.
+    static var layoutChange: Animation { motion(0.22) }
+    /// Pushing between the translator, settings, and shortcuts pages.
+    static var pageTransition: Animation { motion(0.28) }
+
+    /// Seconds version of `layoutChange`'s duration, for `NSAnimationContext.duration`
+    /// (which takes a `TimeInterval`, not an `Animation`). Keep in sync with the 0.22
+    /// above by construction if you ever change one — they're meant to match exactly.
+    static let layoutChangeDuration: Double = 0.22
+
+    /// The one legitimate spring in the app: ToneSelector's sliding selection pill has
+    /// real inertia (a shape moving from one resting position to another), unlike
+    /// everything else here, which is a state switching, not an object moving.
+    static var selectionSlide: Animation {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            return .linear(duration: 0)
+        }
+        return .spring(duration: 0.3 * animationScale, bounce: 0.15)
     }
 }

@@ -21,8 +21,8 @@ struct ShortcutsView: View {
                         .transition(.opacity)
                 }
             }
-            .animation(Theme.snappy(Theme.durationStandard), value: panelState.recordingShortcut)
-            .animation(Theme.snappy(Theme.durationStandard), value: panelState.shortcutError)
+            .animation(Theme.stateChange, value: panelState.recordingShortcut)
+            .animation(Theme.stateChange, value: panelState.shortcutError)
         }
         .padding(18)
         // Leaving the page mid-recording would otherwise swallow the next keystroke
@@ -38,7 +38,7 @@ struct ShortcutsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(Theme.snappy(Theme.durationSlow)) {
+                withAnimation(Theme.pageTransition) {
                     panelState.showShortcuts = false
                 }
             } label: {

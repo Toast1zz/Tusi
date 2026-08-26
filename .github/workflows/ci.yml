@@ -14,5 +14,16 @@ jobs:
       - name: swift test
         run: swift test
 
+      - name: no raw animation curves outside Theme.swift
+        # Every animation must go through Theme.motion() (via microMotion/stateChange/
+        # layoutChange/pageTransition/selectionSlide) so Reduce Motion and TUSI_SLOWMO
+        # can never be silently bypassed by a call site. StreamingPlaceholder's
+        # decorative pulse is the one deliberate, documented exception.
+        run: |
+          if grep -rn --include='*.swift' -E '\.snappy\(|\.easeOut\(|\.easeInOut\(|\.spring\(|\.linear\(' Sources/Tusi/UI Sources/Tusi/PanelController.swift Sources/Tusi/RootView.swift Sources/Tusi/PreviewSupport.swift 2>/dev/null | grep -v 'Theme.swift' | grep -v 'motion-exception'; then
+            echo "Found a raw animation curve outside Theme.swift — route it through a Theme.* motion token instead." >&2
+            exit 1
+          fi
+
       - name: release build gate (strict concurrency, warnings-as-errors)
         run: ./build.sh release

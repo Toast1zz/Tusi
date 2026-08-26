@@ -205,10 +205,10 @@ struct TranslatorView: View {
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: Theme.durationSlow), value: engine.hasResultSection)
-        .animation(.snappy(duration: Theme.durationSlow), value: engine.toast)
-        .animation(.snappy(duration: Theme.durationSlow), value: panelState.showHistory)
-        .animation(.snappy(duration: Theme.durationStandard), value: panelState.showLanguagePicker)
+        .animation(Theme.layoutChange, value: engine.hasResultSection)
+        .animation(Theme.layoutChange, value: engine.toast)
+        .animation(Theme.layoutChange, value: panelState.showHistory)
+        .animation(Theme.layoutChange, value: panelState.showLanguagePicker)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
             // Every panel show reposts this; a picker left open last time must not
             // greet the next invocation already expanded.
@@ -451,7 +451,7 @@ struct TranslatorView: View {
     }
 
     private func closePicker() {
-        withAnimation(.snappy(duration: Theme.durationStandard)) {
+        withAnimation(Theme.stateChange) {
             panelState.showLanguagePicker = false
         }
     }
@@ -465,7 +465,7 @@ struct TranslatorView: View {
                 isFlipped: engine.flipped,
                 isExpanded: panelState.showLanguagePicker,
                 onTap: {
-                    withAnimation(.snappy(duration: Theme.durationStandard)) {
+                    withAnimation(Theme.stateChange) {
                         panelState.showLanguagePicker.toggle()
                     }
                 }
@@ -507,13 +507,13 @@ struct TranslatorView: View {
                 isActive: panelState.showHistory,
                 help: panelState.showHistory ? "关闭历史" : "翻译历史"
             ) {
-                withAnimation(.snappy(duration: Theme.durationSlow)) {
+                withAnimation(Theme.stateChange) {
                     panelState.showHistory.toggle()
                 }
             }
 
             BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
-                withAnimation(.snappy(duration: Theme.durationSlow)) {
+                withAnimation(Theme.pageTransition) {
                     panelState.showSettings = true
                 }
             }
@@ -525,9 +525,9 @@ struct TranslatorView: View {
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: Theme.durationStandard), value: engine.output.isEmpty)
-        .animation(.snappy(duration: Theme.durationStandard), value: engine.isTranslating)
-        .animation(.snappy(duration: Theme.durationStandard), value: panelState.showHistory)
+        .animation(Theme.layoutChange, value: engine.output.isEmpty)
+        .animation(Theme.layoutChange, value: engine.isTranslating)
+        .animation(Theme.layoutChange, value: panelState.showHistory)
     }
 }
 
@@ -568,7 +568,7 @@ private struct HistoryRecordRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(.snappy(duration: Theme.durationFast), value: hovering)
+        .animation(Theme.microMotion, value: hovering)
         // Rows truncate to keep the list compact; the hover tooltip shows the full
         // text so a long record is still fully readable without opening it.
         .help("\(record.input)\n\n\(record.output)")

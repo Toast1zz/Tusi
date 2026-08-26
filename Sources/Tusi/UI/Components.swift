@@ -163,13 +163,13 @@ struct DirectionChip: View {
         }
         .buttonStyle(.plain)
         .onHover { inside in
-            withAnimation(Theme.snappy(Theme.durationFast)) { hovering = inside }
+            withAnimation(Theme.microMotion) { hovering = inside }
         }
         .help(L("选择目标语言"))
-        .animation(Theme.snappy(Theme.durationStandard), value: isActive)
-        .animation(Theme.snappy(Theme.durationStandard), value: sourceLabel)
-        .animation(Theme.snappy(Theme.durationStandard), value: isFlipped)
-        .animation(Theme.snappy(Theme.durationStandard), value: isExpanded)
+        .animation(Theme.stateChange, value: isActive)
+        .animation(Theme.stateChange, value: sourceLabel)
+        .animation(Theme.stateChange, value: isFlipped)
+        .animation(Theme.stateChange, value: isExpanded)
     }
 }
 
@@ -222,7 +222,7 @@ struct ToneSelector: View {
             ForEach(Tone.allCases) { option in
                 let selected = option == tone
                 Button {
-                    withAnimation(Theme.snappy(Theme.durationTone)) { tone = option }
+                    withAnimation(Theme.selectionSlide) { tone = option }
                 } label: {
                     Text(option.label)
                         .font(selected ? Theme.toneLabel : Theme.caption2Medium)
@@ -295,8 +295,8 @@ struct CopyButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel(copied ? "已复制" : "复制")
-        .animation(Theme.snappy(Theme.durationStandard), value: copied)
-        .animation(Theme.snappy(Theme.durationFast), value: hovering)
+        .animation(Theme.stateChange, value: copied)
+        .animation(Theme.microMotion, value: hovering)
     }
 }
 
@@ -321,15 +321,25 @@ struct SoftDivider: View {
 struct StreamingPlaceholder: View {
     @State private var pulsing = false
 
+    /// The one deliberate exception to "everything routes through Theme.motion":
+    /// a decorative loop, not a state transition, so easeInOut + repeatForever is the
+    /// right shape here rather than a bug. Still honors Reduce Motion — a system
+    /// setting meant to stop exactly this kind of continuous animation — by never
+    /// starting the pulse and resting at a fixed, still-legible opacity instead.
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             bar(widthFraction: 0.92)
             bar(widthFraction: 0.74)
             bar(widthFraction: 0.5)
         }
-        .opacity(pulsing ? 0.35 : 0.9)
-        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulsing)
-        .onAppear { pulsing = true }
+        .opacity(reduceMotion ? 0.6 : (pulsing ? 0.35 : 0.9))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulsing)  // motion-exception: decorative loop, see doc comment above
+        .onAppear {
+            guard !reduceMotion else { return }
+            pulsing = true
+        }
     }
 
     private func bar(widthFraction: CGFloat) -> some View {

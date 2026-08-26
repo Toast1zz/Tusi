@@ -181,18 +181,25 @@ final class PanelController: NSObject, NSWindowDelegate {
         frame.origin.y = top - clamped
 
         // While a translation streams, line growth arrives in a rapid burst: a full
-        // 0.25s ease-out per line would stack dozens of overlapping animations and
+        // animated resize per line would stack dozens of overlapping animations and
         // lag the text. Set the frame directly during streaming (the engine already
         // coalesces updates to ~30/s); the eased animation is reserved for discrete
-        // layout jumps (history toggle, mode switch). Reduce Motion collapses it to an
-        // instant resize too — this app resizes the panel constantly, and animating
-        // through that setting is a standing annoyance, not a nicety.
+        // layout jumps (history toggle, fold/unfold, mode switch). Reduce Motion
+        // collapses it to an instant resize too — this app resizes the panel
+        // constantly, and animating through that setting is a standing annoyance, not
+        // a nicety.
+        //
+        // duration/timingFunction come from Theme.layoutChangeDuration/
+        // caTimingFunction — the SAME curve SwiftUI's `Theme.layoutChange` uses for the
+        // content that's driving this resize (a fold, a row appearing). Using a
+        // different curve here than the content's own animation is exactly what made
+        // window and content drift apart mid-animation before.
         if engine.isTranslating || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.setFrame(frame, display: true)
         } else {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.25 * Theme.animationScale
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.duration = Theme.layoutChangeDuration * Theme.animationScale
+                context.timingFunction = Theme.caTimingFunction
                 panel.animator().setFrame(frame, display: true)
             }
         }
@@ -230,9 +237,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             // the frequent Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
-                    withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showShortcuts = false }
+                    withAnimation(Theme.pageTransition) { self.panelState.showShortcuts = false }
                 } else if self.panelState.showSettings {
-                    withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showSettings = false }
+                    withAnimation(Theme.pageTransition) { self.panelState.showSettings = false }
                 } else {
                     self.hide()
                 }
@@ -241,7 +248,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // ⌘, opens settings (not user-configurable — a macOS convention).
             if flags == .command, event.charactersIgnoringModifiers == "," {
-                withAnimation(Theme.snappy(Theme.durationSlow)) { self.panelState.showSettings = true }
+                withAnimation(Theme.pageTransition) { self.panelState.showSettings = true }
                 return nil
             }
 

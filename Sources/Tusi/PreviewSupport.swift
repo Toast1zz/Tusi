@@ -72,7 +72,7 @@ extension AppDelegate {
             )
             panelState.showSettings = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation(Theme.snappy(Theme.durationSlow)) {
+                withAnimation(Theme.pageTransition) {
                     self.panelState.showSettings = true
                 }
             }
