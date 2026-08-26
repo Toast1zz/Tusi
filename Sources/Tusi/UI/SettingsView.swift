@@ -97,7 +97,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                            .fill(Color.primary.opacity(0.05))
+                            .fill(Theme.fillQuiet)
                     )
                 } else {
                     labeledField("API Key", focused: focusedField == .apiKey) {
@@ -249,7 +249,7 @@ struct SettingsView: View {
                     .font(Theme.bodySmallSemibold)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.primary.opacity(0.06)))
+                    .background(Circle().fill(Theme.fillQuiet))
             }
             .buttonStyle(.plain)
             .help("返回 (Esc)")
@@ -360,7 +360,7 @@ struct SettingsView: View {
             .padding(.vertical, 5)
             .background(
                 Capsule().fill(
-                    selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.055))
+                    selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillQuiet)
                 )
             )
         }
@@ -428,7 +428,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                        .background(Capsule().fill(Theme.fillQuiet))
                 }
                 .buttonStyle(.plain)
                 .disabled(updateChecker.state == .checking)
@@ -495,7 +495,7 @@ struct SettingsView: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                    .fill(shortcutsRowHovering ? Color.primary.opacity(0.055) : Color.clear)
+                    .fill(shortcutsRowHovering ? Theme.fillHover : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -613,11 +613,11 @@ struct SettingsView: View {
                         .padding(.vertical, 7)
                         .background(
                             RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                                .fill(Color.primary.opacity(0.05))
+                                .fill(Theme.fillQuiet)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                                .strokeBorder(Theme.strokeHairline, lineWidth: 1)
                         )
                     Text("对所有翻译生效，例如统一术语、保留格式")
                         .font(Theme.caption)
@@ -654,12 +654,12 @@ struct SettingsView: View {
                 .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
+                        .fill(Theme.fillQuiet)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                         .strokeBorder(
-                            focused ? Theme.accent.opacity(0.75) : Color.primary.opacity(0.07),
+                            focused ? Theme.accent.opacity(0.75) : Theme.strokeHairline,
                             lineWidth: focused ? 1.5 : 1
                         )
                 )
@@ -692,7 +692,7 @@ struct SettingsView: View {
                 .foregroundStyle(Theme.accent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Capsule().fill(Color.primary.opacity(0.055)))
+                .background(Capsule().fill(Theme.fillQuiet))
                 .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
                 .opacity(settings.profiles[safeEditingIndex].isUsable ? 1 : 0.45)
             }

@@ -21,6 +21,37 @@ enum Theme {
     static let accent = Color.accentColor
     static let success = Color(nsColor: .systemGreen)
 
+    // MARK: - Fill tokens
+    //
+    // Audited every `Color.primary.opacity(…)` call site in the UI: 0.05 / 0.055 / 0.06
+    // showed up five separate times as "a static quiet background", 0.065 / 0.07 four
+    // times as "a hover background", 0.07 / 0.08 as "a hairline stroke" — different
+    // numbers picked at different times for the same intent, not deliberately distinct
+    // steps. Collapsed to the tokens below; each one now means exactly one thing.
+    //
+    // Left alone (not part of this system): SoftDivider's gradient stops (a fade
+    // curve, not a flat fill), the 0.35/0.18 shadow and placeholder-dot opacities, and
+    // anything ≥0.6 (those are foreground/text opacities, a different axis entirely).
+
+    /// The faintest tier: a resting state that must stay barely-there so a hover state
+    /// two tiers up still reads as a real change (history rows).
+    static let fillFaint = Color.primary.opacity(0.025)
+    /// Static quiet backgrounds: field chrome, badges, unselected pills/tabs/rows.
+    static let fillQuiet = Color.primary.opacity(0.05)
+    /// Hover state, and anywhere a slightly stronger presence than `fillQuiet` is
+    /// deliberate (not another accidental near-duplicate of it).
+    static let fillHover = Color.primary.opacity(0.07)
+    /// Stronger emphasis fill: the skeleton-loading bars, and a chip's engaged state
+    /// (flipped/expanded) — anything that wants to read as more "present" than a quiet
+    /// background without being a hover state.
+    static let fillActive = Color.primary.opacity(0.1)
+    /// Borders and field outlines.
+    static let strokeHairline = Color.primary.opacity(0.08)
+    /// ToneSelector's selection pill on macOS < 26 (the Liquid Glass fallback) — its
+    /// own tier because a selection indicator is deliberately more present than any
+    /// hover state, and it's the only thing in the UI that needs to be.
+    static let fillSelection = Color.primary.opacity(0.14)
+
     /// The panel's physical surface corner. Larger than any inner control radius so
     /// nested corners stay visually distinct.
     static let panelCornerRadius: CGFloat = 20
@@ -100,12 +131,10 @@ enum Theme {
 
     /// Small inline elements: badges, tiny pills.
     static let radiusSmall: CGFloat = 6
-    /// Fields, buttons, cards.
+    /// Everything else: fields, buttons, cards, history rows, the toast surface.
+    /// Used to be three separate values (8/9/10) a single point apart — a difference
+    /// no eye can actually pick out, so it was cycle-of-history, not a real scale.
     static let radiusStandard: CGFloat = 8
-    /// Larger cards, error box, history rows.
-    static let radiusLarge: CGFloat = 9
-    /// The update/toast surface.
-    static let radiusToast: CGFloat = 10
 
     // MARK: - Animation
     //

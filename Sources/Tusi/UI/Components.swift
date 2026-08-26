@@ -89,7 +89,7 @@ struct BarIconButton: View {
                 .offset(y: glyphOffset)
                 .frame(width: 26, height: 26)
                 .background(
-                    Circle().fill(hovering ? Color.primary.opacity(0.07) : Color.clear)
+                    Circle().fill(hovering ? Theme.fillHover : Color.clear)
                 )
                 .contentShape(Circle())
         }
@@ -156,7 +156,7 @@ struct DirectionChip: View {
             .padding(.vertical, 2.5)
             .background {
                 if hovering || isFlipped || isExpanded {
-                    Capsule().fill(Color.primary.opacity(isFlipped || isExpanded ? 0.08 : 0.05))
+                    Capsule().fill(isFlipped || isExpanded ? Theme.fillActive : Theme.fillQuiet)
                 }
             }
             .contentShape(Capsule())
@@ -196,7 +196,7 @@ struct LanguagePill: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
             .background(
-                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.05)))
+                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillQuiet))
             )
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             .contentShape(Capsule())
@@ -246,7 +246,7 @@ struct ToneSelector: View {
             }
         }
         .padding(2)
-        .background(Capsule().fill(Color.primary.opacity(0.05)))
+        .background(Capsule().fill(Theme.fillQuiet))
     }
 
     /// The sliding highlight. Clear Liquid Glass where the OS supports it, a soft
@@ -256,7 +256,7 @@ struct ToneSelector: View {
             if #available(macOS 26.0, *) {
                 Capsule().fill(.clear).glassEffect(.clear, in: Capsule())
             } else {
-                Capsule().fill(Color.primary.opacity(0.14))
+                Capsule().fill(Theme.fillSelection)
             }
         }
     }
@@ -348,7 +348,7 @@ struct StreamingPlaceholder: View {
             // fine decorative lines, not interactive controls — a tighter corner keeps
             // them from reading as buttons.
             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(Color.primary.opacity(0.09))
+                .fill(Theme.fillActive)
                 .frame(width: proxy.size.width * widthFraction)
         }
         .frame(height: 11)
@@ -401,7 +401,7 @@ struct Toast: View {
                 .fill(.regularMaterial)
                 .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
         )
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .overlay(Capsule().strokeBorder(Theme.strokeHairline, lineWidth: 1))
     }
 }
 
@@ -428,11 +428,11 @@ struct ErrorBox: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: Theme.radiusToast, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                 .fill(Color.orange.opacity(0.08))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.radiusToast, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                 .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
         )
     }

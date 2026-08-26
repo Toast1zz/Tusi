@@ -46,7 +46,7 @@ struct ShortcutsView: View {
                     .font(Theme.bodySmallSemibold)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.primary.opacity(0.06)))
+                    .background(Circle().fill(Theme.fillQuiet))
             }
             .buttonStyle(.plain)
             .help("返回 (Esc)")
@@ -116,7 +116,7 @@ struct ShortcutsView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(
-                        Capsule().fill(Color.primary.opacity(recording ? 0.02 : 0.055))
+                        Capsule().fill(recording ? Theme.fillFaint : Theme.fillQuiet)
                     )
                     .overlay(
                         Capsule().strokeBorder(

@@ -330,7 +330,7 @@ struct TranslatorView: View {
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.primary.opacity(0.055)))
+                    .background(Capsule().fill(Theme.fillQuiet))
                 Spacer(minLength: 4)
                 if !engine.history.isEmpty {
                     Button("清空历史") {
@@ -552,10 +552,10 @@ private struct HistoryRecordRow: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
-                    .fill(hovering ? Color.primary.opacity(0.065) : Color.primary.opacity(0.025))
+                RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                    .fill(hovering ? Theme.fillHover : Theme.fillFaint)
             )
-            .contentShape(RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
