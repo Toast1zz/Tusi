@@ -189,10 +189,11 @@ struct SettingsView: View {
                     settingToggle("谁快用谁", isOn: $settings.raceFastestEnabled)
                     Text("同时向主备发起请求，请留意计费")
                         .font(Theme.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                     if settings.raceFastestEnabled {
                         settingToggle("完成后提示谁更快", isOn: $settings.raceToastEnabled)
+                            .padding(.leading, 12)
                             .padding(.top, 2)
                             .transition(.opacity)
                     }

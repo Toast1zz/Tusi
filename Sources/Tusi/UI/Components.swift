@@ -182,6 +182,12 @@ struct LanguagePill: View {
     var icon: String? = nil
     let action: () -> Void
 
+    // Every other control in this row (ToneSelector, DirectionChip) has a hover
+    // state; this pill was the one dead spot — same fillQuiet→fillHover swap
+    // unselected pills use elsewhere, and the same brightness bump CopyButton uses
+    // for its own solid-accent hover state when selected.
+    @State private var hovering = false
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
@@ -196,12 +202,16 @@ struct LanguagePill: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
             .background(
-                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillQuiet))
+                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(hovering ? Theme.fillHover : Theme.fillQuiet))
             )
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+            .brightness(hovering && selected ? 0.06 : 0)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            withAnimation(Theme.microMotion) { hovering = inside }
+        }
     }
 }
 
