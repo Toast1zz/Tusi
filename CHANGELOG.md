@@ -2,7 +2,7 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.0] - 2026-08-25
+## [1.11.0] - 2026-08-25
 
 ### Added
 
@@ -256,8 +256,9 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
-[1.9.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.9.0
+[1.11.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.0
 [1.10.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.10.0
+[1.9.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.9.0
 [1.7.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.3
 [1.7.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.2
 [1.7.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.7.1
