@@ -57,7 +57,7 @@
 "有新版本 %@，点击下载" = "New version %@ available — click to download";
 "有新版本 %@ →" = "New version %@ →";
 "全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出" = "The global summon shortcut couldn't be registered — another app may already be using it. Try a different combination, or use the menu-bar icon instead.";
-"API Key 仅保存在本机钥匙串，不会上传" = "Stored only in your Keychain, never uploaded";
+"API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务" = "Stored only in your Keychain and sent only to the API service you configure";
 "本地服务无需 API Key" = "No API key needed for local servers";
 "API Key 已保存到钥匙串" = "API key saved to Keychain";
 "返回 (Esc)" = "Back (Esc)";
@@ -98,6 +98,7 @@
 "更快" = "Faster";
 "%@ 更快" = "%@ was faster";
 "重试" = "Retry";
+"复制失败，请重试" = "Couldn't copy — try again";
 
 /* MARK: - ShortcutAction labels */
 "全局呼出" = "Summon";
@@ -132,6 +133,7 @@
 "%d 天前" = "%d day ago";
 "清空历史" = "Clear History";
 "翻译历史为空" = "No translation history";
+"历史仅保留部分内容" = "History only retains part of this content";
 
 "切换翻译方向" = "Switch translation direction";
 "该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符" = "No modifier on this shortcut — binding a letter or digit will make it untypeable";

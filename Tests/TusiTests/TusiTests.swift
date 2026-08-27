@@ -413,6 +413,7 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.history.count, 1)
         XCTAssertEqual(engine.history[0].input, "First input")
         XCTAssertEqual(engine.history[0].output, "First result")
+        XCTAssertFalse(engine.history[0].isTruncated)
 
         engine.input = "Second input"
         engine.translate()
@@ -720,6 +721,107 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(message.contains("两个供应商都失败了"), message)
     }
 
+    func testRaceFastestWaitsForUsableResultAfterEmptyCompletion() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "empty" {
+                return AsyncThrowingStream { $0.finish() }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continuation.yield("备用结果")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "备用结果")
+        XCTAssertEqual(engine.history.count, 1)
+    }
+
+    func testRaceFastestWaitsForUsableResultAfterOtherLegFails() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "failed")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "failed" {
+                return AsyncThrowingStream { $0.finish(throwing: TranslationError.http(500, "boom")) }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continuation.yield("备用结果")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "备用结果")
+    }
+
+    func testRaceFastestReportsFailureWhenEmptyCompletionIsPairedWithFailure() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "failed")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "empty" {
+                return AsyncThrowingStream { $0.finish() }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continuation.finish(throwing: TranslationError.http(500, "boom"))
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilFailed(engine)
+        guard case .failed(let message) = engine.state else {
+            return XCTFail("expected failed state")
+        }
+        XCTAssertTrue(message.contains("boom"), message)
+    }
+
+    func testRaceFastestReportsEmptyResponseOnlyWhenBothLegsAreEmpty() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty-a")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "empty-b")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { $0.finish() }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilFailed(engine)
+        guard case .failed(let message) = engine.state else {
+            return XCTFail("expected failed state")
+        }
+        XCTAssertTrue(message.contains("模型没有返回内容"), message)
+    }
+
     func testTransientFailureRetriesSameProviderOnceThenSucceeds() async throws {
         // A transient 500 on the first attempt must be retried on the same provider;
         // the second attempt succeeds, so no backup is tried and the result is complete.
@@ -746,6 +848,108 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(calls, 2)
         XCTAssertEqual(engine.output, "你好")
         XCTAssertFalse(engine.interrupted)
+    }
+
+    func testURLErrorTimeoutRetriesSameProviderOnceThenSucceeds() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                if calls == 1 {
+                    continuation.finish(throwing: URLError(.timedOut))
+                } else {
+                    continuation.yield("你好")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(engine.output, "你好")
+    }
+
+    func testURLErrorConnectionLostRetriesSameProviderOnceThenSucceeds() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                if calls == 1 {
+                    continuation.finish(throwing: URLError(.networkConnectionLost))
+                } else {
+                    continuation.yield("你好")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(engine.output, "你好")
+    }
+
+    func testWatchdogTimeoutRetriesSameProviderOnceThenSucceeds() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+
+        var calls = 0
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation in
+                if calls == 1 {
+                    continuation.finish(throwing: TranslationError.watchdogTimeout(stage: "first-token"))
+                } else {
+                    continuation.yield("你好")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(engine.output, "你好")
+    }
+
+    func testUserCancellationDoesNotRetryAsTransientFailure() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+
+        var calls = 0
+        var continuation: AsyncThrowingStream<String, Error>.Continuation?
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            calls += 1
+            return AsyncThrowingStream { continuation = $0 }
+        }
+        engine.input = "hi"
+        engine.translate()
+
+        for _ in 0..<100 where continuation == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(continuation)
+
+        engine.cancelTranslation()
+        try await Task.sleep(for: .milliseconds(450))
+
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(engine.state, .idle)
+        XCTAssertTrue(engine.output.isEmpty)
     }
 
     func testNonTransientFailureDoesNotRetry() async throws {
@@ -905,6 +1109,31 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.history[0].input, "a")
     }
 
+    func testHistoryLoadReappliesCapacityAndFieldLimits() throws {
+        let url = TranslationEngine.historyURL(preview: true)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let oversized = String(repeating: "x", count: 10_000)
+        let records = (0..<60).map { index in
+            TranslationEngine.Record(
+                id: UUID(),
+                input: oversized,
+                output: oversized,
+                sourceLabel: "中",
+                source: .chinese,
+                target: .english,
+                tone: .standard,
+                timestamp: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        try JSONEncoder().encode(records).write(to: url, options: .atomic)
+
+        let engine = TranslationEngine(settings: SettingsStore(preview: true))
+
+        XCTAssertEqual(engine.history.count, 50)
+        XCTAssertTrue(engine.history.allSatisfy { $0.input.count == 4_000 })
+        XCTAssertTrue(engine.history.allSatisfy { $0.output.count == 4_000 })
+    }
+
     func testLongResultIsTruncatedInHistoryButNotInPanel() async throws {
         // Bounds the worst case for the synchronous history write (50 records at the
         // input/output ceilings would be ~10MB of JSON) by capping each field on
@@ -930,6 +1159,34 @@ final class TusiTests: XCTestCase {
         let record = try XCTUnwrap(engine.history.first)
         XCTAssertEqual(record.input.count, 4_000)
         XCTAssertEqual(record.output.count, 4_000)
+        XCTAssertTrue(record.inputTruncated)
+        XCTAssertTrue(record.outputTruncated)
+    }
+
+    func testRestoringTruncatedHistoryMarksResultAsIncomplete() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let oversizedOutput = String(repeating: "x", count: 5_000)
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(oversizedOutput)
+                continuation.finish()
+            }
+        }
+        engine.input = "source"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        let record = try XCTUnwrap(engine.history.first)
+        XCTAssertTrue(record.outputTruncated)
+
+        engine.restoreHistory(record)
+        XCTAssertTrue(engine.restoredFromTruncatedHistory)
+        XCTAssertEqual(engine.output.count, 4_000)
+
+        engine.input = "edited source"
+        XCTAssertFalse(engine.restoredFromTruncatedHistory)
     }
 
     func testClearHistoryPersistsEmptyFile() async throws {
@@ -1077,11 +1334,11 @@ final class TusiTests: XCTestCase {
                 for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
                 XCTFail("expected first-token timeout error")
             } catch {
-                guard case .http(let code, _) = error as? TranslationError else {
-                    XCTFail("expected TranslationError.http, got \(error)")
+                guard case .watchdogTimeout(let stage) = error as? TranslationError else {
+                    XCTFail("expected TranslationError.watchdogTimeout, got \(error)")
                     return
                 }
-                XCTAssertEqual(code, 0)
+                XCTAssertEqual(stage, "first-token")
             }
         }
     }

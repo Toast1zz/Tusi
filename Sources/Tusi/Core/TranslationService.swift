@@ -5,6 +5,10 @@ enum TranslationError: LocalizedError, Equatable {
     case emptyKey
     case emptyResponse
     case truncatedStream
+    /// The local watchdog cancelled a stream after the server went silent. This is
+    /// deliberately distinct from HTTP 0: no HTTP response failure occurred, and the
+    /// retry policy can safely classify this as a transport timeout.
+    case watchdogTimeout(stage: String)
     case invalidURL
     case insecureURL
     case http(Int, String)
@@ -17,6 +21,10 @@ enum TranslationError: LocalizedError, Equatable {
             return L("模型没有返回内容")
         case .truncatedStream:
             return L("翻译结果不完整，连接提前中断")
+        case .watchdogTimeout(let stage):
+            return stage == "idle"
+                ? L("服务器长时间未返回新内容，连接已中断，请重试")
+                : L("服务器长时间无响应，请稍后重试")
         case .invalidURL:
             return L("接口地址无效，请检查设置")
         case .insecureURL:
@@ -42,7 +50,7 @@ enum TranslationError: LocalizedError, Equatable {
         switch self {
         case .http(let code, _):
             return code >= 500
-        case .truncatedStream:
+        case .truncatedStream, .watchdogTimeout:
             return true
         case .emptyKey, .emptyResponse, .invalidURL, .insecureURL:
             return false
@@ -361,10 +369,9 @@ enum TranslationService {
                     if didTimeOut.withLock({ $0 }) {
                         let hadStarted = gotData.withLock { $0 }
                         Log.translation.error("stream timed out \(hadStarted ? "mid-stream (idle)" : "waiting for first token", privacy: .public) (host \(config.displayHost, privacy: .public))")
-                        let message = hadStarted
-                            ? L("服务器长时间未返回新内容，连接已中断，请重试")
-                            : L("服务器长时间无响应，请稍后重试")
-                        continuation.finish(throwing: TranslationError.http(0, message))
+                        continuation.finish(throwing: TranslationError.watchdogTimeout(
+                            stage: hadStarted ? "idle" : "first-token"
+                        ))
                     } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
                         Log.translation.debug("stream cancelled by consumer")
                         continuation.finish(throwing: error)

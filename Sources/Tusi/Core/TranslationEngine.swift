@@ -15,11 +15,60 @@ final class TranslationEngine: ObservableObject {
         let id: UUID
         let input: String
         let output: String
+        /// History stores a bounded snapshot rather than the full panel text. These
+        /// flags keep restored entries honest instead of presenting an archive excerpt
+        /// as a complete translation.
+        let inputTruncated: Bool
+        let outputTruncated: Bool
         let sourceLabel: String
         let source: TranslationLanguage
         let target: TranslationLanguage
         let tone: Tone
         let timestamp: Date
+
+        init(
+            id: UUID,
+            input: String,
+            output: String,
+            inputTruncated: Bool = false,
+            outputTruncated: Bool = false,
+            sourceLabel: String,
+            source: TranslationLanguage,
+            target: TranslationLanguage,
+            tone: Tone,
+            timestamp: Date
+        ) {
+            self.id = id
+            self.input = input
+            self.output = output
+            self.inputTruncated = inputTruncated
+            self.outputTruncated = outputTruncated
+            self.sourceLabel = sourceLabel
+            self.source = source
+            self.target = target
+            self.tone = tone
+            self.timestamp = timestamp
+        }
+
+        var isTruncated: Bool { inputTruncated || outputTruncated }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, input, output, inputTruncated, outputTruncated, sourceLabel, source, target, tone, timestamp
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            input = try container.decode(String.self, forKey: .input)
+            output = try container.decode(String.self, forKey: .output)
+            inputTruncated = try container.decodeIfPresent(Bool.self, forKey: .inputTruncated) ?? false
+            outputTruncated = try container.decodeIfPresent(Bool.self, forKey: .outputTruncated) ?? false
+            sourceLabel = try container.decode(String.self, forKey: .sourceLabel)
+            source = try container.decode(TranslationLanguage.self, forKey: .source)
+            target = try container.decode(TranslationLanguage.self, forKey: .target)
+            tone = try container.decode(Tone.self, forKey: .tone)
+            timestamp = try container.decode(Date.self, forKey: .timestamp)
+        }
     }
 
     typealias Streamer = (
@@ -74,12 +123,17 @@ final class TranslationEngine: ObservableObject {
     /// suppresses the auto-copy and the success sound.
     @Published private(set) var outputCapped = false
 
+    /// A restored history snapshot may be smaller than the original translation. It
+    /// stays copyable, but the result view must make that archival truncation visible.
+    @Published private(set) var restoredFromTruncatedHistory = false
+
     /// Transient banner shown at the bottom of the panel, then auto-dismissed.
     /// Whether primary or backup served the request is an implementation detail —
     /// the only thing worth surfacing is the one-time "primary failed" notice.
     enum Toast: Equatable {
         case fellBack
         case truncatedInput
+        case copyFailed
         /// Race for fastest (SettingsStore.raceFastestEnabled) picked a winner —
         /// carries the winning provider's display host so the one-time notice can
         /// name it, e.g. "api.deepseek.com 更快".
@@ -298,6 +352,7 @@ final class TranslationEngine: ObservableObject {
         toast = nil
         interrupted = false
         outputCapped = false
+        restoredFromTruncatedHistory = false
     }
 
     /// Whether the dedicated local-model slot is filled in enough to use — read by
@@ -514,11 +569,15 @@ final class TranslationEngine: ObservableObject {
         // until `state` becomes `.done`, so text and the copy button enter together.
         self.output = finalOutput
         self.outputCapped = wasCapped
+        self.restoredFromTruncatedHistory = false
         self.state = .done
         self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
         if !wasCapped, self.settings.autoCopy, !self.output.isEmpty {
-            self.copyToPasteboard()
-            self.flashCopied(auto: true)
+            if self.copyToPasteboard() {
+                self.flashCopied(auto: true)
+            } else {
+                self.flashToast(.copyFailed)
+            }
         }
         if !wasCapped {
             SoundPlayer.shared.playSuccess()
@@ -560,7 +619,21 @@ final class TranslationEngine: ObservableObject {
             }
             // Retry only transient failures (TCP reset, 5xx, timeout) — deterministic
             // errors like bad auth or quota would just fail again.
-            let transient = (error as? TranslationError)?.isTransient ?? false
+            let transient: Bool
+            if let translationError = error as? TranslationError {
+                transient = translationError.isTransient
+            } else if let urlError = error as? URLError {
+                transient = [
+                    .timedOut,
+                    .networkConnectionLost,
+                    .cannotFindHost,
+                    .cannotConnectToHost,
+                    .dnsLookupFailed,
+                    .notConnectedToInternet,
+                ].contains(urlError.code)
+            } else {
+                transient = false
+            }
             guard transient else { return .failed(error) }
 
             pendingOutput = ""
@@ -685,13 +758,19 @@ final class TranslationEngine: ObservableObject {
             }
 
             var firstError: Error?
+            var sawEmptyResponse = false
             while let (index, outcome) = await group.next() {
                 switch outcome {
                 case .completed(let buffer):
                     self.pendingOutput = buffer
                     let usable = self.commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-                    group.cancelAll()
-                    return (usable ? .succeeded : .emptyResponse, usable ? index : nil)
+                    if usable {
+                        group.cancelAll()
+                        return (.succeeded, index)
+                    }
+                    // An empty completion is not a winner. The other provider may still
+                    // finish with a usable translation, so keep racing until it does.
+                    sawEmptyResponse = true
                 case .cancelled:
                     // A global cancellation (user stop, newer input) — the other leg
                     // will see the same signal on its own next check regardless.
@@ -702,7 +781,10 @@ final class TranslationEngine: ObservableObject {
                     // Keep waiting: the other leg is still racing and may still win.
                 }
             }
-            return (.failed(firstError ?? TranslationError.emptyResponse), nil)
+            if let firstError {
+                return (.failed(firstError), nil)
+            }
+            return (sawEmptyResponse ? .emptyResponse : .failed(TranslationError.emptyResponse), nil)
         }
     }
 
@@ -710,6 +792,7 @@ final class TranslationEngine: ObservableObject {
         translationTask?.cancel()
         translationTask = nil
         outputCapped = false
+        restoredFromTruncatedHistory = false
         // Whether anything buffered decides if this stop leaves partial content behind.
         // During a translation `output` is empty by design; the buffer holds everything
         // the provider already delivered.
@@ -756,6 +839,7 @@ final class TranslationEngine: ObservableObject {
         toast = nil
         interrupted = false
         outputCapped = false
+        restoredFromTruncatedHistory = false
         state = .idle
     }
 
@@ -767,6 +851,7 @@ final class TranslationEngine: ObservableObject {
         self.toast = toast
         self.interrupted = false
         self.outputCapped = false
+        self.restoredFromTruncatedHistory = false
     }
 
     /// Puts the panel into a mid-translation state for visual inspection: a non-empty
@@ -777,17 +862,18 @@ final class TranslationEngine: ObservableObject {
         self.output = ""
         self.interrupted = false
         self.outputCapped = false
+        self.restoredFromTruncatedHistory = false
         self.copied = false
         self.state = .translating
     }
 
     // MARK: - Clipboard
 
-    private func copyToPasteboard() {
-        guard !output.isEmpty else { return }
+    private func copyToPasteboard() -> Bool {
+        guard !output.isEmpty else { return false }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(output, forType: .string)
+        return pasteboard.setString(output, forType: .string)
     }
 
     private func flashToast(_ kind: Toast) {
@@ -797,6 +883,7 @@ final class TranslationEngine: ObservableObject {
         switch kind {
         case .fellBack: duration = 2.4
         case .truncatedInput: duration = 2.0
+        case .copyFailed: duration = 2.0
         case .raceWon: duration = 2.2
         }
         toastTask = Task { [weak self] in
@@ -808,8 +895,12 @@ final class TranslationEngine: ObservableObject {
 
     func copyOutput() {
         guard !output.isEmpty else { return }
-        copyToPasteboard()
-        flashCopied()
+        if copyToPasteboard() {
+            flashCopied()
+        } else {
+            copied = false
+            flashToast(.copyFailed)
+        }
     }
 
     /// Morphs the copy button into a check for a beat. Auto-copy holds it a little longer:
@@ -828,10 +919,14 @@ final class TranslationEngine: ObservableObject {
 
     /// Appends one completed request to the bounded, newest-first history.
     private func pushHistory(input: String, output: String, source: TranslationLanguage, sourceLabel: String, target: TranslationLanguage, tone: Tone) {
+        let inputTruncated = input.count > Self.historyFieldCharacterLimit
+        let outputTruncated = output.count > Self.historyFieldCharacterLimit
         let record = Record(
             id: UUID(),
             input: String(input.prefix(Self.historyFieldCharacterLimit)),
             output: String(output.prefix(Self.historyFieldCharacterLimit)),
+            inputTruncated: inputTruncated,
+            outputTruncated: outputTruncated,
             sourceLabel: sourceLabel,
             source: source,
             target: target,
@@ -853,6 +948,7 @@ final class TranslationEngine: ObservableObject {
         target = record.target
         interrupted = false
         outputCapped = false
+        restoredFromTruncatedHistory = record.isTruncated
         state = .done
     }
 
@@ -891,13 +987,35 @@ final class TranslationEngine: ObservableObject {
         let url = historyURL
         guard let data = try? Data(contentsOf: url) else { return }
         if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
-            history = decoded
+            history = normalizeLoadedHistory(decoded)
             return
         }
         // A single corrupt record (schema drift, truncated entry) must not cost the
         // user the whole history: decode per-record, keep the good ones.
         let lossy = try? JSONDecoder().decode([LossyRecord].self, from: data)
-        history = lossy?.compactMap(\.record) ?? []
+        history = normalizeLoadedHistory(lossy?.compactMap(\.record) ?? [])
+    }
+
+    /// Old builds or manually edited files can exceed the in-memory guarantees that
+    /// `pushHistory` applies before saving. Normalize after every decode so one large
+    /// history file cannot make the next synchronous save unbounded again.
+    private func normalizeLoadedHistory(_ records: [Record]) -> [Record] {
+        records.prefix(historyCapacity).map { record in
+            let inputTruncated = record.input.count > Self.historyFieldCharacterLimit
+            let outputTruncated = record.output.count > Self.historyFieldCharacterLimit
+            return Record(
+                id: record.id,
+                input: String(record.input.prefix(Self.historyFieldCharacterLimit)),
+                output: String(record.output.prefix(Self.historyFieldCharacterLimit)),
+                inputTruncated: record.inputTruncated || inputTruncated,
+                outputTruncated: record.outputTruncated || outputTruncated,
+                sourceLabel: record.sourceLabel,
+                source: record.source,
+                target: record.target,
+                tone: record.tone,
+                timestamp: record.timestamp
+            )
+        }
     }
 
     /// Wrapper that tolerates individual corrupt entries during history load.

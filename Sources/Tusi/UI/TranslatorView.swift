@@ -189,6 +189,7 @@ struct TranslatorView: View {
                     switch toast {
                     case .fellBack: Toast.fellBack()
                     case .truncatedInput: Toast.truncatedInput()
+                    case .copyFailed: Toast.copyFailed()
                     case .raceWon(let host): Toast.raceWon(host)
                     }
                 }
@@ -303,6 +304,11 @@ struct TranslatorView: View {
                 } else if engine.outputCapped {
                     // Same honesty for an overlong result cut at the length cap.
                     Label(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
+                        .font(Theme.footnoteMedium)
+                        .foregroundStyle(.orange)
+                        .transition(.opacity)
+                } else if engine.restoredFromTruncatedHistory {
+                    Label(L("历史仅保留部分内容"), systemImage: "scissors")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .transition(.opacity)
@@ -475,11 +481,21 @@ struct TranslatorView: View {
                     engine.cancelTranslation()
                 }
                 .transition(.opacity)
-            } else if !engine.input.isEmpty && engine.output.isEmpty {
-                Text("⏎ 翻译")
-                    .font(Theme.footnoteMedium)
-                    .foregroundStyle(.tertiary)
-                    .transition(.opacity)
+            } else {
+                let hasInput = !engine.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                Button {
+                    engine.translate()
+                } label: {
+                    Text("⏎ 翻译")
+                        .font(Theme.footnoteMedium)
+                        .frame(width: 48, height: 26)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasInput)
+                .foregroundStyle(hasInput ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                .accessibilityLabel(L("翻译"))
+                .help(L("翻译"))
+                .transition(.opacity)
             }
 
             BarIconButton(
@@ -529,13 +545,30 @@ private struct HistoryRecordRow: View {
 
     @State private var hovering = false
 
+    private var tooltip: String {
+        var value = "\(record.input)\n\n\(record.output)"
+        if record.isTruncated {
+            value += "\n\n" + L("历史仅保留部分内容")
+        }
+        return value
+    }
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(record.input)
-                    .font(Theme.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(record.input)
+                        .font(Theme.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if record.isTruncated {
+                        Image(systemName: "scissors")
+                            .font(Theme.caption2Semibold)
+                            .foregroundStyle(.orange)
+                            .help(L("历史仅保留部分内容"))
+                    }
+                }
                 Text(record.output)
                     .font(Theme.contentFont)
                     .lineSpacing(3)
@@ -562,7 +595,7 @@ private struct HistoryRecordRow: View {
         .animation(Theme.microMotion, value: hovering)
         // Rows truncate to keep the list compact; the hover tooltip shows the full
         // text so a long record is still fully readable without opening it.
-        .help("\(record.input)\n\n\(record.output)")
+        .help(tooltip)
     }
 }
 

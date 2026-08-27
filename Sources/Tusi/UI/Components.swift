@@ -383,6 +383,10 @@ struct Toast: View {
         )
     }
 
+    static func copyFailed() -> Toast {
+        Toast(icon: "exclamationmark.triangle.fill", text: L("复制失败，请重试"), tint: AnyShapeStyle(Color.orange))
+    }
+
     /// One-time, informational (not a warning — `.secondary`, not `.orange` like
     /// `fellBack`) notice for `SettingsStore.raceFastestEnabled`. `label` is already
     /// the short per-slot name (e.g. "deepseek", from `SettingsStore.label(for:)`),

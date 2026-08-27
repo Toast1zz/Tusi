@@ -2,6 +2,21 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.2] - 2026-08-27
+
+### Fixed
+
+- Translation retry now recognizes real transport failures (timeouts, lost connections and DNS/connectivity errors) and the app's own stream watchdog timeout, instead of only HTTP 5xx and truncated streams. The existing no-splice rule remains: once a provider has produced content, Tusi neither retries nor switches providers
+- Race mode no longer lets a provider that returns an empty completion cancel the other provider. It now waits for the first usable complete translation; a concrete provider failure still wins over a meaningless empty-response error when both legs finish unsuccessfully
+- History loaded from older or manually edited files is re-bounded to 50 records and 4,000 characters per field. Archived input/output that was shortened now carries an explicit marker, appears with a compact scissors indicator in history, and stays visibly marked as incomplete after restoration
+- The bottom-bar “⏎ 翻译” affordance is now a real, keyboard-accessible button while keeping the existing Return shortcut
+- Copy confirmation is now shown only when the pasteboard write succeeds; a failed write surfaces a short retry notice instead of a false “Copied” state
+
+### Changed
+
+- API Key privacy copy now accurately states that it is kept in the local Keychain and sent only to the API service configured by the user
+- npm metadata now matches the app release: version 1.11.2, MIT license and `swift test` as the test command
+
 ## [1.11.1] - 2026-08-26
 
 ### Changed
@@ -271,6 +286,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.11.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.2
 [1.11.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.1
 [1.11.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.0
 [1.10.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.10.0

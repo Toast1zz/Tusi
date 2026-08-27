@@ -104,7 +104,7 @@ struct SettingsView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "lock.fill")
                                 .font(Theme.caption2)
-                            Text("API Key 仅保存在本机钥匙串，不会上传")
+                            Text("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务")
                         }
                         .font(Theme.caption)
                         .foregroundStyle(.secondary)
