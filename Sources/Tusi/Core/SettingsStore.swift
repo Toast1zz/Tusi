@@ -32,7 +32,7 @@ struct APIConfig: Equatable {
     var displayHost: String {
         let trimmed = baseURL.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "" }
-        let withScheme = trimmed.contains("://") ? trimmed : "https://" + trimmed
+        let withScheme = TranslationService.normalizedBaseURLString(trimmed)
         return URL(string: withScheme)?.host ?? ""
     }
 
@@ -200,6 +200,7 @@ final class SettingsStore: ObservableObject {
     @Published var launchAtLogin: Bool {
         didSet {
             guard launchAtLogin != oldValue else { return }
+            launchAtLoginError = nil
             do {
                 if launchAtLogin {
                     try SMAppService.mainApp.register()
@@ -207,11 +208,12 @@ final class SettingsStore: ObservableObject {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                // Reverts silently when not running from a proper .app bundle.
+                launchAtLoginError = error.localizedDescription
                 launchAtLogin = oldValue
             }
         }
     }
+    @Published private(set) var launchAtLoginError: String?
     init(preview: Bool? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         if isPreview {
@@ -246,7 +248,13 @@ final class SettingsStore: ObservableObject {
         shortcuts = Self.loadShortcuts(defaults: defaults)
         disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        profiles = isPreview ? [APIProfile(), APIProfile(), APIProfile()] : Self.loadProfiles(defaults: defaults)
+        if isPreview {
+            profiles = [APIProfile(), APIProfile(), APIProfile()]
+        } else {
+            let loaded = Self.loadProfiles(defaults: defaults)
+            profiles = loaded.profiles
+            keychainError = loaded.keychainError
+        }
 
         // Sync the persisted sound preferences into the shared player. Must come after
         // every stored property is initialized (reading `soundEnabled`/`soundVolume`
@@ -313,7 +321,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private static func loadProfiles(defaults: UserDefaults) -> [APIProfile] {
+    private static func loadProfiles(defaults: UserDefaults) -> (profiles: [APIProfile], keychainError: String?) {
         // Pre-slot installs kept the primary's URL and model under unsuffixed keys.
         if !defaults.bool(forKey: "didMigrateProfiles") {
             defaults.set(true, forKey: "didMigrateProfiles")
@@ -326,9 +334,18 @@ final class SettingsStore: ObservableObject {
         }
 
         // One read for both slots — see Keychain for why that matters.
-        let keys = Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+        let keys: [Int: String]
+        let keychainError: String?
+        do {
+            keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+            keychainError = nil
+        } catch {
+            Log.keychain.error("keychain load failed: \(error.localizedDescription, privacy: .public)")
+            keys = [:]
+            keychainError = error.localizedDescription
+        }
 
-        return (0...localProfileIndex).map { index in
+        let profiles = (0...localProfileIndex).map { index in
             APIProfile(
                 baseURL: defaults.string(forKey: "baseURL.\(index)") ?? "",
                 apiKey: keys[index] ?? "",
@@ -336,6 +353,7 @@ final class SettingsStore: ObservableObject {
                 providerOrder: defaults.string(forKey: "providerOrder.\(index)") ?? ""
             )
         }
+        return (profiles, keychainError)
     }
 
     private func persistProfiles(previous: [APIProfile]) {
@@ -432,7 +450,14 @@ final class SettingsStore: ObservableObject {
     /// touches the Keychain.
     func reloadKeysIfMissing() {
         guard !isPreview, !isConfigured else { return }
-        let keys = Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+        let keys: [Int: String]
+        do {
+            keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+        } catch {
+            keychainError = error.localizedDescription
+            Log.keychain.error("keychain reload failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
         guard !keys.isEmpty else { return }
         for (index, profile) in profiles.enumerated() {
             // Only backfill remote profiles: a loopback (local) profile has no key by

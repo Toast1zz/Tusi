@@ -229,23 +229,35 @@ struct TranslatorView: View {
 
     private var inputArea: some View {
         let height = inputHeight
-        return ZStack(alignment: .topLeading) {
-            if engine.input.isEmpty {
-                Text("输入中文或任意语言，⏎ 翻译")
+        return VStack(alignment: .leading, spacing: 4) {
+            ZStack(alignment: .topLeading) {
+                if engine.input.isEmpty {
+                    Text("输入中文或任意语言，⏎ 翻译")
+                        .font(Theme.contentFont)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
+                }
+
+                TextEditor(text: $engine.input)
                     .font(Theme.contentFont)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 5)
-                    .allowsHitTesting(false)
+                    .lineSpacing(3)
+                    .scrollContentBackground(.hidden)
+                    .scrollDisabled(height <= maxInputHeight)
+                    .scrollIndicators(.never)
+                    .focused($inputFocused)
+                    .frame(height: min(max(height, 24), maxInputHeight))
             }
 
-            TextEditor(text: $engine.input)
-                .font(Theme.contentFont)
-                .lineSpacing(3)
-                .scrollContentBackground(.hidden)
-                .scrollDisabled(height <= maxInputHeight)
-                .scrollIndicators(.never)
-                .focused($inputFocused)
-                .frame(height: min(max(height, 24), maxInputHeight))
+            if engine.inputWasTruncated {
+                Label(
+                    String(format: L("输入已截断，最多保留 %d 字"), TranslationEngine.maxInputCharacters),
+                    systemImage: "scissors"
+                )
+                .font(Theme.caption)
+                .foregroundStyle(.orange)
+                .transition(.opacity)
+            }
         }
     }
 

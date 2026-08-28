@@ -95,6 +95,7 @@
 "复制" = "Copy";
 "主用连接失败，已用备用翻译" = "Primary connection failed — used backup instead";
 "已截断至 %d 字" = "Truncated to %d characters";
+"输入已截断，最多保留 %d 字" = "Input was truncated to %d characters";
 "更快" = "Faster";
 "%@ 更快" = "%@ was faster";
 "重试" = "Retry";
@@ -134,9 +135,15 @@
 "清空历史" = "Clear History";
 "翻译历史为空" = "No translation history";
 "历史仅保留部分内容" = "History only retains part of this content";
+"服务器长时间无响应，请稍后重试" = "The server did not respond for a long time — try again later";
+"服务器长时间未返回新内容，连接已中断，请重试" = "The server stopped returning content for too long — try again";
+"本地模型尚未配置，请先在设置中填写" = "The local model is not configured yet — fill it in Settings";
 
 "切换翻译方向" = "Switch translation direction";
 "该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符" = "No modifier on this shortcut — binding a letter or digit will make it untypeable";
 
 /* MARK: - Sound preference */
 "翻译成功音效" = "Translation Completion Sound";
+"接口返回的数据格式不兼容，请检查模型和接口地址" = "The endpoint returned an incompatible response — check the model and base URL";
+"钥匙串读取失败（错误码 %d），请解锁设备后重试" = "Couldn't read the Keychain (error %d) — unlock your device and try again";
+"钥匙串数据损坏，请在设置中重新保存 API Key" = "The Keychain data is corrupted — save the API key again in Settings";

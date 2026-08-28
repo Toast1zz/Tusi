@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Tusi
 
@@ -456,6 +457,22 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(
             try TranslationService.endpoint(for: remote).absoluteString,
             "https://api.example.com/v1/chat/completions"
+        )
+    }
+
+    func testIPv6LoopbackEndpointNormalizesBracketSyntax() throws {
+        let bare = APIConfig(baseURL: "::1:11434/v1", apiKey: "", model: "model")
+        XCTAssertFalse(bare.requiresAuth)
+        XCTAssertEqual(
+            try TranslationService.endpoint(for: bare).absoluteString,
+            "http://[::1]:11434/v1/chat/completions"
+        )
+
+        let bracketed = APIConfig(baseURL: "[::1]:11434/v1", apiKey: "", model: "model")
+        XCTAssertFalse(bracketed.requiresAuth)
+        XCTAssertEqual(
+            try TranslationService.endpoint(for: bracketed).absoluteString,
+            "http://[::1]:11434/v1/chat/completions"
         )
     }
 
@@ -1290,6 +1307,23 @@ final class TusiTests: XCTestCase {
         }
     }
 
+    func testStreamAcceptsFinishOnlyChunkWithoutDelta() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"content":"你"}}]}
+
+        data: {"choices":[{"finish_reason":"stop"}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["你"])
+        }
+    }
+
     func testStreamSurfacesHTTPErrorWithParsedMessage() async throws {
         try await withMockSession(sse: #"{"error":{"message":"bad key"}}"#, statusCode: 401) {
             let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
@@ -1299,6 +1333,95 @@ final class TusiTests: XCTestCase {
             } catch {
                 XCTAssertEqual(error as? TranslationError, .http(401, "bad key"))
             }
+        }
+    }
+
+    func testStreamRejectsOversizedSSELine() async throws {
+        let oversizedLine = "data: " + String(repeating: "x", count: 300_000) + "\n"
+        try await withMockSession(sse: oversizedLine) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
+                XCTFail("expected oversized SSE line error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+            }
+        }
+    }
+
+    func testStreamRejectsMalformedDataPayloadEvenWithDoneSentinel() async throws {
+        let sse = "data: {\"unexpected\":true}\n\ndata: [DONE]\n\n"
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
+                XCTFail("expected incompatible data payload error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+            }
+        }
+    }
+
+    func testCrossOriginRedirectStripsAuthorizationAndBody() {
+        var original = URLRequest(url: URL(string: "https://api.example.com/v1/chat/completions")!)
+        original.httpMethod = "POST"
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        original.httpBody = Data("private source".utf8)
+        let redirected = URLRequest(url: URL(string: "https://collector.example.net/collect")!)
+
+        let safe = TranslationService.redirectedRequest(original: original, redirected: redirected)
+        XCTAssertEqual(safe?.httpMethod, "GET")
+        XCTAssertNil(safe?.httpBody)
+        XCTAssertNil(safe?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(safe?.url?.host, "collector.example.net")
+    }
+
+    func testSameOriginRedirectPreservesRequest() {
+        var original = URLRequest(url: URL(string: "https://api.example.com/v1/chat/completions")!)
+        original.httpMethod = "POST"
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        original.httpBody = Data("private source".utf8)
+        var redirected = URLRequest(url: URL(string: "https://api.example.com/v1/chat/completions/")!)
+        redirected.httpMethod = "POST"
+        redirected.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        redirected.httpBody = Data("private source".utf8)
+
+        let safe = TranslationService.redirectedRequest(original: original, redirected: redirected)
+        XCTAssertEqual(safe?.httpMethod, "POST")
+        XCTAssertEqual(safe?.httpBody, original.httpBody)
+        XCTAssertEqual(safe?.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    func testConnectionRejectsHTTP200NonCompletionResponse() async throws {
+        try await withMockSession(sse: "<html>not an API response</html>", statusCode: 200) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                _ = try await TranslationService.testConnection(config: config)
+                XCTFail("expected incompatible response error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+            }
+        }
+    }
+
+    func testConnectionRejectsHTTP200EmptyChoiceResponse() async throws {
+        try await withMockSession(sse: #"{"choices":[{}]}"#, statusCode: 200) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            do {
+                _ = try await TranslationService.testConnection(config: config)
+                XCTFail("expected incompatible response error")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+            }
+        }
+    }
+
+    func testConnectionAcceptsHTTP200CompletionResponse() async throws {
+        let body = #"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#
+        try await withMockSession(sse: body, statusCode: 200) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            let latency = try await TranslationService.testConnection(config: config)
+            XCTAssertGreaterThanOrEqual(latency, 0)
         }
     }
 
@@ -1441,6 +1564,49 @@ final class TusiTests: XCTestCase {
         engine.translate()
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.state, .done)
+        XCTAssertEqual(engine.output.count, TranslationEngine.maxOutputCharacters)
+        XCTAssertTrue(engine.outputCapped)
+    }
+
+    func testInFlightOutputCapCommitsWithoutWaitingForStreamEnd() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuations.append(continuation)
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        for _ in 0..<100 where continuations.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(continuations.count, 1)
+
+        // The producer intentionally stays open. Reaching the cap must still publish a
+        // bounded, explicitly flagged result instead of waiting for a completion marker.
+        continuations[0].yield(String(repeating: "x", count: TranslationEngine.maxOutputCharacters + 1))
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output.count, TranslationEngine.maxOutputCharacters)
+        XCTAssertTrue(engine.outputCapped)
+        continuations[0].finish()
+    }
+
+    func testOutputExactlyAtCapIsMarkedIncomplete() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(String(repeating: "x", count: TranslationEngine.maxOutputCharacters))
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
         XCTAssertEqual(engine.output.count, TranslationEngine.maxOutputCharacters)
         XCTAssertTrue(engine.outputCapped)
     }
@@ -1641,9 +1807,12 @@ final class TusiTests: XCTestCase {
         let engine = TranslationEngine(settings: settings)
         engine.input = String(repeating: "a", count: TranslationEngine.maxInputCharacters + 500)
         XCTAssertEqual(engine.input.count, TranslationEngine.maxInputCharacters)
+        XCTAssertTrue(engine.inputWasTruncated)
         // Direction detection still runs on the truncated text without crashing.
         XCTAssertFalse(engine.sourceLabel.isEmpty)
         XCTAssertFalse(engine.target.symbol.isEmpty)
+        engine.input = "short"
+        XCTAssertFalse(engine.inputWasTruncated)
     }
 
     func testReloadKeysIfMissingIsSafeNoOpInPreview() {
@@ -1666,6 +1835,64 @@ final class TusiTests: XCTestCase {
         XCTAssertLessThan(metrics.step, 40)
         XCTAssertLessThan(metrics.first, metrics.step)
     }
+
+    func testPanelHeightClampLeavesScreenMargins() {
+        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 1_000, visibleHeight: 800), 788)
+        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 160, visibleHeight: 800), 160)
+        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 100)
+    }
+
+    func testKeychainRejectsCorruptKeyData() {
+        XCTAssertThrowsError(try Keychain.decodeKeys(Data("not-json".utf8))) { error in
+            XCTAssertEqual(error as? KeychainError, .invalidData)
+        }
+    }
+
+    func testSettingsHostingReportsNaturalHeightBeyondConstrainedViewport() {
+        let settings = SettingsStore(preview: true)
+        settings.profiles = [
+            APIProfile(baseURL: "https://api.one.example/v1", apiKey: "k", model: "m"),
+            APIProfile(baseURL: "https://api.two.example/v1", apiKey: "k", model: "m"),
+            APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"),
+        ]
+        settings.raceFastestEnabled = true
+        let panelState = PanelState()
+        let updateChecker = UpdateChecker(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        let root = SettingsView()
+            .environmentObject(settings)
+            .environmentObject(panelState)
+            .environmentObject(updateChecker)
+            .environmentObject(engine)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 470, height: 160)
+        hosting.layoutSubtreeIfNeeded()
+
+        XCTAssertGreaterThan(hosting.fittingSize.height, 160)
+    }
+
+    func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://api.example.com/v1", apiKey: "k", model: "m")
+        let panelState = PanelState()
+        panelState.panelWidth = Theme.panelMinWidth
+        let engine = TranslationEngine(settings: settings)
+        engine.debugPreview(
+            input: "他希望的最低工资是多少呢？",
+            output: "What is the minimum wage he hopes for?"
+        )
+        let root = TranslatorView()
+            .environmentObject(settings)
+            .environmentObject(panelState)
+            .environmentObject(engine)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: Theme.panelMinWidth, height: 220)
+        hosting.layoutSubtreeIfNeeded()
+
+        XCTAssertLessThan(hosting.fittingSize.height, 220)
+    }
+
     // MARK: - UpdateChecker (mock session)
 
     func testUpdateCheckerFailsOnHTTPError() async throws {

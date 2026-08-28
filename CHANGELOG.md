@@ -2,6 +2,14 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.4] - 2026-08-28
+
+### Fixed
+
+- Completed the audit repair pass for translation recovery, race-mode empty responses, bounded streaming output, SSE protocol validation, and safe redirect handling that never forwards API keys or source text to another host
+- Added persistent input-truncation feedback, honest history truncation markers, native Toggle accessibility, stable settings scrolling on short screens, and stronger selected-state semantics for language, tone, and profile controls
+- Hardened Keychain and connection-test error reporting, clipboard failure handling, IPv6 loopback normalization, and English localization coverage
+
 ## [1.11.3] - 2026-08-28
 
 ### Fixed
@@ -292,6 +300,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.11.4]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.4
 [1.11.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.3
 [1.11.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.2
 [1.11.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.1

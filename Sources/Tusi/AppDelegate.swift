@@ -196,7 +196,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panelState.globalHotkeyFailed = false
             return
         }
+        let previousCombo = hotkey?.currentCombo
         let ok = hotkey?.update(combo: combo) ?? false
+        if !ok, let previousCombo, settings.shortcut(.summon) != previousCombo {
+            // The Carbon registration is the source of truth. If the new combo is
+            // rejected, keep Settings aligned with the combo HotkeyManager restored.
+            settings.setShortcut(previousCombo, for: .summon)
+        }
         panelState.globalHotkeyFailed = !ok
     }
 

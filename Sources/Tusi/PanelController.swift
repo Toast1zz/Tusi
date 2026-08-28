@@ -26,6 +26,12 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var desiredHeight: CGFloat = 160
     private var hasShownOnce = false
 
+    static func clampedPanelHeight(desired: CGFloat, visibleHeight: CGFloat) -> CGFloat {
+        let lowerBound: CGFloat = 100
+        let upperBound = max(lowerBound, visibleHeight - 12)
+        return min(max(desired, lowerBound), upperBound)
+    }
+
     init(engine: TranslationEngine, settings: SettingsStore, panelState: PanelState, updateChecker: UpdateChecker, statusItem: NSStatusItem?) {
         self.engine = engine
         self.settings = settings
@@ -145,7 +151,6 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private func position() {
         let width = settings.panelWidth
-        let height = desiredHeight
 
         // Show on the screen the user is actually on (where the mouse is),
         // top-centered just below the menu bar — Spotlight-style. This stays
@@ -155,6 +160,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard let screen else { return }
 
         let visible = screen.visibleFrame
+        let height = Self.clampedPanelHeight(desired: desiredHeight, visibleHeight: visible.height)
         var x = visible.midX - width / 2
 
         // If the status icon is visible on this screen, anchor under it instead.
@@ -177,7 +183,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // a projector) could otherwise push the panel's bottom edge off the visible
         // area — `panel.maxSize` alone (2000pt) doesn't know about the actual screen.
         if let screenHeight = panel.screen?.visibleFrame.height {
-            clamped = min(clamped, screenHeight)
+            clamped = Self.clampedPanelHeight(desired: clamped, visibleHeight: screenHeight)
         }
         guard abs(clamped - desiredHeight) > 0.5 else { return }
         desiredHeight = clamped

@@ -6,25 +6,33 @@ struct ShortcutsView: View {
     @EnvironmentObject private var panelState: PanelState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                header
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(ShortcutAction.allCases) { action in
-                    shortcutRow(action)
-                }
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(ShortcutAction.allCases) { action in
+                        shortcutRow(action)
+                    }
 
-                if let error = panelState.shortcutError {
-                    Text(error)
-                        .font(Theme.caption)
-                        .foregroundStyle(.orange)
-                        .transition(.opacity)
+                    if let error = panelState.shortcutError {
+                        Text(error)
+                            .font(Theme.caption)
+                            .foregroundStyle(.orange)
+                            .transition(.opacity)
+                    }
                 }
+                .animation(Theme.stateChange, value: panelState.recordingShortcut)
+                .animation(Theme.stateChange, value: panelState.shortcutError)
             }
-            .animation(Theme.stateChange, value: panelState.recordingShortcut)
-            .animation(Theme.stateChange, value: panelState.shortcutError)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height + 36)
+                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
         }
-        .padding(18)
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
         .onDisappear {

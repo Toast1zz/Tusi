@@ -58,8 +58,9 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                header
 
             slotTabs
 
@@ -171,6 +172,12 @@ struct SettingsView: View {
                 settingToggle("主用失败时自动切换到备用", isOn: $settings.fallbackEnabled)
                 settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
                 settingToggle("登录时启动", isOn: $settings.launchAtLogin)
+                if let error = settings.launchAtLoginError {
+                    Text(error)
+                        .font(Theme.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 updateSettingRow
                 // The sound preference reads as a distinct sense channel, not a
                 // translation behavior, but shares the same row rhythm as everything
@@ -206,18 +213,25 @@ struct SettingsView: View {
             .font(Theme.body)
             .animation(Theme.stateChange, value: settings.raceFastestEnabled)
 
-            if panelState.globalHotkeyFailed {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(Theme.caption2)
-                    Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
-                        .fixedSize(horizontal: false, vertical: true)
+                if panelState.globalHotkeyFailed {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(Theme.caption2)
+                        Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(Theme.caption)
+                    .foregroundStyle(.orange)
                 }
-                .font(Theme.caption)
-                .foregroundStyle(.orange)
             }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height + 36)
+                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
         }
-        .padding(18)
         .onChange(of: settings.profiles) { _, _ in
             testTasks.values.forEach { $0.cancel() }
             testTasks.removeAll()
@@ -368,20 +382,18 @@ struct SettingsView: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // MARK: - Toggles
 
     /// Label left, switch right — so every switch lines up in one column regardless of how
-    /// long its label is. Label is also tappable for accessibility.
+    /// long its label is. Using a native Toggle keeps the label, switch, keyboard focus,
+    /// and VoiceOver value as one control instead of two unrelated hit targets.
     private func settingToggle(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
-        HStack {
+        Toggle(isOn: isOn) {
             Text(label)
-                .onTapGesture { isOn.wrappedValue.toggle() }
-            Spacer(minLength: 8)
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .accessibilityLabel(label)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

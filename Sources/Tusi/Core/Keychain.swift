@@ -1,13 +1,19 @@
 import Foundation
 import Security
 
-enum KeychainError: LocalizedError {
+enum KeychainError: LocalizedError, Equatable {
     case operationFailed(OSStatus)
+    case readFailed(OSStatus)
+    case invalidData
 
     var errorDescription: String? {
         switch self {
         case .operationFailed(let status):
             return String(format: L("钥匙串保存失败（错误码 %d）"), status)
+        case .readFailed(let status):
+            return String(format: L("钥匙串读取失败（错误码 %d），请解锁设备后重试"), status)
+        case .invalidData:
+            return L("钥匙串数据损坏，请在设置中重新保存 API Key")
         }
     }
 }
@@ -23,10 +29,15 @@ enum Keychain {
     private static let legacyAccounts = ["apiKey.0", "apiKey.1", "apiKey"]
 
     /// Keys by slot index. Missing slots are simply absent.
-    static func loadKeys() -> [Int: String] {
-        guard let data = read(account: account),
-              let raw = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
+    static func loadKeys() throws -> [Int: String] {
+        guard let data = try read(account: account) else { return [:] }
+        return try decodeKeys(data)
+    }
+
+    static func decodeKeys(_ data: Data) throws -> [Int: String] {
+        guard let raw = try? JSONDecoder().decode([String: String].self, from: data) else {
+            throw KeychainError.invalidData
+        }
         return raw.reduce(into: [:]) { result, pair in
             if let index = Int(pair.key) { result[index] = pair.value }
         }
@@ -49,11 +60,14 @@ enum Keychain {
     /// recovered, or nil when there was nothing to migrate. Legacy items are deleted only
     /// after the combined write succeeds, so a locked or unavailable Keychain can retry on
     /// the next launch without losing the old credentials.
-    static func migrateLegacyKeysIfNeeded() -> [Int: String]? {
+    static func migrateLegacyKeysIfNeeded() throws -> [Int: String]? {
         var recovered: [Int: String] = [:]
         var found = false
         for legacy in legacyAccounts {
-            guard let data = read(account: legacy), let value = String(data: data, encoding: .utf8) else { continue }
+            guard let data = try read(account: legacy) else { continue }
+            guard let value = String(data: data, encoding: .utf8) else {
+                throw KeychainError.invalidData
+            }
             found = true
             // "apiKey" predates slots entirely and was always the primary.
             let index = legacy == "apiKey" ? 0 : Int(legacy.suffix(1)) ?? 0
@@ -82,13 +96,16 @@ enum Keychain {
         ]
     }
 
-    private static func read(account: String) -> Data? {
+    private static func read(account: String) throws -> Data? {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainError.readFailed(status) }
+        guard let data = result as? Data else { throw KeychainError.invalidData }
+        return data
     }
 
     private static func write(_ data: Data, account: String) throws {

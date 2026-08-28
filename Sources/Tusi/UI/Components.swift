@@ -216,6 +216,7 @@ struct LanguagePill: View {
         .onHover { inside in
             withAnimation(Theme.microMotion) { hovering = inside }
         }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -257,6 +258,7 @@ struct ToneSelector: View {
                 }
                 .buttonStyle(.plain)
                 .help(option.help)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)

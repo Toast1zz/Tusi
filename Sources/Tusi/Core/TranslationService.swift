@@ -9,6 +9,7 @@ enum TranslationError: LocalizedError, Equatable {
     /// deliberately distinct from HTTP 0: no HTTP response failure occurred, and the
     /// retry policy can safely classify this as a transport timeout.
     case watchdogTimeout(stage: String)
+    case invalidResponse
     case invalidURL
     case insecureURL
     case http(Int, String)
@@ -25,6 +26,8 @@ enum TranslationError: LocalizedError, Equatable {
             return stage == "idle"
                 ? L("服务器长时间未返回新内容，连接已中断，请重试")
                 : L("服务器长时间无响应，请稍后重试")
+        case .invalidResponse:
+            return L("接口返回的数据格式不兼容，请检查模型和接口地址")
         case .invalidURL:
             return L("接口地址无效，请检查设置")
         case .insecureURL:
@@ -52,20 +55,23 @@ enum TranslationError: LocalizedError, Equatable {
             return code >= 500
         case .truncatedStream, .watchdogTimeout:
             return true
-        case .emptyKey, .emptyResponse, .invalidURL, .insecureURL:
+        case .emptyKey, .emptyResponse, .invalidResponse, .invalidURL, .insecureURL:
             return false
         }
     }
 }
 
 enum TranslationService {
+    private static let maxSSELineBytes = 256 * 1024
+    private static let redirectDelegate = RedirectPolicyDelegate()
     private static let productionSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         // A stream may legitimately take a while, but it should never be allowed to
         // hang for URLSession's default multi-day resource timeout.
         config.timeoutIntervalForResource = 300
-        return URLSession(configuration: config)
+        config.httpShouldSetCookies = false
+        return URLSession(configuration: config, delegate: redirectDelegate, delegateQueue: nil)
     }()
 
     /// The session every request goes through. Tests swap in a mock-backed session
@@ -92,14 +98,8 @@ enum TranslationService {
     /// Builds the OpenAI-compatible chat-completions endpoint from the user's base URL.
     /// Kept internal so the URL normalization and security rules can be unit-tested.
     static func endpoint(for config: APIConfig) throws -> URL {
-        var raw = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = normalizedBaseURLString(config.baseURL)
         guard !raw.isEmpty else { throw TranslationError.invalidURL }
-        if !raw.contains("://") {
-            // A scheme-less loopback host is almost always a local HTTP server
-            // (Ollama-style); defaulting it to https would make "localhost:11434/v1"
-            // fail with a confusing TLS error. Remote hosts keep the https default.
-            raw = (Self.looksLoopback(raw) ? "http://" : "https://") + raw
-        }
 
         guard var components = URLComponents(string: raw),
               let scheme = components.scheme?.lowercased(),
@@ -132,6 +132,26 @@ enum TranslationService {
         components.path = (path == "/" ? "" : path) + completionsPath
         guard let url = components.url else { throw TranslationError.invalidURL }
         return url
+    }
+
+    /// Adds a scheme and fixes the bracket syntax required by IPv6 URL literals. Keeping
+    /// this normalization shared with APIConfig.displayHost prevents a local endpoint
+    /// from being treated as remote merely because the two call sites parsed it differently.
+    static func normalizedBaseURLString(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("://") else { return trimmed }
+        if trimmed.hasPrefix("::1") {
+            return "http://[::1]" + String(trimmed.dropFirst(3))
+        }
+        // A scheme-less loopback host is almost always a local HTTP server
+        // (Ollama-style); remote hosts keep the https default.
+        return (Self.looksLoopback(trimmed) ? "http://" : "https://") + trimmed
+    }
+
+    /// Applies the same redirect policy used by the production URLSession. Kept internal
+    /// so tests can prove that a cross-origin redirect cannot carry the user's key or text.
+    static func redirectedRequest(original: URLRequest, redirected: URLRequest) -> URLRequest? {
+        RedirectPolicyDelegate.request(original: original, redirected: redirected)
     }
 
     /// True when a scheme-less base URL names a local host: the common ways to write
@@ -331,28 +351,62 @@ enum TranslationService {
                     let decoder = JSONDecoder()
                     var sawDone = false
                     var sawFinish = false
-                    for try await rawLine in bytes.lines {
-                        try Task.checkCancellation()
+                    var sawDataPayload = false
+                    var sawDecodedPayload = false
+                    var malformedPayloadCount = 0
+                    var lineData = Data()
+                    func processLine(_ rawLine: String) throws -> Bool {
                         let line = rawLine.trimmingCharacters(in: .whitespaces)
-                        guard line.hasPrefix("data:") else { continue }
+                        guard line.hasPrefix("data:") else { return false }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if payload == "[DONE]" {
                             sawDone = true
-                            break
+                            return true
                         }
-                        guard let data = payload.data(using: .utf8),
-                              let chunk = try? decoder.decode(StreamChunk.self, from: data)
-                        else { continue }
+                        sawDataPayload = true
+                        guard let data = payload.data(using: .utf8) else {
+                            malformedPayloadCount += 1
+                            return false
+                        }
+                        let chunk: StreamChunk
+                        do {
+                            chunk = try decoder.decode(StreamChunk.self, from: data)
+                        } catch {
+                            malformedPayloadCount += 1
+                            return false
+                        }
+                        guard !chunk.choices.isEmpty else {
+                            malformedPayloadCount += 1
+                            return false
+                        }
+                        sawDecodedPayload = true
                         // Some OpenAI-compatible gateways close the connection cleanly
                         // right after the finishing chunk instead of sending `[DONE]`.
                         // A non-null finish_reason is just as valid a completion signal.
                         if let reason = chunk.choices.first?.finishReason, !reason.isEmpty {
                             sawFinish = true
                         }
-                        guard let piece = chunk.choices.first?.delta.content, !piece.isEmpty else { continue }
+                        guard let piece = chunk.choices.first?.delta?.content, !piece.isEmpty else { return false }
                         gotData.withLock { $0 = true }
                         lastChunkAt.withLock { $0 = Date() }
                         continuation.yield(piece)
+                        return false
+                    }
+
+                    for try await byte in bytes {
+                        try Task.checkCancellation()
+                        if byte == 0x0A {
+                            if try processLine(String(decoding: lineData, as: UTF8.self)) { break }
+                            lineData.removeAll(keepingCapacity: true)
+                        } else {
+                            lineData.append(byte)
+                            guard lineData.count <= Self.maxSSELineBytes else {
+                                throw TranslationError.invalidResponse
+                            }
+                        }
+                    }
+                    if !sawDone, !lineData.isEmpty {
+                        _ = try processLine(String(decoding: lineData, as: UTF8.self))
                     }
                     // A clean close without [DONE] or a finish_reason means the connection
                     // ended before the result did (some local gateways drop the stream
@@ -360,6 +414,13 @@ enum TranslationService {
                     // the caller's mid-stream failure path already discards partial
                     // output, so this follows the same contract.
                     guard sawDone || sawFinish else { throw TranslationError.truncatedStream }
+                    // A server that sent only undecodable data is speaking an incompatible
+                    // protocol, not returning an empty translation. Do not silently turn
+                    // that case into `emptyResponse` at the engine layer.
+                    if sawDataPayload && !sawDecodedPayload {
+                        Log.translation.error("stream contained \(malformedPayloadCount, privacy: .public) malformed data payload(s) (host \(config.displayHost, privacy: .public))")
+                        throw TranslationError.invalidResponse
+                    }
                     continuation.finish()
                 } catch {
                     // A watchdog-initiated cancellation (server silent for
@@ -427,6 +488,11 @@ enum TranslationService {
             Log.translation.error("connection test failed: HTTP \(http.statusCode) from \(config.displayHost, privacy: .public)")
             throw TranslationError.http(http.statusCode, parseErrorMessage(String(data: data, encoding: .utf8) ?? ""))
         }
+        guard let completion = try? JSONDecoder().decode(ConnectionResponse.self, from: data),
+              completion.choices.contains(where: { $0.message != nil || $0.finishReason != nil }) else {
+            Log.translation.error("connection test: incompatible response from \(config.displayHost, privacy: .public)")
+            throw TranslationError.invalidResponse
+        }
         Log.translation.debug("connection test OK to \(config.displayHost, privacy: .public) in \(Int(Date().timeIntervalSince(start) * 1000))ms")
         return Int(Date().timeIntervalSince(start) * 1000)
     }
@@ -454,7 +520,7 @@ enum TranslationService {
     private struct StreamChunk: Decodable {
         struct Choice: Decodable {
             struct Delta: Decodable { let content: String? }
-            let delta: Delta
+            let delta: Delta?
             let finishReason: String?
             enum CodingKeys: String, CodingKey {
                 case delta
@@ -462,5 +528,67 @@ enum TranslationService {
             }
         }
         let choices: [Choice]
+    }
+
+    private struct ConnectionResponse: Decodable {
+        let choices: [ConnectionChoice]
+    }
+
+    private struct ConnectionChoice: Decodable {
+        let message: ConnectionMessage?
+        let finishReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message
+            case finishReason = "finish_reason"
+        }
+    }
+
+    private struct ConnectionMessage: Decodable {
+        let content: String?
+    }
+}
+
+/// URLSession follows redirects by default, which would otherwise replay the POST body
+/// and Authorization header at a different host. Same-origin redirects with the same
+/// scheme are allowed; every other redirect is downgraded to a credential-free GET.
+private final class RedirectPolicyDelegate: NSObject, URLSessionTaskDelegate {
+    static func request(original: URLRequest, redirected: URLRequest) -> URLRequest? {
+        guard let originalURL = original.url, let redirectedURL = redirected.url else {
+            return nil
+        }
+
+        let sameOrigin = originalURL.scheme?.lowercased() == redirectedURL.scheme?.lowercased()
+            && originalURL.host?.lowercased() == redirectedURL.host?.lowercased()
+            && effectivePort(for: originalURL) == effectivePort(for: redirectedURL)
+        if sameOrigin {
+            return redirected
+        }
+
+        var safe = URLRequest(url: redirectedURL)
+        safe.httpMethod = "GET"
+        safe.cachePolicy = redirected.cachePolicy
+        safe.timeoutInterval = redirected.timeoutInterval
+        safe.httpShouldHandleCookies = false
+        return safe
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @Sendable @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(Self.request(original: task.currentRequest ?? request, redirected: request))
+    }
+
+    private static func effectivePort(for url: URL) -> Int? {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "tusi",
-  "version": "1.11.3",
+  "version": "1.11.4",
   "description": "A menubar translator for macOS. Type Chinese and get English; type anything else and get Chinese. The direction is detected automatically, so there is nothing to select.",
   "main": "index.js",
   "scripts": {

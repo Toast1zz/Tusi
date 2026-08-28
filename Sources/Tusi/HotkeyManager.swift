@@ -9,6 +9,7 @@ final class HotkeyManager {
     private var handlerRef: EventHandlerRef?
     /// The combo currently registered, so a failed re-registration can roll back to it.
     private var registeredCombo: KeyCombo?
+    var currentCombo: KeyCombo? { registeredCombo }
     /// The callback is `@Sendable` so it can be captured by the Carbon event handler
     /// (which fires on an arbitrary thread) and safely hop to the main actor. It is
     /// immutable after init, so capturing it in the handler is race-free.
