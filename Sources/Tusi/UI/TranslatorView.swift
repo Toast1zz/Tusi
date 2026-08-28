@@ -481,7 +481,7 @@ struct TranslatorView: View {
                     engine.cancelTranslation()
                 }
                 .transition(.opacity)
-            } else {
+            } else if !engine.input.isEmpty && engine.output.isEmpty {
                 let hasInput = !engine.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button {
                     engine.translate()

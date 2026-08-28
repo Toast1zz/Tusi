@@ -134,13 +134,16 @@ struct DirectionChip: View {
             HStack(spacing: 5) {
                 if isActive {
                     Text(sourceLabel)
+                        .lineLimit(1)
                     Image(systemName: "arrow.right")
                         .font(Theme.arrowBold)
                     Text(targetLabel)
+                        .lineLimit(1)
                 } else {
                     Image(systemName: "sparkles")
                         .font(Theme.caption2Semibold)
                     Text("自动")
+                        .lineLimit(1)
                 }
                 Image(systemName: "chevron.down")
                     .font(Theme.caption2Semibold)
@@ -148,6 +151,7 @@ struct DirectionChip: View {
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
             }
             .font(Theme.footnoteRounded)
+            .fixedSize(horizontal: true, vertical: false)
             // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
             // both "inactive, not currently the point" — they should sit at the same weight.
             // The capsule background used to paper over the mismatch; plain text doesn't.
@@ -287,12 +291,15 @@ struct CopyButton: View {
                     .font(Theme.caption2Bold)
                 Text(copied ? "已复制" : "复制")
                     .font(Theme.bodySmallSemibold)
+                    .lineLimit(1)
                 if !copied, let shortcutHint, !shortcutHint.isEmpty {
                     Text(shortcutHint)
                         .font(Theme.captionMedium)
                         .opacity(0.65)
+                        .lineLimit(1)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
