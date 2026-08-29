@@ -20,6 +20,7 @@
 "停止" = "Stop";
 "已停止，结果不完整" = "Stopped — result is incomplete";
 "结果过长，已截断，仅保留开头部分" = "Result was too long and was truncated — only the beginning is kept";
+"结果语言与目标不符，建议重试" = "Result isn’t in the target language — try again";
 "⏎ 翻译" = "⏎ Translate";
 "取消固定" = "Unpin";
 "固定面板（点击外部不关闭）" = "Pin panel (stays open when you click outside)";
@@ -30,8 +31,8 @@
 "接口地址" = "Base URL";
 "模型" = "Model";
 "高级选项" = "Advanced";
-"供应商路由（可选）" = "Provider routing (optional)";
-"仅 OpenRouter 支持，多个供应商名称用逗号分隔" = "Only supported by OpenRouter; separate multiple provider names with commas.";
+"供应商优先顺序（可选）" = "Provider preference order (optional)";
+"仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商" = "Only supported by OpenRouter; separate provider names with commas. These are tried first — if none are available, OpenRouter still falls back to another provider.";
 "隐藏" = "Hide";
 "显示" = "Show";
 "附加要求（可选）" = "Additional instructions (optional)";
@@ -144,6 +145,29 @@
 
 /* MARK: - Sound preference */
 "翻译成功音效" = "Translation Completion Sound";
+"音效音量" = "Sound volume";
+"正在使用本地模型" = "Using the local model";
+"正在使用本地模型（尚未配置，请在设置中填写）" = "Using the local model — not configured yet; fill it in under Settings";
+"正在使用本地模型 · %@" = "Using the local model · %@";
+"当前为翻译模型" = "Current translation model";
+"改回主用/备用" = "Use primary / backup instead";
+"设为翻译模型" = "Make translation model";
+"· 翻译将只使用这套，不走主用/备用或竞速" = "· Translations will use only this profile — no primary, backup or race";
+"· 还需要填好下面的接口地址和模型" = "· Fill in the base URL and model below first";
+"试听翻译成功音效" = "Preview the completion sound";
+"还可以输入 %d 字" = "%d characters left";
+"「%@」没有修饰键：绑定后在输入框里就打不出这个字符了" = "“%@” has no modifier — bind it and you can no longer type that character in the input box";
+"仍然绑定" = "Bind anyway";
+"取消" = "Cancel";
+"复制诊断" = "Copy report";
+"复制诊断信息" = "Copy diagnostic report";
+"复制不含 API Key 和原文的诊断信息" = "Copies a report with no API key and no text from your translation";
+"配置本地模型" = "Set up local model";
+"打开设置" = "Open Settings";
 "接口返回的数据格式不兼容，请检查模型和接口地址" = "The endpoint returned an incompatible response — check the model and base URL";
-"钥匙串读取失败（错误码 %d），请解锁设备后重试" = "Couldn't read the Keychain (error %d) — unlock your device and try again";
+"钥匙串读取失败（错误码 %d）" = "Couldn't read the Keychain (error %d)";
+"设备锁定时无法访问钥匙串，解锁后会自动重试" = "The Keychain can't be read while the device is locked — Tusi retries automatically once you unlock it";
+"钥匙串访问被拒绝，请在系统提示中允许 Tusi 访问钥匙串" = "Keychain access was denied — allow Tusi to access the Keychain when macOS asks";
+"应用签名已变化，钥匙串拒绝访问，请在设置中重新保存 API Key" = "The app signature changed, so the Keychain refused access — save the API key again in Settings";
+"钥匙串当前不可用，请稍后重试" = "The Keychain is unavailable right now — try again in a moment";
 "钥匙串数据损坏，请在设置中重新保存 API Key" = "The Keychain data is corrupted — save the API key again in Settings";

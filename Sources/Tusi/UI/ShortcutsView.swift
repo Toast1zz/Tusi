@@ -21,9 +21,15 @@ struct ShortcutsView: View {
                             .foregroundStyle(.orange)
                             .transition(.opacity)
                     }
+
+                    if let pending = panelState.pendingBareShortcut {
+                        bareShortcutConfirmation(pending)
+                            .transition(.opacity)
+                    }
                 }
                 .animation(Theme.stateChange, value: panelState.recordingShortcut)
                 .animation(Theme.stateChange, value: panelState.shortcutError)
+                .animation(Theme.stateChange, value: panelState.pendingBareShortcut)
             }
             .background(
                 GeometryReader { proxy in
@@ -38,6 +44,9 @@ struct ShortcutsView: View {
         .onDisappear {
             panelState.recordingShortcut = nil
             panelState.shortcutError = nil
+            // An unanswered confirmation is a no: leaving the page must not bind a key
+            // the user never agreed to.
+            panelState.pendingBareShortcut = nil
         }
     }
 
@@ -64,6 +73,47 @@ struct ShortcutsView: View {
 
             Spacer()
         }
+    }
+
+    // MARK: - Bare-key confirmation
+
+    /// The second yes for a shortcut with no modifier. Says which key and what it costs,
+    /// in that order, because the key is what the user just pressed and the cost is what
+    /// they don't yet know.
+    private func bareShortcutConfirmation(_ pending: PanelState.PendingShortcut) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(String(
+                format: L("「%@」没有修饰键：绑定后在输入框里就打不出这个字符了"),
+                pending.combo.display
+            ))
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button(L("仍然绑定")) {
+                    settings.setShortcut(pending.combo, for: pending.action)
+                    panelState.pendingBareShortcut = nil
+                }
+                .buttonStyle(.plain)
+                .font(Theme.bodySmallSemibold)
+                .foregroundStyle(Theme.accent)
+
+                Button(L("取消")) {
+                    panelState.pendingBareShortcut = nil
+                }
+                .buttonStyle(.plain)
+                .font(Theme.bodySmall)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .font(Theme.caption)
+        .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
+        )
     }
 
     // MARK: - Rows
@@ -114,6 +164,8 @@ struct ShortcutsView: View {
                     panelState.recordingShortcut = action
                 }
                 panelState.shortcutError = nil
+                // Recording again supersedes whatever was awaiting confirmation.
+                panelState.pendingBareShortcut = nil
             } label: {
                 // combo.display (e.g. "⇧⌘C") is a String, so this ternary can't rely on
                 // Text's automatic LocalizedStringKey lookup — the other branch needs L().

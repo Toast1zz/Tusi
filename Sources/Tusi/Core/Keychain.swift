@@ -9,11 +9,48 @@ enum KeychainError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .operationFailed(let status):
-            return String(format: L("钥匙串保存失败（错误码 %d）"), status)
+            return Self.message(for: status, reading: false)
         case .readFailed(let status):
-            return String(format: L("钥匙串读取失败（错误码 %d），请解锁设备后重试"), status)
+            return Self.message(for: status, reading: true)
         case .invalidData:
             return L("钥匙串数据损坏，请在设置中重新保存 API Key")
+        }
+    }
+
+    /// True while the Keychain is merely unreachable right now — the item is intact and
+    /// the same call is expected to succeed once the device is unlocked. Callers use this
+    /// to avoid presenting a recoverable state as a lost key.
+    var isTemporary: Bool {
+        switch self {
+        case .readFailed(let status), .operationFailed(let status):
+            return status == errSecInteractionNotAllowed
+        case .invalidData:
+            return false
+        }
+    }
+
+    /// One OSStatus is not one situation, and the old single sentence ("unlock your
+    /// device and try again") was wrong for most of them: a denied prompt, a missing
+    /// entitlement after a re-signing, and a locked Keychain need different actions from
+    /// the user. Only statuses with a distinct remedy get their own text; everything else
+    /// keeps the generic message with the raw code, which is what makes a bug report
+    /// actionable. The status code is the only thing surfaced — never the key.
+    private static func message(for status: OSStatus, reading: Bool) -> String {
+        switch status {
+        case errSecInteractionNotAllowed:
+            // The classic login-item-before-first-unlock case. `reloadKeysIfMissing`
+            // retries on session unlock, so this genuinely resolves itself.
+            return L("设备锁定时无法访问钥匙串，解锁后会自动重试")
+        case errSecUserCanceled, errSecAuthFailed:
+            return L("钥匙串访问被拒绝，请在系统提示中允许 Tusi 访问钥匙串")
+        case errSecMissingEntitlement, errSecInvalidOwnerEdit:
+            return L("应用签名已变化，钥匙串拒绝访问，请在设置中重新保存 API Key")
+        case errSecNotAvailable:
+            return L("钥匙串当前不可用，请稍后重试")
+        default:
+            return reading
+                ? String(format: L("钥匙串读取失败（错误码 %d）"), status)
+                : String(format: L("钥匙串保存失败（错误码 %d）"), status)
         }
     }
 }

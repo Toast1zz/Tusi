@@ -9,10 +9,13 @@ final class FloatingPanel: NSPanel {
 
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
-    // 424 was sized for the Chinese bottom bar; English tone labels (Casual/Standard/
-    // Formal vs 口语/标准/正式) measured 428.5pt of *content* alone in that row, which
-    // overflows 424 once its 16pt side margins are added. 470 clears that with room
-    // to spare in both languages.
+    // On `Theme.panelMinWidth` (470): that number covers Chinese, whose bottom bar needs
+    // 461.5pt including margins — but NOT English, which measures 523.5pt (the tone labels
+    // Casual/Standard/Formal and "Copy" are all wider than 口语/标准/正式 and 复制). An
+    // earlier note here credited 428.5pt to English; that was the Chinese figure, and it
+    // is why 470 still clipped. Rather than raise the constant for every user to suit the
+    // widest localisation, the content now reports what it needs (`PanelContentWidthKey`)
+    // and `contentMinWidth` widens the window to match, so 470 is a floor, not a promise.
 
     private let panel: FloatingPanel
     private let engine: TranslationEngine
@@ -24,6 +27,18 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var keyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
     private var desiredHeight: CGFloat = 160
+
+    /// The narrowest the content can be drawn without clipping, reported by the view via
+    /// `PanelContentWidthKey`. Distinct from `settings.panelWidth`, which is the width the
+    /// *user* chose: the effective width is the larger of the two, so a wider localisation
+    /// widens the window instead of squeezing the controls against a fixed frame.
+    private var contentMinWidth: CGFloat = Theme.panelMinWidth
+
+    /// The width the panel should actually use: the user's preference, never narrower than
+    /// the content needs, never outside the design bounds.
+    private var effectiveWidth: CGFloat {
+        min(max(settings.panelWidth, contentMinWidth), Theme.panelMaxWidth)
+    }
     private var hasShownOnce = false
 
     static func clampedPanelHeight(desired: CGFloat, visibleHeight: CGFloat) -> CGFloat {
@@ -67,6 +82,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         let root = RootView(onHeightChange: { [weak self] height in
             self?.setContentHeight(height)
+        }, onContentMinWidthChange: { [weak self] width in
+            self?.setContentMinWidth(width)
         })
         .environmentObject(engine)
         .environmentObject(settings)
@@ -150,7 +167,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func position() {
-        let width = settings.panelWidth
+        let width = effectiveWidth
 
         // Show on the screen the user is actually on (where the mouse is),
         // top-centered just below the menu bar — Spotlight-style. This stays
@@ -173,6 +190,32 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         let y = visible.maxY - 6 - height
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+    }
+
+    /// Called by SwiftUI whenever the content reports a new natural width. Widens the
+    /// panel (and raises the drag minimum) so no localisation can be clipped; never
+    /// narrows below what the user picked, and never past the design maximum.
+    private func setContentMinWidth(_ width: CGFloat) {
+        let needed = min(max(width, Theme.panelMinWidth), Theme.panelMaxWidth)
+        guard abs(needed - contentMinWidth) > 0.5 else { return }
+        contentMinWidth = needed
+        // AppKit enforces this during a live drag, so the user cannot pull the panel
+        // narrower than its own controls.
+        panel.minSize = NSSize(width: needed, height: 100)
+
+        let target = effectiveWidth
+        guard abs(target - panelState.panelWidth) > 0.5 else { return }
+        panelState.panelWidth = target
+        guard panel.isVisible else { return }
+        // Keep the top edge and re-clamp horizontally: growing a panel that sits near a
+        // screen edge must not push it off the visible area.
+        var frame = panel.frame
+        frame.origin.y = frame.maxY - frame.height
+        frame.size.width = target
+        if let visible = panel.screen?.visibleFrame {
+            frame.origin.x = min(max(frame.origin.x, visible.minX + 8), visible.maxX - target - 8)
+        }
+        panel.setFrame(frame, display: true)
     }
 
     /// Called by SwiftUI whenever the measured content height changes.
@@ -232,6 +275,7 @@ final class PanelController: NSObject, NSWindowDelegate {
                 if event.keyCode == 53 {  // Esc always cancels recording.
                     self.panelState.recordingShortcut = nil
                     self.panelState.shortcutError = nil
+                    self.panelState.pendingBareShortcut = nil
                     return nil
                 }
                 self.captureShortcut(for: action, event: event, flags: flags)
@@ -289,6 +333,16 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Whether a recorded combo would consume a character the user still needs for
+    /// typing, and therefore has to be confirmed rather than bound on the spot. Only
+    /// modifier-less letters and digits qualify: Return, Esc and the arrow keys are not
+    /// characters anyone types into the input box, and the global hotkey already refuses
+    /// bare keys outright. Static and pure so the rule can be tested without an NSEvent.
+    static func needsBareKeyConfirmation(action: ShortcutAction, modifiers: UInt, characters: String?) -> Bool {
+        guard !action.requiresModifier, modifiers == 0, let characters else { return false }
+        return characters.rangeOfCharacter(from: .alphanumerics) != nil
+    }
+
     /// Validates a recorded keystroke and, if it passes, binds it to the action. Rejections
     /// (missing modifier for the global key, or a clash with another shortcut) leave
     /// recording active and post a message for Settings to show.
@@ -320,17 +374,22 @@ final class PanelController: NSObject, NSWindowDelegate {
             return
         }
 
-        settings.setShortcut(combo, for: action)
         panelState.recordingShortcut = nil
-        // A bare letter/digit shortcut hijacks that key for typing — warn about it, but
-        // keep the binding (the defaults are all safe, and blocking would be worse).
-        if !action.requiresModifier, combo.modifiers == 0,
-           let chars = event.charactersIgnoringModifiers,
-           chars.rangeOfCharacter(from: .alphanumerics) != nil {
-            panelState.shortcutError = L("该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符")
-        } else {
-            panelState.shortcutError = nil
+        panelState.shortcutError = nil
+        // A bare letter/digit shortcut takes that character away from typing — inside
+        // the panel, the input box is exactly where it would have been typed. That is
+        // worth a second yes rather than a notice under an already-applied binding: hold
+        // it, explain it, and let the user decide (see PanelState.pendingBareShortcut).
+        if Self.needsBareKeyConfirmation(
+            action: action,
+            modifiers: combo.modifiers,
+            characters: event.charactersIgnoringModifiers
+        ) {
+            panelState.pendingBareShortcut = PanelState.PendingShortcut(action: action, combo: combo)
+            return
         }
+        panelState.pendingBareShortcut = nil
+        settings.setShortcut(combo, for: action)
     }
 
     private func installResignObserver() {
@@ -357,13 +416,15 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(
-            width: min(max(frameSize.width, Theme.panelMinWidth), Theme.panelMaxWidth),
+            // `contentMinWidth`, not `Theme.panelMinWidth`: the floor is whatever the
+            // content actually needs, so a drag can't reintroduce the clipping.
+            width: min(max(frameSize.width, contentMinWidth), Theme.panelMaxWidth),
             height: desiredHeight
         )
     }
 
     func windowDidResize(_ notification: Notification) {
-        let width = min(max(panel.frame.width, Theme.panelMinWidth), Theme.panelMaxWidth)
+        let width = min(max(panel.frame.width, contentMinWidth), Theme.panelMaxWidth)
         guard abs(width - panelState.panelWidth) > 0.5 else { return }
         // Live-updates the UI binding every tick of the drag, but does NOT persist —
         // `settings.panelWidth`'s didSet writes UserDefaults synchronously, and a drag

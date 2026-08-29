@@ -13,6 +13,9 @@ struct SettingsView: View {
     @State private var shortcutsRowHovering = false
     @State private var advancedExpandedOverride: [Int: Bool] = [:]
     @State private var extraInstructionExpandedOverride: Bool?
+    /// Debounces the audition cue while the volume slider is being dragged, so one drag
+    /// plays one sound at the level the user landed on instead of a burst per tick.
+    @State private var volumePreviewTask: Task<Void, Never>?
 
     private enum FocusedField: Hashable {
         case baseURL
@@ -146,10 +149,22 @@ struct SettingsView: View {
                 }
 
                 if let error = settings.keychainError {
-                    Text(error)
-                        .font(Theme.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(error)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Only for failures a second attempt can actually clear (locked
+                        // device, denied prompt). A corrupt item would fail identically,
+                        // so offering retry there would just teach the button to lie.
+                        if settings.keychainErrorIsRetryable {
+                            Button("重试") { settings.retryLoadKeys() }
+                                .buttonStyle(.plain)
+                                .font(Theme.bodySmallSemibold)
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    .font(Theme.caption)
+                    .foregroundStyle(.orange)
                 }
             }
 
@@ -223,6 +238,8 @@ struct SettingsView: View {
                     .font(Theme.caption)
                     .foregroundStyle(.orange)
                 }
+
+                diagnosticsRow
             }
             .background(
                 GeometryReader { proxy in
@@ -250,6 +267,8 @@ struct SettingsView: View {
             panelState.shortcutError = nil
             testTasks.values.forEach { $0.cancel() }
             testTasks.removeAll()
+            // Leaving the page mid-drag must not fire a cue into an unrelated screen.
+            volumePreviewTask?.cancel()
         }
     }
 
@@ -299,25 +318,45 @@ struct SettingsView: View {
             }
 
             if isEditingLocalSlot {
-                // No primary/backup role applies here: the only thing this slot does
-                // is answer to this one switch. No separate manual-trigger UI exists
-                // anywhere else in the panel — this toggle is the entire contract.
-                VStack(alignment: .leading, spacing: 4) {
-                    settingToggle("翻译时使用这个模型", isOn: $settings.useLocalModel)
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(Theme.caption2Medium)
-                    // Deliberately not disabled when the slot is empty: flipping the
-                    // switch is harmless either way (translate() already shows a clear
-                    // "not configured" error if fired with nothing filled in below),
-                    // and a plain Text + .onTapGesture toggle target (see
-                    // settingToggle) doesn't reliably honor `.disabled()` anyway.
-                    Text(settings.profiles[SettingsStore.localProfileIndex].isUsable
-                         ? "开启后 ⏎ 翻译只会用这个模型，不再走主用/备用或竞速；关闭后不受影响"
-                         : "开启后还需要填好下面的接口地址和模型")
-                        .font(Theme.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    if settings.useLocalModel {
+                        Label("当前为翻译模型", systemImage: "checkmark.seal.fill")
+                            .font(Theme.caption)
+                            .foregroundStyle(.tertiary)
+
+                        Text("·")
+                            .font(Theme.caption)
+                            .foregroundStyle(.quaternary)
+
+                        Button {
+                            withAnimation(Theme.stateChange) {
+                                settings.useLocalModel = false
+                            }
+                        } label: {
+                            Text("改回主用/备用")
+                                .font(Theme.caption2Medium)
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            withAnimation(Theme.stateChange) {
+                                settings.useLocalModel = true
+                            }
+                        } label: {
+                            Label("设为翻译模型", systemImage: "arrow.up.circle")
+                                .font(Theme.caption2Medium)
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+
+                        Text(settings.profiles[SettingsStore.localProfileIndex].isUsable
+                             ? "· 翻译将只使用这套，不走主用/备用或竞速"
+                             : "· 还需要填好下面的接口地址和模型")
+                            .font(Theme.caption)
+                            .foregroundStyle(.quaternary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             } else {
                 HStack(spacing: 6) {
@@ -399,29 +438,93 @@ struct SettingsView: View {
 
     // MARK: - Sound
 
-    /// The sound switch. Sound plays only for the finished translation result, so this
-    /// switch is a plain on/off for that cue. The label is tappable for accessibility,
-    /// same as the other rows. The small "试听" button next to it plays the cue even
-    /// when the switch is off, so the user can judge the sound before enabling it.
+    /// The sound switch and its volume. Sound plays only for the finished translation
+    /// result, so the switch is a plain on/off for that cue. The label is tappable for
+    /// accessibility, same as the other rows. The small "试听" button next to it plays
+    /// the cue even when the switch is off, so the user can judge the sound before
+    /// enabling it; the slider below appears once it is on.
     private var soundToggleRow: some View {
-        HStack {
-            Text("翻译成功音效")
-                .onTapGesture { settings.soundEnabled.toggle() }
+        // The volume slider follows the same "sub-item appears when the parent is on"
+        // pattern as the race toast toggle: `soundVolume` was persisted, restored and
+        // applied to SoundPlayer with no way for the user to change it, which is a
+        // setting that exists only in storage. It is revealed with the cue rather than
+        // shown always — a volume control under a muted cue has nothing to control.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("翻译成功音效")
+                    .onTapGesture { settings.soundEnabled.toggle() }
+                Button {
+                    SoundPlayer.shared.previewSuccess()
+                } label: {
+                    Image(systemName: "play.circle")
+                        .font(Theme.bodySmall)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("试听翻译成功音效")
+                .accessibilityLabel("试听翻译成功音效")
+                Spacer(minLength: 8)
+                Toggle("", isOn: $settings.soundEnabled)
+                    .labelsHidden()
+                    .accessibilityLabel("翻译成功音效")
+            }
+
+            if settings.soundEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "speaker.fill")
+                        .font(Theme.caption2)
+                        .foregroundStyle(.tertiary)
+                    Slider(value: $settings.soundVolume, in: 0...1)
+                        .controlSize(.mini)
+                        .accessibilityLabel("音效音量")
+                        // Every drag ends on a cue at the new level: judging a volume
+                        // by the number alone is impossible, and the success sound is
+                        // short enough to audition repeatedly.
+                        .onChange(of: settings.soundVolume) { _, _ in
+                            volumePreviewTask?.cancel()
+                            volumePreviewTask = Task {
+                                try? await Task.sleep(for: .milliseconds(220))
+                                guard !Task.isCancelled else { return }
+                                SoundPlayer.shared.previewSuccess()
+                            }
+                        }
+                    Image(systemName: "speaker.wave.3.fill")
+                        .font(Theme.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(Theme.stateChange, value: settings.soundEnabled)
+    }
+
+    // MARK: - Diagnostics
+
+    /// The same receipt the error box offers, reachable when nothing has failed yet —
+    /// "it translated, but wrongly" and "the panel behaves oddly" are reports too, and
+    /// they never pass through an error state. Quiet and last on the page: it is a
+    /// support affordance, not a setting.
+    private var diagnosticsRow: some View {
+        HStack(spacing: 6) {
             Button {
-                SoundPlayer.shared.previewSuccess()
+                engine.copyDiagnostics()
             } label: {
-                Image(systemName: "play.circle")
-                    .font(Theme.bodySmall)
-                    .foregroundStyle(.tertiary)
+                Label(L("复制诊断信息"), systemImage: "doc.on.doc")
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("试听翻译成功音效")
-            .accessibilityLabel("试听翻译成功音效")
-            Spacer(minLength: 8)
-            Toggle("", isOn: $settings.soundEnabled)
-                .labelsHidden()
-                .accessibilityLabel("翻译成功音效")
+            .help(L("复制不含 API Key 和原文的诊断信息"))
+
+            if engine.copied {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            }
+            Spacer(minLength: 0)
         }
+        .animation(Theme.microMotion, value: engine.copied)
     }
 
     // MARK: - Update check
@@ -568,16 +671,21 @@ struct SettingsView: View {
             .buttonStyle(.plain)
 
             if showAdvanced {
+                // "优先顺序", not "路由": the request only carries OpenRouter's
+                // `provider.order` preference list. It is not `provider.only` and does
+                // not set `allow_fallbacks: false`, so OpenRouter may still serve the
+                // request from a provider that isn't listed here. Calling it routing
+                // promised a guarantee the request never asks for.
                 labeledField(
-                    "供应商路由（可选）",
-                    hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔",
+                    "供应商优先顺序（可选）",
+                    hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商",
                     focused: focusedField == .providerOrder
                 ) {
                     TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
                         .textFieldStyle(.plain)
                         .font(Theme.bodyMonospaced)
                         .focused($focusedField, equals: .providerOrder)
-                        .accessibilityLabel("供应商路由（可选）")
+                        .accessibilityLabel("供应商优先顺序（可选）")
                 }
                 .transition(.identity)
             }

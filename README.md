@@ -5,14 +5,17 @@ A menubar translator for macOS. Type Chinese and get English; type anything else
 ## Features
 
 - Automatic direction, detected locally by script (works on mixed Chinese/Latin text, no network round-trip)
+- Explicit targets when you want them: English, Chinese, Japanese, Korean
 - Menubar panel, summoned with ⌥Space
 - BYOK — any OpenAI-compatible endpoint (DeepSeek, OpenRouter, SiliconFlow, Ollama, …)
-- Two API profiles with automatic failover
+- Three slots: primary and backup (with automatic failover), plus a separate local-model slot
+- Optional "race for fastest": ask primary and backup at once and keep whichever answers first
 - Three tone presets (casual / standard / formal)
-- Optional auto-copy to clipboard
+- Optional auto-copy to clipboard, and a bounded local history of recent translations
 - Smart quotes on output, leaving code spans and blocks untouched
-- Customizable copy shortcut
-- Streaming output; adapts to light/dark; Liquid Glass on macOS 26+
+- Every shortcut is rebindable
+- The result appears complete, in one step — no token-by-token flicker, and local and remote
+  models behave identically. Adapts to light/dark; Liquid Glass on macOS 26+
 
 ## Requirements
 
@@ -35,9 +38,14 @@ Open Settings (⌘,) and fill in a profile:
 - Base URL, e.g. `https://api.deepseek.com` or `https://openrouter.ai/api/v1`
 - Model, e.g. `deepseek-chat`
 - API key
-- Provider routing (optional) — OpenRouter's `provider.order`, e.g. `novita`
+- Provider preference order (optional) — OpenRouter's `provider.order`, e.g. `novita`. It is a
+  preference, not a restriction: OpenRouter may still fall back to a provider you did not list.
 
-There are two profiles, primary and backup. With failover enabled, a primary request that fails before producing any output is retried on the backup. API keys are stored in the Keychain, not on disk, and each profile has a "test connection" button. One note on launch-at-login: before macOS completes its first unlock after boot, the Keychain is not yet accessible, so a login-item launch that early may briefly see no API key — it recovers automatically once the system is unlocked.
+There are two remote profiles, primary and backup, plus a third slot for a local model
+(Ollama, LM Studio, llama.cpp-server). The local slot is a standing mode: while it is on,
+every translation goes to it alone — no failover and no race.
+
+With failover enabled, a primary request that fails before producing any output is retried on the backup. API keys are stored in the Keychain, not on disk, and each profile has a "test connection" button. One note on launch-at-login: before macOS completes its first unlock after boot, the Keychain is not yet accessible, so a login-item launch that early may briefly see no API key — it recovers automatically once the system is unlocked.
 
 ## Shortcuts
 
@@ -46,9 +54,11 @@ There are two profiles, primary and backup. With failover enabled, a primary req
 | Show / hide panel | ⌥Space |
 | Translate | ⏎ |
 | Newline | ⇧⏎ or ⌘⏎ |
-| Copy result | ⇧⌘C (customizable) |
+| Copy result | ⇧⌘C |
 | Settings | ⌘, |
 | Back / close | Esc |
+
+Every row above is rebindable under Settings → Shortcuts.
 
 ## Build
 

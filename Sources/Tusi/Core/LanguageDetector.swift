@@ -205,6 +205,71 @@ enum LanguageDetector {
         return (detected, shortLabel(for: language))
     }
 
+    /// Sanity-checks a finished translation against the language it was supposed to land
+    /// in. Catches the failure where the model treats the source text as something to
+    /// answer rather than translate and replies in the wrong language entirely — the
+    /// system prompt forbids that, but prompt rules are not a guarantee.
+    ///
+    /// Deliberately one-sided: it only reports a mismatch on decisive *script* evidence,
+    /// never on `detect`'s best guess. `detect` defaults to Chinese for anything it can't
+    /// name, reads kanji-only Japanese as Chinese, and reads Latin-heavy Chinese as
+    /// English — running a result through it and comparing for equality would flag
+    /// correct translations. Every rule below therefore needs a script that the target
+    /// language essentially never writes in, and short results are not judged at all.
+    /// A false negative just leaves today's behaviour; a false positive would tell the
+    /// user a good translation is broken.
+    static func looksLikeWrongLanguage(_ output: String, target: TranslationLanguage) -> Bool {
+        let sample = String(output.prefix(400)).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Below this there isn't enough signal: "OK." is a plausible result in almost
+        // any target language.
+        guard sample.count >= 6 else { return false }
+
+        // Letters only — CJK punctuation is excluded here (unlike `isHan`, which counts
+        // it as meaning-bearing for direction detection) so a stray "。" in an otherwise
+        // Latin result can't build toward a mismatch.
+        let han = sample.unicodeScalars.filter(isHanLetter).count
+        let kana = sample.unicodeScalars.filter(isKana).count
+        let hangul = sample.unicodeScalars.filter(isHangul).count
+        let cjk = han + kana + hangul
+        let latin = latinWordCount(in: sample)
+
+        switch expectedScript(for: target) {
+        case .nonCJK:
+            // A Latin/Cyrillic/Arabic/... target that came back mostly CJK. The 4-char
+            // floor keeps a quoted loanword ("the 中国 market") from tripping it.
+            return cjk >= 4 && cjk > latin
+        case .han:
+            return han == 0 && (kana + hangul > 0 || latin >= 3)
+        case .japanese:
+            // Kanji-only Japanese is legitimate, so han > 0 is never a mismatch here;
+            // only an all-Latin or Hangul result is.
+            return kana == 0 && han == 0 && (hangul > 0 || latin >= 3)
+        case .hangul:
+            return hangul == 0 && (han >= 4 || latin >= 3)
+        }
+    }
+
+    /// The script a finished translation in `target` must plausibly contain.
+    private enum ExpectedScript {
+        case han
+        case japanese
+        case hangul
+        case nonCJK
+    }
+
+    private static func expectedScript(for target: TranslationLanguage) -> ExpectedScript {
+        if target == .chinese { return .han }
+        if target == .japanese { return .japanese }
+        if target == .korean { return .hangul }
+        // Targets built by `fromNLLanguage` aren't the preset instances, so fall back to
+        // the English language name baked into `apiName`.
+        let name = target.apiName.lowercased()
+        if name.contains("chinese") { return .han }
+        if name.contains("japanese") { return .japanese }
+        if name.contains("korean") { return .hangul }
+        return .nonCJK
+    }
+
     // MARK: - Script tests
 
     private static func isHan(_ scalar: Unicode.Scalar) -> Bool {
@@ -212,6 +277,20 @@ enum LanguageDetector {
         case 0x2E80...0x2EFF,       // CJK radicals
              0x3000...0x303F,       // CJK punctuation
              0x3400...0x4DBF,       // CJK Unified Extension A
+             0x4E00...0x9FFF,       // CJK Unified
+             0xF900...0xFAFF,       // CJK Compatibility
+             0x20000...0x2FFFF:     // CJK Extension B–F
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// `isHan` minus the punctuation and radical blocks: used where the question is
+    /// "is this written in Han characters", not "how much meaning is here".
+    private static func isHanLetter(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3400...0x4DBF,       // CJK Unified Extension A
              0x4E00...0x9FFF,       // CJK Unified
              0xF900...0xFAFF,       // CJK Compatibility
              0x20000...0x2FFFF:     // CJK Extension B–F

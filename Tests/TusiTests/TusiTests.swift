@@ -17,6 +17,98 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(LanguageDetector.detect("This PR needs a rebase").source, .english)
     }
 
+    /// The detector's known trade-offs, pinned deliberately rather than left to be
+    /// rediscovered as bugs (audit UX-013). Each of these is a case where a cheap
+    /// script-based rule loses to an expensive one, and the product answer is the manual
+    /// direction flip in the bottom bar, not a heavier detector on every keystroke. If a
+    /// future change makes one of these smarter, the assertion — not the behaviour — is
+    /// what needs revisiting.
+    func testDetectorTradeOffsAreDeliberateAndPinned() {
+        // 1. Kanji-only Japanese has no kana to give it away, so it reads as Chinese.
+        XCTAssertEqual(LanguageDetector.detect("在庫確認").source, .chinese)
+        // One kana character is enough to settle it correctly.
+        XCTAssertEqual(LanguageDetector.detect("在庫を確認する").source, .japanese)
+
+        // 2. Only the first 400 characters are sampled: a long document that opens in
+        // one language and continues in another is judged by its opening.
+        let longEnglishOpening = String(repeating: "the quick brown fox jumps over it. ", count: 20)
+        XCTAssertEqual(LanguageDetector.detect(longEnglishOpening + "接下来的正文全部是中文内容。").source, .english)
+
+        // 3. Nothing to go on (empty, or punctuation the recognizer can't name) falls
+        // back to Chinese — the app's own base language, and the direction users flip
+        // from most often.
+        XCTAssertEqual(LanguageDetector.detect("").source, .chinese)
+        XCTAssertEqual(LanguageDetector.detect("   ").source, .chinese)
+
+        // 4. A tie between Han characters and Latin words resolves to "not Chinese":
+        // an English sentence with a loanword is more common than the reverse.
+        XCTAssertEqual(LanguageDetector.detect("I love 中国").source, .english)
+    }
+
+    func testWrongLanguageCheckCatchesAnsweredInsteadOfTranslated() {
+        // The observed failure: Chinese input, English target, and the model replied to
+        // the remark in Chinese instead of translating it.
+        XCTAssertTrue(LanguageDetector.looksLikeWrongLanguage("是的，感谢您的反馈。", target: .english))
+        // The mirror case: English reply where Chinese was asked for.
+        XCTAssertTrue(LanguageDetector.looksLikeWrongLanguage("Yes, thank you for your feedback.", target: .chinese))
+        XCTAssertTrue(LanguageDetector.looksLikeWrongLanguage("Yes, thank you for that.", target: .japanese))
+        XCTAssertTrue(LanguageDetector.looksLikeWrongLanguage("Yes, thank you for that.", target: .korean))
+    }
+
+    func testWrongLanguageCheckDoesNotFlagCorrectTranslations() {
+        // False positives are the expensive direction: each one tells the user a good
+        // translation is broken and costs them a retry.
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("Yes, thank you for your feedback.", target: .english))
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("是的，感谢您的反馈。", target: .chinese))
+        // Mixed script in both directions — the everyday case for this app.
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("The 中国 market is huge this year", target: .english))
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("这个 PR 需要 rebase 一下", target: .chinese))
+        // Kanji-only Japanese has no kana and reads as Chinese to `detect` — exactly the
+        // case a naive detect-and-compare check would flag.
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("東京都渋谷区神南一丁目", target: .japanese))
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("안녕하세요, 반갑습니다", target: .korean))
+        // Too short to judge: plausible in any target language.
+        XCTAssertFalse(LanguageDetector.looksLikeWrongLanguage("OK.", target: .chinese))
+    }
+
+    func testWrongLanguageResultIsFlaggedAndNotAutoCopied() async throws {
+        // End-to-end: the result is kept and shown (the check is a heuristic), but it is
+        // flagged and must not reach the pasteboard as if it were a clean translation.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = true
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("是的，感谢您的反馈。")
+                continuation.finish()
+            }
+        }
+        engine.input = "真的吗，你们的回答好官方。"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.target, .english, "Chinese input must target English")
+        XCTAssertEqual(engine.output, "是的，感谢您的反馈。", "the text is kept, not discarded")
+        XCTAssertTrue(engine.outputLanguageMismatch)
+        XCTAssertFalse(engine.copied, "a wrong-language result must not be auto-copied")
+    }
+
+    func testCorrectTranslationIsNotFlaggedAsWrongLanguage() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield("Really? Your answer sounds so official.")
+                continuation.finish()
+            }
+        }
+        engine.input = "真的吗，你们的回答好官方。"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertFalse(engine.outputLanguageMismatch)
+    }
+
     func testSystemPromptEnforcesTranslationOverAnswering() {
         let prompt = TranslationService.systemPrompt(for: .chinese, tone: .standard)
         // The chat channel defaults to answering user questions; the prompt must
@@ -1842,10 +1934,259 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 100)
     }
 
+    func testBareLetterShortcutsRequireConfirmationButFunctionKeysDoNot() {
+        // A plain letter or digit is a character the user still has to be able to type
+        // into the panel, so binding it needs a second yes.
+        XCTAssertTrue(PanelController.needsBareKeyConfirmation(action: .copy, modifiers: 0, characters: "c"))
+        XCTAssertTrue(PanelController.needsBareKeyConfirmation(action: .translate, modifiers: 0, characters: "7"))
+        // Return and Esc are not characters anyone types into the input box — the
+        // defaults themselves are bare Return and bare Esc, and must not be gated.
+        XCTAssertFalse(PanelController.needsBareKeyConfirmation(action: .translate, modifiers: 0, characters: "\r"))
+        XCTAssertFalse(PanelController.needsBareKeyConfirmation(action: .close, modifiers: 0, characters: "\u{1B}"))
+        // With a modifier the character stays typable.
+        XCTAssertFalse(PanelController.needsBareKeyConfirmation(
+            action: .copy,
+            modifiers: NSEvent.ModifierFlags.command.rawValue,
+            characters: "c"
+        ))
+        // The global hotkey rejects modifier-less combos before this point.
+        XCTAssertFalse(PanelController.needsBareKeyConfirmation(action: .summon, modifiers: 0, characters: "c"))
+    }
+
     func testKeychainRejectsCorruptKeyData() {
         XCTAssertThrowsError(try Keychain.decodeKeys(Data("not-json".utf8))) { error in
             XCTAssertEqual(error as? KeychainError, .invalidData)
         }
+    }
+
+    // MARK: - Localization coverage
+
+    /// Every Chinese string the UI can show must have an English translation. This is
+    /// the regression guard for the audit's UX-010: the base language is Chinese, so a
+    /// new feature ships working — and silently mixes Chinese into an English system —
+    /// until someone remembers the strings file. A test is the only thing that
+    /// remembers. It reads the sources from disk rather than the bundle because the
+    /// literals, not the runtime lookups, are what goes stale.
+    func testEveryChineseUIStringHasAnEnglishTranslation() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // TusiTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+        let sources = root.appendingPathComponent("Sources/Tusi")
+        let stringsURL = sources.appendingPathComponent("Resources/en.lproj/Localizable.strings")
+        guard FileManager.default.fileExists(atPath: stringsURL.path) else {
+            throw XCTSkip("source tree not available in this run")
+        }
+
+        let translated = Self.translationKeys(in: try String(contentsOf: stringsURL, encoding: .utf8))
+        XCTAssertGreaterThan(translated.count, 100, "the strings file parsed as nearly empty — the parser, not the app, is broken")
+
+        // Not UI copy: preview scenarios are sample text for screenshot runs, and the
+        // language file's Han literals are endonyms and prompt-side language names,
+        // which are the same in any interface language.
+        let skippedFiles: Set<String> = ["PreviewSupport.swift", "LanguageDetector.swift"]
+        // Endonyms and direction labels: "中" reads as "中" in an English UI too.
+        let notTranslatable: Set<String> = ["中", "中文", "日", "日本語", "한국어"]
+
+        var missing: [(literal: String, file: String)] = []
+        let enumerator = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension == "swift", !skippedFiles.contains(url.lastPathComponent) else { continue }
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            for literal in Self.chineseStringLiterals(in: contents) {
+                guard !notTranslatable.contains(literal), !translated.contains(literal) else { continue }
+                missing.append((literal, url.lastPathComponent))
+            }
+        }
+
+        XCTAssertTrue(
+            missing.isEmpty,
+            "missing en.lproj translations:\n" + missing.map { "  \($0.file): \($0.literal)" }.joined(separator: "\n")
+        )
+    }
+
+    /// Keys of `"key" = "value";` lines.
+    private static func translationKeys(in strings: String) -> Set<String> {
+        var keys: Set<String> = []
+        for line in strings.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"") else { continue }
+            let parts = trimmed.components(separatedBy: "\" = \"")
+            guard parts.count == 2 else { continue }
+            keys.insert(String(parts[0].dropFirst()))
+        }
+        return keys
+    }
+
+    /// String literals containing Han characters, ignoring comment lines (which carry
+    /// the codebase's Chinese prose and are not shown to anyone).
+    private static func chineseStringLiterals(in source: String) -> [String] {
+        var found: [String] = []
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//"), !trimmed.hasPrefix("*") else { continue }
+            var current: String?
+            var escaped = false
+            for character in line {
+                if var literal = current {
+                    if escaped {
+                        literal.append(character)
+                        current = literal
+                        escaped = false
+                        continue
+                    }
+                    if character == "\\" {
+                        escaped = true
+                        continue
+                    }
+                    if character == "\"" {
+                        if literal.contains(where: { $0.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } }) {
+                            found.append(literal)
+                        }
+                        current = nil
+                        continue
+                    }
+                    literal.append(character)
+                    current = literal
+                } else if character == "\"" {
+                    current = ""
+                }
+            }
+        }
+        return found
+    }
+
+    // MARK: - Failure classification and diagnostics
+
+    func testFailureKindClassifiesByWhatTheUserCanDoAboutIt() {
+        XCTAssertEqual(FailureKind.classify(TranslationError.http(401, "")), .credentials)
+        XCTAssertEqual(FailureKind.classify(TranslationError.http(402, "")), .credentials)
+        XCTAssertEqual(FailureKind.classify(TranslationError.http(429, "")), .transient)
+        XCTAssertEqual(FailureKind.classify(TranslationError.http(503, "")), .transient)
+        XCTAssertEqual(FailureKind.classify(TranslationError.insecureURL), .configuration)
+        XCTAssertEqual(FailureKind.classify(TranslationError.invalidResponse), .configuration)
+        XCTAssertEqual(FailureKind.classify(TranslationError.emptyKey), .notConfigured)
+        XCTAssertEqual(FailureKind.classify(TranslationError.watchdogTimeout(stage: "idle")), .transient)
+        XCTAssertEqual(FailureKind.classify(URLError(.networkConnectionLost)), .transient)
+
+        // Only the kinds a second identical request could actually resolve.
+        XCTAssertTrue(FailureKind.transient.isWorthRetrying)
+        XCTAssertTrue(FailureKind.unknown.isWorthRetrying)
+        XCTAssertFalse(FailureKind.credentials.isWorthRetrying)
+        XCTAssertFalse(FailureKind.notConfigured.isWorthRetrying)
+        XCTAssertFalse(FailureKind.localModelNotConfigured.isWorthRetrying)
+    }
+
+    func testUnconfiguredFailuresAreMarkedAsConfigurationProblems() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings)
+        engine.input = "hi"
+        engine.translate()
+        XCTAssertEqual(engine.failureKind, .notConfigured)
+
+        settings.useLocalModel = true
+        engine.input = "hi there"
+        engine.translate()
+        XCTAssertEqual(engine.failureKind, .localModelNotConfigured)
+    }
+
+    func testBadCredentialsFailureIsClassifiedAndClearedOnSuccess() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+
+        var shouldFail = true
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                if shouldFail {
+                    continuation.finish(throwing: TranslationError.http(401, "bad key"))
+                } else {
+                    continuation.yield("Hello")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "你好"
+        engine.translate()
+        try await waitUntilFailed(engine)
+        XCTAssertEqual(engine.failureKind, .credentials)
+
+        shouldFail = false
+        engine.input = "你好啊"
+        engine.translate()
+        try await waitUntilDone(engine)
+        // A success must not leave the previous failure's action button armed.
+        XCTAssertNil(engine.failureKind)
+    }
+
+    func testDiagnosticsReportCarriesStateButNeitherKeyNorText() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(
+            baseURL: "https://api.example.com/v1/secret-path",
+            apiKey: "sk-do-not-leak",
+            model: "m1"
+        )
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+            AsyncThrowingStream { continuation in
+                continuation.finish(throwing: TranslationError.http(401, "bad key"))
+            }
+        }
+        engine.input = "这是一段不该出现在诊断里的原文"
+        engine.translate()
+        try await waitUntilFailed(engine)
+
+        let report = engine.diagnosticsReport()
+        XCTAssertFalse(report.contains("sk-do-not-leak"), report)
+        XCTAssertFalse(report.contains("这是一段不该出现在诊断里的原文"), report)
+        // The path may hold a private token; only the host is reportable.
+        XCTAssertFalse(report.contains("secret-path"), report)
+        XCTAssertTrue(report.contains("api.example.com"), report)
+        XCTAssertTrue(report.contains("credentials"), report)
+    }
+
+    func testDiagnosticsFlattensAndClampsProviderMessages() {
+        let noisy = String(repeating: "a", count: 400) + "\nsecond line"
+        let report = Diagnostics.text(for: Diagnostics.Report(
+            appVersion: "1.0",
+            systemVersion: "14.0",
+            primaryHost: "api.example.com",
+            primaryModel: "m",
+            backupHost: "",
+            localHost: "",
+            usingLocalModel: false,
+            raceEnabled: false,
+            multiLanguageMode: false,
+            target: "English",
+            failure: noisy,
+            failureKind: .unknown
+        ))
+        let errorLine = report.split(separator: "\n").first { $0.hasPrefix("error:") }
+        XCTAssertNotNil(errorLine)
+        XCTAssertLessThan(errorLine?.count ?? .max, 320)
+        XCTAssertEqual(report.split(separator: "\n").filter { $0.hasPrefix("error:") }.count, 1)
+    }
+
+    func testKeychainErrorsExplainTheirOwnSituation() {
+        // A locked Keychain, a denied prompt and a signature change are different
+        // problems with different remedies; they must not share one sentence.
+        let locked = KeychainError.readFailed(errSecInteractionNotAllowed).errorDescription ?? ""
+        let denied = KeychainError.readFailed(errSecUserCanceled).errorDescription ?? ""
+        let resigned = KeychainError.operationFailed(errSecMissingEntitlement).errorDescription ?? ""
+        let unknown = KeychainError.readFailed(-99_999).errorDescription ?? ""
+
+        XCTAssertNotEqual(locked, denied)
+        XCTAssertNotEqual(denied, resigned)
+        XCTAssertNotEqual(resigned, unknown)
+        // An unclassified status still has to carry its code, or a bug report says nothing.
+        XCTAssertTrue(unknown.contains("99999") || unknown.contains("-99999"))
+    }
+
+    func testOnlyLockedKeychainCountsAsTemporary() {
+        XCTAssertTrue(KeychainError.readFailed(errSecInteractionNotAllowed).isTemporary)
+        XCTAssertFalse(KeychainError.readFailed(errSecUserCanceled).isTemporary)
+        XCTAssertFalse(KeychainError.operationFailed(errSecMissingEntitlement).isTemporary)
+        XCTAssertFalse(KeychainError.invalidData.isTemporary)
     }
 
     func testSettingsHostingReportsNaturalHeightBeyondConstrainedViewport() {

@@ -1,5 +1,8 @@
 # Tusi 项目完整审计报告
 
+> **状态：已过期，仅供历史参考。** 本文基于 2026-08-18 的 v1.8.0，其中列出的问题已全部修复或被后续审计取代。
+> 当前基线是 [TUSI_COMPLETE_CODE_AUDIT_2026-08-27.md](TUSI_COMPLETE_CODE_AUDIT_2026-08-27.md)，执行清单是 [TUSI_AUDIT_ACTION_PLAN.md](TUSI_AUDIT_ACTION_PLAN.md)。
+
 > 审计日期：2026-08-18　基线：v1.8.0 (commit 4a78899)
 > 项目：macOS 菜单栏翻译工具，Swift + SwiftUI + AppKit，纯 SwiftPM，无第三方依赖（除 uisfx 音频资源）
 

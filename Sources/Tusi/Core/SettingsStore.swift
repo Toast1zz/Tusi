@@ -86,6 +86,11 @@ final class SettingsStore: ObservableObject {
     /// Set when a Keychain write failed. The pending snapshot is retained so a later
     /// edit or application shutdown can retry it instead of silently losing the key.
     @Published private(set) var keychainError: String?
+    /// True when the failure behind `keychainError` is worth trying again — the device
+    /// was locked, or the access prompt was denied. Corrupt data is not: reading it a
+    /// second time returns the same corrupt bytes, and the only way out is re-entering
+    /// the key. Drives whether the settings page offers a retry.
+    @Published private(set) var keychainErrorIsRetryable = false
     /// True briefly after API keys land in the Keychain. The save is debounced
     /// (250ms) and otherwise silent — a one-time confirmation tells the user the
     /// typed key was actually persisted, instead of leaving them guessing.
@@ -254,6 +259,7 @@ final class SettingsStore: ObservableObject {
             let loaded = Self.loadProfiles(defaults: defaults)
             profiles = loaded.profiles
             keychainError = loaded.keychainError
+            keychainErrorIsRetryable = loaded.retryable
         }
 
         // Sync the persisted sound preferences into the shared player. Must come after
@@ -321,7 +327,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private static func loadProfiles(defaults: UserDefaults) -> (profiles: [APIProfile], keychainError: String?) {
+    private static func loadProfiles(defaults: UserDefaults) -> (profiles: [APIProfile], keychainError: String?, retryable: Bool) {
         // Pre-slot installs kept the primary's URL and model under unsuffixed keys.
         if !defaults.bool(forKey: "didMigrateProfiles") {
             defaults.set(true, forKey: "didMigrateProfiles")
@@ -336,13 +342,16 @@ final class SettingsStore: ObservableObject {
         // One read for both slots — see Keychain for why that matters.
         let keys: [Int: String]
         let keychainError: String?
+        let retryable: Bool
         do {
             keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
             keychainError = nil
+            retryable = false
         } catch {
             Log.keychain.error("keychain load failed: \(error.localizedDescription, privacy: .public)")
             keys = [:]
             keychainError = error.localizedDescription
+            retryable = Self.isRetryableKeychainFailure(error)
         }
 
         let profiles = (0...localProfileIndex).map { index in
@@ -353,7 +362,23 @@ final class SettingsStore: ObservableObject {
                 providerOrder: defaults.string(forKey: "providerOrder.\(index)") ?? ""
             )
         }
-        return (profiles, keychainError)
+        return (profiles, keychainError, retryable)
+    }
+
+    /// A locked Keychain resolves itself on unlock, and a denied prompt can be granted on
+    /// the next attempt; both are worth a retry button. Anything else (corrupt payload,
+    /// unclassified OSStatus) would just fail the same way.
+    private static func isRetryableKeychainFailure(_ error: Error) -> Bool {
+        guard let keychainError = error as? KeychainError else { return false }
+        switch keychainError {
+        case .invalidData:
+            return false
+        case .readFailed(let status), .operationFailed(let status):
+            return keychainError.isTemporary
+                || status == errSecUserCanceled
+                || status == errSecAuthFailed
+                || status == errSecNotAvailable
+        }
     }
 
     private func persistProfiles(previous: [APIProfile]) {
@@ -425,9 +450,11 @@ final class SettingsStore: ObservableObject {
             try Keychain.saveKeys(keys)
             pendingKeychainKeys = nil
             keychainError = nil
+            keychainErrorIsRetryable = false
             flashKeychainSaved()
         } catch {
             keychainError = error.localizedDescription
+            keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
             Log.keychain.error("keychain save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -450,14 +477,29 @@ final class SettingsStore: ObservableObject {
     /// touches the Keychain.
     func reloadKeysIfMissing() {
         guard !isPreview, !isConfigured else { return }
+        retryLoadKeys()
+    }
+
+    /// Reads the Keychain again and backfills any missing keys. Separate from
+    /// `reloadKeysIfMissing` so the settings page can offer an explicit retry after a
+    /// locked or denied read — that button has to work even once one slot happens to be
+    /// filled in, which is exactly the case `reloadKeysIfMissing` skips.
+    func retryLoadKeys() {
+        guard !isPreview else { return }
         let keys: [Int: String]
         do {
             keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
         } catch {
             keychainError = error.localizedDescription
+            keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
             Log.keychain.error("keychain reload failed: \(error.localizedDescription, privacy: .public)")
             return
         }
+        // The read went through: whatever the earlier failure was, it no longer
+        // describes reality, and leaving the notice up would report a locked Keychain
+        // to a user who has since unlocked it.
+        keychainError = nil
+        keychainErrorIsRetryable = false
         guard !keys.isEmpty else { return }
         for (index, profile) in profiles.enumerated() {
             // Only backfill remote profiles: a loopback (local) profile has no key by

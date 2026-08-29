@@ -244,7 +244,12 @@ struct TranslatorView: View {
                     .lineSpacing(3)
                     .scrollContentBackground(.hidden)
                     .scrollDisabled(height <= maxInputHeight)
-                    .scrollIndicators(.never)
+                    // System overlay scroller, not hidden: with the editor capped at
+                    // five lines, a longer draft has nothing else saying there is more
+                    // text above or below. macOS only draws the scroller while the view
+                    // actually scrolls, so a short input stays exactly as clean as it
+                    // was — this costs nothing until there is something to discover.
+                    .scrollIndicators(.automatic)
                     .focused($inputFocused)
                     .frame(height: min(max(height, 24), maxInputHeight))
             }
@@ -257,17 +262,60 @@ struct TranslatorView: View {
                 .font(Theme.caption)
                 .foregroundStyle(.orange)
                 .transition(.opacity)
+            } else if engine.input.count >= Self.inputCountdownThreshold {
+                // A count only appears near the ceiling. Showing one from the first
+                // character would put a number under an empty box for every short
+                // sentence — which is every normal use — to warn about a limit almost
+                // nobody reaches. Arriving late is the point: it is a warning, not a
+                // meter, and it gives the user a chance to split the text *before* the
+                // paste that loses its tail.
+                Text(String(
+                    format: L("还可以输入 %d 字"),
+                    max(0, TranslationEngine.maxInputCharacters - engine.input.count)
+                ))
+                .font(Theme.caption)
+                .foregroundStyle(.tertiary)
+                .transition(.opacity)
             }
         }
     }
 
     // MARK: - Result
 
+    /// The one button that can move a failed state forward. A missing configuration is
+    /// fixed in Settings, not by asking the same endpoint again; a dropped connection is
+    /// the opposite. `FailureKind` carries which case this is.
+    private var failureActionLabel: String {
+        switch engine.failureKind {
+        case .localModelNotConfigured: return L("配置本地模型")
+        case .notConfigured, .credentials, .configuration: return L("打开设置")
+        case .transient, .unknown, .none: return L("重试")
+        }
+    }
+
+    private func performFailureAction() {
+        switch engine.failureKind {
+        case .localModelNotConfigured:
+            // Land on the slot that needs filling in rather than the page's last tab.
+            panelState.settingsProfileIndex = SettingsStore.localProfileIndex
+            withAnimation(Theme.pageTransition) { panelState.showSettings = true }
+        case .notConfigured, .credentials, .configuration:
+            withAnimation(Theme.pageTransition) { panelState.showSettings = true }
+        case .transient, .unknown, .none:
+            engine.translate()
+        }
+    }
+
     @ViewBuilder
     private var resultArea: some View {
         switch engine.state {
         case .failed(let message):
-            ErrorBox(message: message) { engine.translate() }
+            ErrorBox(
+                message: message,
+                primaryLabel: failureActionLabel,
+                primaryAction: performFailureAction,
+                onCopyDiagnostics: { engine.copyDiagnostics() }
+            )
         case .translating:
             StreamingPlaceholder()
                 .padding(.vertical, 2)
@@ -295,7 +343,9 @@ struct TranslatorView: View {
                             )
                             .id("end")
                     }
-                    .scrollIndicators(.never)
+                    // Same reasoning as the input editor: a result taller than its
+                    // viewport is otherwise indistinguishable from one that ends there.
+                    .scrollIndicators(.automatic)
                     .frame(height: min(max(resultHeight, 20), maxResultHeight))
                     .trackBottomEdge($isAtBottom)
                     .onPreferenceChange(ResultHeightKey.self) { resultHeight = $0 }
@@ -308,21 +358,37 @@ struct TranslatorView: View {
 
                 // A user-stopped stream keeps its partial text, but it must not pass for
                 // a complete translation — say so right under the result.
-                if engine.interrupted {
+                // `.fixedSize(horizontal: false, vertical: true)` on every notice: the
+                // panel is a fixed width (RootView pins it to `panelWidth`), so a notice
+                // that insists on one long line pushes the whole content block wider than
+                // the window and gets it centre-clipped on both edges — input text on the
+                // left, the copy button on the right. Longer localisations must wrap.
+                if engine.outputLanguageMismatch {
+                    // Checked first: a result in the wrong language is wrong outright,
+                    // which matters more than how it ended.
+                    Label(L("结果语言与目标不符，建议重试"), systemImage: "exclamationmark.triangle.fill")
+                        .font(Theme.footnoteMedium)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                } else if engine.interrupted {
                     Label(L("已停止，结果不完整"), systemImage: "stop.circle.fill")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
                 } else if engine.outputCapped {
                     // Same honesty for an overlong result cut at the length cap.
                     Label(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
                 } else if engine.restoredFromTruncatedHistory {
                     Label(L("历史仅保留部分内容"), systemImage: "scissors")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
                 }
             }
@@ -384,7 +450,9 @@ struct TranslatorView: View {
                         }
                     }
                 }
-                .scrollIndicators(.never)
+                // A history list longer than the viewport looked exactly like a full
+                // one; the overlay scroller is the system's own answer to that.
+                .scrollIndicators(.automatic)
             }
         }
         .frame(height: historyViewportHeight)
@@ -465,7 +533,68 @@ struct TranslatorView: View {
         }
     }
 
+    /// Where the remaining-characters count starts appearing: close enough to the
+    /// ceiling that it is information, far enough that a normal paste never sees it.
+    private static let inputCountdownThreshold = TranslationEngine.maxInputCharacters - 4_000
+
+    /// The side margin every row in `body` uses. Named here because the bottom bar's
+    /// width measurement has to add it back to report a panel width.
+    private static let contentHorizontalInset: CGFloat = 16
+
+    /// Names the slot the local-model mode is pointing at. Host, not base URL: the
+    /// marker should say which machine is answering, not reprint a configuration line.
+    private var localModelTooltip: String {
+        let index = SettingsStore.localProfileIndex
+        guard settings.profiles.indices.contains(index) else { return L("正在使用本地模型") }
+        let profile = settings.profiles[index]
+        let model = profile.model.trimmingCharacters(in: .whitespaces)
+        let host = profile.config.displayHost
+        guard !model.isEmpty || !host.isEmpty else {
+            return L("正在使用本地模型（尚未配置，请在设置中填写）")
+        }
+        let detail = [model, host].filter { !$0.isEmpty }.joined(separator: " · ")
+        return String(format: L("正在使用本地模型 · %@"), detail)
+    }
+
     private var bottomBar: some View {
+        // Every control in this row is `.fixedSize(horizontal: true)`, so the row has one
+        // natural width and no way to give. In English that width ("Casual/Standard/
+        // Formal", "Copy ⇧⌘C") exceeds the 470pt minimum panel, and because RootView pins
+        // the content to `panelWidth` the whole column gets centre-clipped — the input
+        // text loses characters on the left and the copy button loses its shortcut on the
+        // right. Shed the keyboard hint instead of overflowing; it is the one piece here
+        // that is pure redundancy (the same shortcut still works, and it's in Settings).
+        ViewThatFits(in: .horizontal) {
+            bottomBarRow(showsCopyShortcut: true)
+            bottomBarRow(showsCopyShortcut: false)
+        }
+        // Report the width this row actually needs so the panel can widen to fit it,
+        // instead of the row being squeezed against a fixed panel width. Measured from an
+        // invisible unconstrained copy — the visible row is already inside the fixed frame
+        // and would only ever report the width it was given.
+        //
+        // `measuring: true` pins the copy to the row's widest configuration (the copy
+        // button, with its shortcut hint). Measuring the live row instead would report a
+        // different width per state — stop button, translate button, copy button — and the
+        // window would jump sideways every time a translation started or finished.
+        .background(
+            bottomBarRow(showsCopyShortcut: true, measuring: true)
+                .fixedSize(horizontal: true, vertical: true)
+                // The reported number is a *panel* width, so it has to include the side
+                // margins the body puts around this row — measuring the row alone would
+                // size the window 32pt too narrow and the row would still be squeezed.
+                .padding(.horizontal, Self.contentHorizontalInset)
+                .hidden()
+                .allowsHitTesting(false)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: PanelContentWidthKey.self, value: proxy.size.width)
+                    }
+                )
+        )
+    }
+
+    private func bottomBarRow(showsCopyShortcut: Bool, measuring: Bool = false) -> some View {
         HStack(spacing: 8) {
             DirectionChip(
                 sourceLabel: engine.sourceLabel,
@@ -485,9 +614,29 @@ struct TranslatorView: View {
             ToneSelector(tone: $settings.tone)
                 .help(String(format: L("翻译文风 · 当前模型：%@"), engine.activeModel))
 
+            // "Use the local model" is a standing mode, not a per-request choice: once
+            // it's on, every ⏎ goes to that one slot — no primary, no backup, no race.
+            // A mode with those consequences must be visible where translating happens,
+            // not only on the Settings page where it was switched on. Icon only, no
+            // label: the bar is already the width-critical row, and the tooltip carries
+            // the model and host (never the full URL, which may contain a port and path
+            // the user has no reason to broadcast on screen).
+            if settings.useLocalModel {
+                Image(systemName: "desktopcomputer")
+                    .font(Theme.footnote)
+                    .foregroundStyle(.secondary)
+                    .help(localModelTooltip)
+                    .accessibilityLabel(L("正在使用本地模型"))
+                    .transition(.opacity)
+            }
+
             Spacer(minLength: 4)
 
-            if engine.isTranslating {
+            if measuring {
+                // Nothing here: the measuring copy carries the copy button below, which is
+                // wider than either the stop or the translate control it would replace.
+                EmptyView()
+            } else if engine.isTranslating {
                 // No spinner: the shimmering result placeholder already says "working".
                 BarIconButton(systemName: "stop.fill", help: "停止") {
                     engine.cancelTranslation()
@@ -500,7 +649,12 @@ struct TranslatorView: View {
                 } label: {
                     Text("⏎ 翻译")
                         .font(Theme.footnoteMedium)
-                        .frame(width: 48, height: 26)
+                        .lineLimit(1)
+                        // minWidth, not a hard width: the slot stays stable at the Chinese
+                        // label's size (no bar jitter) but "⏎ Translate" is wider and would
+                        // be clipped by a fixed 48pt.
+                        .frame(height: 26)
+                        .frame(minWidth: 48)
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasInput)
@@ -537,8 +691,8 @@ struct TranslatorView: View {
                 }
             }
 
-            if !engine.isTranslating && !engine.output.isEmpty {
-                CopyButton(copied: engine.copied, shortcutHint: settings.shortcut(.copy)?.display) {
+            if measuring || (!engine.isTranslating && !engine.output.isEmpty) {
+                CopyButton(copied: engine.copied, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
                     engine.copyOutput()
                 }
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -547,6 +701,7 @@ struct TranslatorView: View {
         .animation(Theme.layoutChange, value: engine.output.isEmpty)
         .animation(Theme.layoutChange, value: engine.isTranslating)
         .animation(Theme.layoutChange, value: panelState.showHistory)
+        .animation(Theme.layoutChange, value: settings.useLocalModel)
     }
 }
 

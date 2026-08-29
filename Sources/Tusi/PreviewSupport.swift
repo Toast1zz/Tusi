@@ -94,6 +94,15 @@ extension AppDelegate {
             panelState.showSettings = false
             engine.input = "这句话应该由备用供应商翻译。"
             engine.translate()
+        case "wrong-language":
+            // Reproduces the observed failure: Chinese input, English target, and a
+            // model that replied to the remark in Chinese instead of translating it.
+            panelState.showSettings = false
+            engine.debugPreview(
+                input: "真的吗，你们的回答好官方。",
+                output: "是的，感谢您的反馈。",
+                toast: nil
+            )
         case "waiting":
             panelState.showSettings = false
             engine.debugPreviewTranslating(input: "得益于全新的架构，这次更新带来了显著的性能提升。")

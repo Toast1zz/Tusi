@@ -138,6 +138,20 @@ final class TranslationEngine: ObservableObject {
     /// stays copyable, but the result view must make that archival truncation visible.
     @Published private(set) var restoredFromTruncatedHistory = false
 
+    /// What kind of failure `state == .failed` is describing. The message alone can't
+    /// tell the error box whether the useful button is "retry" or "open settings" —
+    /// retrying a request that has no configured endpoint just fails again in front of
+    /// the user. Nil whenever the panel isn't in a failed state.
+    @Published private(set) var failureKind: FailureKind?
+
+    /// True when a finished result isn't written in the language it was asked for —
+    /// the signature of a model that answered the source text instead of translating it.
+    /// Like `outputCapped` the text is kept and shown (the check is a heuristic, and
+    /// discarding a possibly-good translation would be worse), but it is flagged and it
+    /// suppresses auto-copy and the success sound: silently putting a wrong-language
+    /// result on the pasteboard is the actual harm.
+    @Published private(set) var outputLanguageMismatch = false
+
     /// Transient banner shown at the bottom of the panel, then auto-dismissed.
     /// Whether primary or backup served the request is an implementation detail —
     /// the only thing worth surfacing is the one-time "primary failed" notice.
@@ -368,7 +382,9 @@ final class TranslationEngine: ObservableObject {
         toast = nil
         interrupted = false
         outputCapped = false
+        outputLanguageMismatch = false
         restoredFromTruncatedHistory = false
+        failureKind = nil
     }
 
     /// Whether the dedicated local-model slot is filled in enough to use — read by
@@ -396,6 +412,7 @@ final class TranslationEngine: ObservableObject {
         // `SettingsStore.localProfileIndex` and `SettingsStore.useLocalModel`.
         if settings.useLocalModel {
             guard localModelAvailable else {
+                failureKind = .localModelNotConfigured
                 state = .failed(L("本地模型尚未配置，请先在设置中填写"))
                 return
             }
@@ -413,10 +430,12 @@ final class TranslationEngine: ObservableObject {
                 case .emptyResponse:
                     guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                     self.output = ""
+                    self.failureKind = .classify(TranslationError.emptyResponse)
                     self.state = .failed(TranslationError.emptyResponse.localizedDescription)
                 case .failed(let error):
                     guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                     self.output = ""
+                    self.failureKind = .classify(error)
                     self.state = .failed(error.localizedDescription)
                 }
             }
@@ -427,6 +446,7 @@ final class TranslationEngine: ObservableObject {
         guard !chain.isEmpty else {
             // Nothing usable: all profiles are empty or half-filled. "API Key" alone
             // would be wrong when the model or base URL is what's missing.
+            failureKind = .notConfigured
             state = .failed(L("还没有配置可用的 API 服务，请先在设置中填写"))
             return
         }
@@ -472,6 +492,7 @@ final class TranslationEngine: ObservableObject {
                 guard !Task.isCancelled, self.inputRevision == requestRevision else { return }
                 self.output = ""
                 let message = lastError?.localizedDescription ?? L("翻译失败")
+                self.failureKind = lastError.map(FailureKind.classify) ?? .unknown
                 self.state = .failed(String(format: L("两个供应商都失败了 · %@"), message))
                 return
             }
@@ -521,6 +542,7 @@ final class TranslationEngine: ObservableObject {
             // remain available through the copy button after a failed stream.
             self.output = ""
             let message = lastError?.localizedDescription ?? L("翻译失败")
+            self.failureKind = lastError.map(FailureKind.classify) ?? .unknown
             // Only claim the backup failed when it was actually tried: a mid-stream
             // failure on the primary deliberately skips failover (two spliced
             // translations are worse than one failed one), and saying otherwise
@@ -582,21 +604,30 @@ final class TranslationEngine: ObservableObject {
         if wasCapped {
             finalOutput = String(finalOutput.prefix(Self.maxOutputCharacters))
         }
+        // A result in the wrong language means the model answered the source text
+        // instead of translating it. The text is still published — the check is a
+        // heuristic and throwing away a possibly-good translation would cost more than
+        // it saves — but it is flagged, and like a capped run it is not treated as a
+        // clean completion: no auto-copy, no success sound.
+        let wrongLanguage = LanguageDetector.looksLikeWrongLanguage(finalOutput, target: target)
+        let cleanCompletion = !wasCapped && !wrongLanguage
         // Publish exactly once. The view deliberately keeps showing the skeleton
         // until `state` becomes `.done`, so text and the copy button enter together.
         self.output = finalOutput
         self.outputCapped = wasCapped
+        self.outputLanguageMismatch = wrongLanguage
         self.restoredFromTruncatedHistory = false
+        self.failureKind = nil
         self.state = .done
         self.pushHistory(input: text, output: self.output, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-        if !wasCapped, self.settings.autoCopy, !self.output.isEmpty {
+        if cleanCompletion, self.settings.autoCopy, !self.output.isEmpty {
             if self.copyToPasteboard() {
                 self.flashCopied(auto: true)
             } else {
                 self.flashToast(.copyFailed)
             }
         }
-        if !wasCapped {
+        if cleanCompletion {
             SoundPlayer.shared.playSuccess()
         }
         return true
@@ -861,7 +892,9 @@ final class TranslationEngine: ObservableObject {
         translationTask?.cancel()
         translationTask = nil
         outputCapped = false
+        outputLanguageMismatch = false
         restoredFromTruncatedHistory = false
+        failureKind = nil
         // Whether anything buffered decides if this stop leaves partial content behind.
         // During a translation `output` is empty by design; the buffer holds everything
         // the provider already delivered.
@@ -908,7 +941,9 @@ final class TranslationEngine: ObservableObject {
         toast = nil
         interrupted = false
         outputCapped = false
+        outputLanguageMismatch = false
         restoredFromTruncatedHistory = false
+        failureKind = nil
         state = .idle
     }
 
@@ -920,7 +955,12 @@ final class TranslationEngine: ObservableObject {
         self.toast = toast
         self.interrupted = false
         self.outputCapped = false
+        // Run the real check rather than forcing false: a preview scenario that supplies
+        // wrong-language sample text then exercises the actual detection, not just the
+        // banner. `input` is assigned first, so `target` is already resolved here.
+        self.outputLanguageMismatch = LanguageDetector.looksLikeWrongLanguage(output, target: target)
         self.restoredFromTruncatedHistory = false
+        self.failureKind = nil
     }
 
     /// Puts the panel into a mid-translation state for visual inspection: a non-empty
@@ -931,9 +971,57 @@ final class TranslationEngine: ObservableObject {
         self.output = ""
         self.interrupted = false
         self.outputCapped = false
+        self.outputLanguageMismatch = false
         self.restoredFromTruncatedHistory = false
+        self.failureKind = nil
         self.copied = false
         self.state = .translating
+    }
+
+    // MARK: - Diagnostics
+
+    /// Builds the de-identified state receipt offered next to a failure. Reads the
+    /// engine's own view of the request (target, failure) and the settings' hosts —
+    /// never the key, the source text or the result. See `Diagnostics` for the rules.
+    func diagnosticsReport() -> String {
+        func host(_ index: Int) -> String {
+            settings.profiles.indices.contains(index) ? settings.profiles[index].config.displayHost : ""
+        }
+        let failureMessage: String?
+        if case .failed(let message) = state { failureMessage = message } else { failureMessage = nil }
+        let report = Diagnostics.Report(
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?",
+            systemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            primaryHost: host(settings.primaryIndex),
+            primaryModel: settings.profiles.indices.contains(settings.primaryIndex)
+                ? settings.profiles[settings.primaryIndex].model.trimmingCharacters(in: .whitespaces)
+                : "",
+            backupHost: host(settings.fallbackIndex),
+            localHost: host(SettingsStore.localProfileIndex),
+            usingLocalModel: settings.useLocalModel,
+            raceEnabled: settings.raceFastestEnabled,
+            multiLanguageMode: settings.multiLanguageMode,
+            target: target.apiName,
+            failure: failureMessage,
+            failureKind: failureKind
+        )
+        return Diagnostics.text(for: report)
+    }
+
+    /// Copies the receipt above. Separate from `copyOutput` because it must work when
+    /// there is no output at all — a failed translation is exactly when it is needed.
+    /// It reuses `flashCopied`/`copyFailed` on purpose: "something was copied" has one
+    /// confirmation in this app, and inventing a second one for a support action would
+    /// add UI for the rarest path in the panel.
+    func copyDiagnostics() {
+        let text = diagnosticsReport()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if pasteboard.setString(text, forType: .string) {
+            flashCopied()
+        } else {
+            flashToast(.copyFailed)
+        }
     }
 
     // MARK: - Clipboard
@@ -1024,7 +1112,11 @@ final class TranslationEngine: ObservableObject {
         target = record.target
         interrupted = false
         outputCapped = false
+        // A restored snapshot is archived text, not a fresh model response: judging it
+        // again would only re-litigate a translation the user already accepted.
+        outputLanguageMismatch = false
         restoredFromTruncatedHistory = record.isTruncated
+        failureKind = nil
         state = .done
     }
 

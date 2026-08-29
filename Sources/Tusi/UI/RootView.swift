@@ -9,12 +9,25 @@ struct PanelHeightKey: PreferenceKey {
     }
 }
 
+/// The narrowest the panel can be without clipping its content. Height has always been
+/// content-driven; width was not, so a row of non-compressible controls (the bottom bar,
+/// whose labels are much wider in English than in Chinese) could exceed `panelWidth` and
+/// get centre-clipped against the fixed frame below. Views that contain such a row report
+/// their natural width here and the window widens to match.
+struct PanelContentWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
 
     let onHeightChange: (CGFloat) -> Void
+    let onContentMinWidthChange: (CGFloat) -> Void
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -49,6 +62,13 @@ struct RootView: View {
         .onPreferenceChange(PanelHeightKey.self) { height in
             guard height > 0 else { return }
             onHeightChange(height)
+        }
+        // Read outside the fixed-width frame above: the preference travels up from the
+        // content, which measures itself unconstrained, so it reports what the content
+        // *wants* rather than the width it was forced into.
+        .onPreferenceChange(PanelContentWidthKey.self) { width in
+            guard width > 0 else { return }
+            onContentMinWidthChange(width)
         }
         // No background, corner radius or border here — those belong to the window and are
         // drawn by PanelContainerView. Sizing them from the content instead means they

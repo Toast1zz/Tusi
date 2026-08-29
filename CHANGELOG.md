@@ -2,6 +2,22 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.5] - 2026-08-29
+
+### Added
+
+- Added a cautious wrong-language warning for model replies that clearly miss the requested target; suspicious output remains visible but is no longer auto-copied or announced as a clean success
+- Added de-identified diagnostics, failure-specific recovery actions, a local-model status marker, remaining-input feedback, sound-volume control, and confirmation before binding bare letter or number shortcuts
+
+### Changed
+
+- Replaced the local model's standalone translation switch with the same role-action pattern used by “Make primary”: “Make translation model” when inactive, a clear current-role state when active, and an explicit return to primary / backup routing
+- Clarified that OpenRouter provider order is a preference rather than a restriction, and updated stale project guidance to match atomic result presentation and the current three-profile model
+
+### Fixed
+
+- Improved Keychain errors and recovery, automatic scroll indicators, English-width measurement, localization coverage, and several settings and error-state accessibility details
+
 ## [1.11.4] - 2026-08-28
 
 ### Fixed
@@ -300,6 +316,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.11.5]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.5
 [1.11.4]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.4
 [1.11.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.3
 [1.11.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.2
