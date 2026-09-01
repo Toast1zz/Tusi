@@ -7,9 +7,10 @@ import XCTest
 final class TusiTests: XCTestCase {
     override func setUp() {
         super.setUp()
-        // Preview-mode engines share one scratch history file (com.tusi.preview);
-        // reset it so no test case reads another case's records.
+        // Preview-mode engines share scratch persistence (com.tusi.preview); reset it
+        // so no test case reads another case's records or editor draft.
         try? FileManager.default.removeItem(at: TranslationEngine.historyURL(preview: true))
+        try? FileManager.default.removeItem(at: TranslationEngine.draftURL(preview: true))
     }
 
     func testLanguageDirectionHandlesMixedChineseAndLatin() {
@@ -883,6 +884,70 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.output, "备用结果")
     }
 
+    func testRaceFastestWaitsForTargetLanguageAfterWrongLanguageCompletion() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://api.wrong.com/v1", apiKey: "k1", model: "wrong")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.correct.com/v1", apiKey: "k2", model: "correct")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "wrong" {
+                return AsyncThrowingStream { continuation in
+                    continuation.yield("根据计划，九月将发送十二封邮件。")
+                    continuation.finish()
+                }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continuation.yield("According to the plan, how many EDMs will be sent in September?")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "按照计划，九月会发多少封 EDM？"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "According to the plan, how many EDMs will be sent in September?")
+        XCTAssertFalse(engine.outputLanguageMismatch)
+        XCTAssertEqual(engine.toast, .raceWon("correct"))
+        XCTAssertEqual(engine.history.count, 1)
+    }
+
+    func testRaceFastestPreservesFirstWrongLanguageResultWhenNeitherLegMatchesTarget() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(baseURL: "https://api.first.com/v1", apiKey: "k1", model: "first")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.second.com/v1", apiKey: "k2", model: "second")
+
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            if config.model == "first" {
+                return AsyncThrowingStream { continuation in
+                    continuation.yield("第一家返回了中文回答。")
+                    continuation.finish()
+                }
+            }
+            return AsyncThrowingStream { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continuation.yield("第二家也返回了中文回答。")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "请把这句话翻译成英文。"
+        engine.translate()
+
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "第一家返回了中文回答。")
+        XCTAssertTrue(engine.outputLanguageMismatch)
+        XCTAssertNil(engine.toast, "a warned fallback must not be presented as the speed winner")
+        XCTAssertEqual(engine.history.count, 1)
+    }
+
     func testRaceFastestReportsFailureWhenEmptyCompletionIsPairedWithFailure() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
@@ -1216,6 +1281,37 @@ final class TusiTests: XCTestCase {
         let engine = TranslationEngine(settings: settings)
         XCTAssertEqual(engine.history.count, 1)
         XCTAssertEqual(engine.history[0].input, "a")
+    }
+
+    func testDraftInputPersistsAcrossEngineRecreation() {
+        let settings = SettingsStore(preview: true)
+        let original = "需要在重新打开后恢复的原文。\nSecond line."
+        let first = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+        first.input = original
+        first.flushPendingDraftSave()
+
+        let restored = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+
+        XCTAssertEqual(restored.input, original)
+        XCTAssertEqual(restored.source, .chinese)
+        XCTAssertEqual(restored.target, .english)
+    }
+
+    func testEmptyDraftRemovesPersistedInput() {
+        let settings = SettingsStore(preview: true)
+        let engine = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+        engine.input = "temporary draft"
+        engine.flushPendingDraftSave()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: TranslationEngine.draftURL(preview: true).path))
+
+        engine.input = ""
+        engine.flushPendingDraftSave()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: TranslationEngine.draftURL(preview: true).path))
+        XCTAssertEqual(
+            TranslationEngine(settings: settings, draftPersistenceEnabled: true).input,
+            ""
+        )
     }
 
     func testHistoryLoadReappliesCapacityAndFieldLimits() throws {

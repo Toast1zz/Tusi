@@ -2,6 +2,21 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.6] - 2026-09-01
+
+### Added
+
+- Unsent source text is restored after relaunch and flushed before normal app termination, so closing the panel or app no longer loses an in-progress draft
+- Race decisions now leave privacy-safe unified-log receipts with the selected or rejected slot and host, making the actual remote winner diagnosable after a bad result
+
+### Changed
+
+- Race mode no longer lets a fast wrong-language answer cancel a provider that may still return the requested language. Suspicious candidates remain unpublished while the other provider finishes; the first warned result is preserved only when neither leg produces a target-language translation
+
+### Fixed
+
+- Kept long input drafts scrollable while hiding the opaque system scroll-indicator gutter that could appear against the clear editor
+
 ## [1.11.5] - 2026-08-29
 
 ### Added

@@ -104,6 +104,7 @@ final class TranslationEngine: ObservableObject {
             // a final network callback that races with that cancellation.
             inputRevision &+= 1
             clearResult()
+            scheduleDraftSave()
         }
     }
     @Published private(set) var output = ""
@@ -172,7 +173,10 @@ final class TranslationEngine: ObservableObject {
     private var inputRevision: UInt = 0
     private var toastTask: Task<Void, Never>?
     private var copyResetTask: Task<Void, Never>?
+    private var draftSaveTask: Task<Void, Never>?
+    private var pendingDraftInput: String?
     private var isApplyingInputCap = false
+    private var isRestoringDraft = false
 
     /// Unpublished accumulation of the in-flight provider's chunks. It is NOT @Published
     /// and never touches the UI: parts only surface once a request commits atomically
@@ -215,6 +219,8 @@ final class TranslationEngine: ObservableObject {
     /// scratch directory so tests and screenshot runs never read or clobber the
     /// real history.
     private let historyURL: URL
+    private let draftURL: URL
+    private let draftPersistenceEnabled: Bool
 
     // Internal (not private): tests reset the preview scratch history between cases.
     static func historyURL(preview: Bool) -> URL {
@@ -226,8 +232,16 @@ final class TranslationEngine: ObservableObject {
         return dir.appendingPathComponent("history.json")
     }
 
+    // Internal for tests. Drafts share the same isolated preview directory as history.
+    static func draftURL(preview: Bool) -> URL {
+        historyURL(preview: preview)
+            .deletingLastPathComponent()
+            .appendingPathComponent("draft.txt")
+    }
+
     init(
         settings: SettingsStore,
+        draftPersistenceEnabled: Bool? = nil,
         stream: @escaping Streamer = { text, target, tone, extra, config in
             TranslationService.stream(
                 text: text,
@@ -241,7 +255,10 @@ final class TranslationEngine: ObservableObject {
         self.settings = settings
         self.stream = stream
         self.historyURL = Self.historyURL(preview: settings.isPreview)
+        self.draftURL = Self.draftURL(preview: settings.isPreview)
+        self.draftPersistenceEnabled = draftPersistenceEnabled ?? !settings.isPreview
         loadHistory()
+        loadDraft()
     }
 
     var isTranslating: Bool { state == .translating }
@@ -782,6 +799,24 @@ final class TranslationEngine: ObservableObject {
         case cancelled
     }
 
+    /// A race candidate must contain real output and plausibly match the requested
+    /// language before it can cancel the other provider. Wrong-language content remains
+    /// a fallback candidate so the existing cautious warning behavior is preserved when
+    /// neither provider produces a clean translation.
+    private enum RaceCandidateQuality {
+        case empty
+        case wrongLanguage
+        case usable
+    }
+
+    private func raceCandidateQuality(_ buffer: String, target: TranslationLanguage) -> RaceCandidateQuality {
+        let cleaned = TranslationService.sanitizeModelOutput(buffer)
+        guard !cleaned.isEmpty else { return .empty }
+        return LanguageDetector.looksLikeWrongLanguage(cleaned, target: target)
+            ? .wrongLanguage
+            : .usable
+    }
+
     private func consumeRaceLeg(
         _ stream: AsyncThrowingStream<String, Error>,
         requestRevision: UInt
@@ -857,20 +892,44 @@ final class TranslationEngine: ObservableObject {
             }
 
             var firstError: Error?
+            var firstWrongLanguage: (index: Int, buffer: String, capped: Bool)?
             var sawEmptyResponse = false
             while let (index, outcome) = await group.next() {
                 switch outcome {
                 case .completed(let buffer, let capped):
-                    self.pendingOutput = buffer
-                    self.pendingOutputCapped = capped
-                    let usable = self.commitPendingOutput(text: text, source: source, sourceLabel: sourceLabel, target: target, tone: tone)
-                    if usable {
-                        group.cancelAll()
-                        return (.succeeded, index)
+                    switch self.raceCandidateQuality(buffer, target: target) {
+                    case .empty:
+                        // An empty completion is not a winner. The other provider may
+                        // still finish with a usable translation, so keep waiting.
+                        sawEmptyResponse = true
+                    case .wrongLanguage:
+                        // Keep the first suspicious answer only as a last resort. It must
+                        // not cancel a provider that may still return the requested language.
+                        if firstWrongLanguage == nil {
+                            firstWrongLanguage = (index, buffer, capped)
+                        }
+                        let host = index == linkA.index ? linkA.config.displayHost : linkB.config.displayHost
+                        Log.translation.notice("race candidate missed target language (slot \(index, privacy: .public), host \(host, privacy: .public)); waiting for other provider")
+                    case .usable:
+                        self.pendingOutput = buffer
+                        self.pendingOutputCapped = capped
+                        let committed = self.commitPendingOutput(
+                            text: text,
+                            source: source,
+                            sourceLabel: sourceLabel,
+                            target: target,
+                            tone: tone
+                        )
+                        if committed {
+                            let host = index == linkA.index ? linkA.config.displayHost : linkB.config.displayHost
+                            Log.translation.info("race winner selected (slot \(index, privacy: .public), host \(host, privacy: .public), target-language result)")
+                            group.cancelAll()
+                            return (.succeeded, index)
+                        }
+                        // Sanitization was already checked above, so this is defensive:
+                        // if the commit boundary rejects it, continue waiting.
+                        sawEmptyResponse = true
                     }
-                    // An empty completion is not a winner. The other provider may still
-                    // finish with a usable translation, so keep racing until it does.
-                    sawEmptyResponse = true
                 case .cancelled:
                     // A global cancellation (user stop, newer input) — the other leg
                     // will see the same signal on its own next check regardless.
@@ -879,6 +938,24 @@ final class TranslationEngine: ObservableObject {
                 case .failed(let error):
                     firstError = firstError ?? error
                     // Keep waiting: the other leg is still racing and may still win.
+                }
+            }
+            if let fallback = firstWrongLanguage {
+                self.pendingOutput = fallback.buffer
+                self.pendingOutputCapped = fallback.capped
+                let committed = self.commitPendingOutput(
+                    text: text,
+                    source: source,
+                    sourceLabel: sourceLabel,
+                    target: target,
+                    tone: tone
+                )
+                if committed {
+                    let host = fallback.index == linkA.index ? linkA.config.displayHost : linkB.config.displayHost
+                    Log.translation.notice("race exhausted without a target-language result; preserving warned fallback (slot \(fallback.index, privacy: .public), host \(host, privacy: .public))")
+                    // Suppress the "who was faster" toast: this is a preserved fallback,
+                    // not a successful speed winner.
+                    return (.succeeded, nil)
                 }
             }
             if let firstError {
@@ -1127,6 +1204,61 @@ final class TranslationEngine: ObservableObject {
     }
 
     // MARK: - File persistence
+
+    private func scheduleDraftSave() {
+        guard draftPersistenceEnabled, !isRestoringDraft else { return }
+        pendingDraftInput = input
+        draftSaveTask?.cancel()
+        let draft = input
+        draftSaveTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.saveDraft(draft)
+        }
+    }
+
+    private func saveDraft(_ draft: String) {
+        do {
+            if draft.isEmpty {
+                if FileManager.default.fileExists(atPath: draftURL.path) {
+                    try FileManager.default.removeItem(at: draftURL)
+                }
+            } else {
+                try FileManager.default.createDirectory(
+                    at: draftURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try Data(draft.utf8).write(to: draftURL, options: .atomic)
+            }
+            pendingDraftInput = nil
+        } catch {
+            Log.app.error("draft write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func loadDraft() {
+        guard draftPersistenceEnabled,
+              let data = try? Data(contentsOf: draftURL),
+              let draft = String(data: data, encoding: .utf8),
+              !draft.isEmpty else { return }
+        isRestoringDraft = true
+        input = String(draft.prefix(Self.maxInputCharacters))
+        isRestoringDraft = false
+    }
+
+    /// Guarantees the latest editor contents land before a normal app termination.
+    func flushPendingDraftSave() {
+        guard draftPersistenceEnabled else { return }
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        if let pendingDraftInput {
+            saveDraft(pendingDraftInput)
+        }
+    }
 
     /// Serializes the bounded history snapshot. Written synchronously on the main
     /// actor: the file is tiny (≤50 records, sub-millisecond), and a synchronous

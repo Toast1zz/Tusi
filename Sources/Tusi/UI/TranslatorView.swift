@@ -244,12 +244,9 @@ struct TranslatorView: View {
                     .lineSpacing(3)
                     .scrollContentBackground(.hidden)
                     .scrollDisabled(height <= maxInputHeight)
-                    // System overlay scroller, not hidden: with the editor capped at
-                    // five lines, a longer draft has nothing else saying there is more
-                    // text above or below. macOS only draws the scroller while the view
-                    // actually scrolls, so a short input stays exactly as clean as it
-                    // was — this costs nothing until there is something to discover.
-                    .scrollIndicators(.automatic)
+                    // Keep long drafts scrollable without exposing the system scroller.
+                    // On macOS it can render as an opaque gutter against this clear editor.
+                    .scrollIndicators(.never)
                     .focused($inputFocused)
                     .frame(height: min(max(height, 24), maxInputHeight))
             }

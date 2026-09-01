@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var engine = TranslationEngine(settings: settings)
 
     func applicationWillTerminate(_ notification: Notification) {
+        engine.flushPendingDraftSave()
         settings.flushPendingSaves()
         // Shut the sound engine down: stop loops, silence anything in flight, release
         // cached players (uisfx `ui.destroy()` equivalent for the native player).
