@@ -2,6 +2,28 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.7] - 2026-09-02
+
+### Added
+
+- Added per-profile output-protocol controls and capability-aware connection tests for strict JSON schema, forced tool-call, JSON-object, and plain-text compatible endpoints
+
+### Changed
+
+- Remote translation can use a previously verified structured-output protocol and falls back to plain text once when an endpoint rejects structured formatting; local loopback models remain plain-text-first
+- Translation completion sounds now follow the macOS system output volume without an additional in-app volume level
+- History now expands from a fixed top anchor with a restrained height reveal and crossfade instead of moving the result and history surfaces through the panel
+
+### Removed
+
+- Removed the sound-volume slider and the user-facing diagnostic-report copy actions
+
+### Fixed
+
+- Structured responses publish only the validated translation field, rejecting refusals, malformed envelopes, extra fields, multiple tool calls, and leaked assistant commentary
+- Removed the opaque macOS 27 scrollbar gutter from long history lists while preserving scrolling
+- Stopped SwiftUI history-height interpolation from being animated a second time by AppKit, eliminating expand/collapse jitter and the final resize hop
+
 ## [1.11.6] - 2026-09-01
 
 ### Added

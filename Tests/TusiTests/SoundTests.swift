@@ -12,7 +12,6 @@ final class SoundTests: XCTestCase {
     override func setUp() {
         super.setUp()
         player.enabled = true
-        player.volume = 0.7
         player.debugResetPlayedFlag()
         // Wipe the preview scratch suite so sound preferences never leak between tests.
         UserDefaults.standard.removePersistentDomain(forName: "com.tusi.preview.scratch")
@@ -87,35 +86,25 @@ final class SoundTests: XCTestCase {
         // restore them afterwards so the test never clobbers a real user's prefs.
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "soundEnabled")
-        let savedVolume = defaults.object(forKey: "soundVolume")
         defer {
             if let savedEnabled {
                 defaults.set(savedEnabled, forKey: "soundEnabled")
             } else {
                 defaults.removeObject(forKey: "soundEnabled")
             }
-            if let savedVolume {
-                defaults.set(savedVolume, forKey: "soundVolume")
-            } else {
-                defaults.removeObject(forKey: "soundVolume")
-            }
         }
 
         defaults.set(false, forKey: "soundEnabled")
-        defaults.set(0.4, forKey: "soundVolume")
 
         let settings = SettingsStore(preview: false)
         XCTAssertFalse(settings.soundEnabled)
-        XCTAssertEqual(settings.soundVolume, 0.4, accuracy: 0.001)
         // The shared player picked up the restored preference too.
         XCTAssertFalse(player.enabled)
-        XCTAssertEqual(player.volume, 0.4, accuracy: 0.001)
     }
 
-    func testEnabledDefaultsTrueAndVolumeDefaults07() {
+    func testEnabledDefaultsTrue() {
         let settings = SettingsStore(preview: true)
         XCTAssertTrue(settings.soundEnabled)
-        XCTAssertEqual(settings.soundVolume, 0.7, accuracy: 0.001)
     }
 
     func testDisablingPreventsSuccessCue() async throws {

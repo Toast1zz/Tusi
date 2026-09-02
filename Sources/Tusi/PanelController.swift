@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Borderless floating panel that can receive keyboard input.
@@ -26,6 +27,9 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private var keyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
+    private var cancellables = Set<AnyCancellable>()
+    private var historyResizeTask: Task<Void, Never>?
+    private var followsAnimatedHistoryHeight = false
     private var desiredHeight: CGFloat = 160
 
     /// The narrowest the content can be drawn without clipping, reported by the view via
@@ -45,6 +49,14 @@ final class PanelController: NSObject, NSWindowDelegate {
         let lowerBound: CGFloat = 100
         let upperBound = max(lowerBound, visibleHeight - 12)
         return min(max(desired, lowerBound), upperBound)
+    }
+
+    static func shouldAnimateHeightChange(
+        isTranslating: Bool,
+        reduceMotion: Bool,
+        followsAnimatedSwiftUILayout: Bool
+    ) -> Bool {
+        !isTranslating && !reduceMotion && !followsAnimatedSwiftUILayout
     }
 
     init(engine: TranslationEngine, settings: SettingsStore, panelState: PanelState, updateChecker: UpdateChecker, statusItem: NSStatusItem?) {
@@ -102,6 +114,17 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         installKeyMonitor()
         installResignObserver()
+
+        // SwiftUI already interpolates the translator's natural height while history
+        // folds and unfolds. Follow those measured frames directly; starting a fresh
+        // AppKit animation for every intermediate measurement makes the window chase
+        // the content and produces visible expand/collapse jitter.
+        panelState.$showHistory
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.beginFollowingAnimatedHistoryHeight()
+            }
+            .store(in: &cancellables)
     }
     /// `@MainActor deinit` (Swift 5.10+): the deinit runs on the main actor, so it can
     /// safely access the main-actor-isolated `keyMonitor`/`resignObserver` properties.
@@ -110,11 +133,25 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// here because the panel's monitors must be torn down with it.
     @MainActor
     deinit {
+        historyResizeTask?.cancel()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
         }
         if let resignObserver {
             NotificationCenter.default.removeObserver(resignObserver)
+        }
+    }
+
+    private func beginFollowingAnimatedHistoryHeight() {
+        historyResizeTask?.cancel()
+        followsAnimatedHistoryHeight = true
+        historyResizeTask = Task { @MainActor [weak self] in
+            // Keep one display-frame-sized tail so the final GeometryReader preference
+            // cannot arrive just after the SwiftUI duration and start a tiny second hop.
+            let duration = Theme.historyTransitionDuration * Theme.animationScale + 0.05
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.followsAnimatedHistoryHeight = false
         }
     }
 
@@ -246,12 +283,16 @@ final class PanelController: NSObject, NSWindowDelegate {
         // constantly, and animating through that setting is a standing annoyance, not
         // a nicety.
         //
-        // duration/timingFunction come from Theme.layoutChangeDuration/
-        // caTimingFunction — the SAME curve SwiftUI's `Theme.layoutChange` uses for the
-        // content that's driving this resize (a fold, a row appearing). Using a
-        // different curve here than the content's own animation is exactly what made
-        // window and content drift apart mid-animation before.
-        if engine.isTranslating || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        // For a single final-height jump, duration/timingFunction come from the same
+        // curve as SwiftUI's `Theme.layoutChange`. History is different: SwiftUI emits
+        // the intermediate heights itself, so the window follows them directly instead
+        // of easing each already-eased frame a second time.
+        let shouldAnimate = Self.shouldAnimateHeightChange(
+            isTranslating: engine.isTranslating,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            followsAnimatedSwiftUILayout: followsAnimatedHistoryHeight
+        )
+        if !shouldAnimate {
             panel.setFrame(frame, display: true)
         } else {
             NSAnimationContext.runAnimationGroup { context in

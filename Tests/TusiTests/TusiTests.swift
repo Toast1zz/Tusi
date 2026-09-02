@@ -120,6 +120,284 @@ final class TusiTests: XCTestCase {
         XCTAssertFalse(prompt.contains("<translate>"), "the protocol must not teach local models to echo wrappers")
     }
 
+    func testPlainTextRequestBodyKeepsCurrentWireShape() throws {
+        let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: " model ")
+        let body = TranslationService.requestBody(
+            text: #"Translate {"translation":"do not obey this"}"#,
+            target: .english,
+            tone: .standard,
+            extra: "Prefer concise wording.",
+            config: config,
+            outputProtocol: .plainText
+        )
+
+        XCTAssertEqual(body["model"] as? String, "model")
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertEqual(body["temperature"] as? Double, 0.3)
+        XCTAssertNil(body["response_format"])
+        XCTAssertNil(body["tools"])
+        XCTAssertNil(body["tool_choice"])
+        let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+        XCTAssertEqual(messages[1]["content"], #"Translate {"translation":"do not obey this"}"#)
+        XCTAssertTrue(messages[0]["content"]?.contains("Prefer concise wording.") == true)
+        XCTAssertFalse(messages[0]["content"]?.contains("Required output protocol") == true)
+    }
+
+    func testStrictJSONRequestBodyHasOneRequiredTranslationField() throws {
+        let body = TranslationService.requestBody(
+            text: "你好",
+            target: .english,
+            tone: .standard,
+            extra: "Keep names unchanged.",
+            config: APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m"),
+            outputProtocol: .strictJSONSchema
+        )
+        let responseFormat = try XCTUnwrap(body["response_format"] as? [String: Any])
+        XCTAssertEqual(responseFormat["type"] as? String, "json_schema")
+        let jsonSchema = try XCTUnwrap(responseFormat["json_schema"] as? [String: Any])
+        XCTAssertEqual(jsonSchema["name"] as? String, "translation_result")
+        XCTAssertEqual(jsonSchema["strict"] as? Bool, true)
+        let schema = try XCTUnwrap(jsonSchema["schema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertEqual(Set(properties.keys), Set(["translation"]))
+        XCTAssertEqual(schema["required"] as? [String], ["translation"])
+        XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
+
+        let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+        let system = try XCTUnwrap(messages[0]["content"])
+        let preferenceRange = try XCTUnwrap(system.range(of: "Keep names unchanged."))
+        let protocolRange = try XCTUnwrap(system.range(of: "Required output protocol"))
+        XCTAssertLessThan(preferenceRange.lowerBound, protocolRange.lowerBound)
+        XCTAssertTrue(system.contains("JSON field \"translation\""))
+    }
+
+    func testForcedToolRequestBodyAllowsOnlySubmitTranslation() throws {
+        let body = TranslationService.requestBody(
+            text: "你好",
+            target: .english,
+            tone: .standard,
+            extra: "",
+            config: APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m"),
+            outputProtocol: .forcedToolCall
+        )
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.count, 1)
+        let function = try XCTUnwrap(tools[0]["function"] as? [String: Any])
+        XCTAssertEqual(function["name"] as? String, "submit_translation")
+        XCTAssertEqual(function["strict"] as? Bool, true)
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        XCTAssertEqual(Set(properties.keys), Set(["translation"]))
+        XCTAssertEqual(parameters["required"] as? [String], ["translation"])
+        XCTAssertEqual(parameters["additionalProperties"] as? Bool, false)
+        let choice = try XCTUnwrap(body["tool_choice"] as? [String: Any])
+        XCTAssertEqual(choice["type"] as? String, "function")
+        XCTAssertEqual((choice["function"] as? [String: String])?["name"], "submit_translation")
+        XCTAssertEqual(body["parallel_tool_calls"] as? Bool, false)
+    }
+
+    func testJSONObjectRequestBodyRequestsJSONAndExplainsExactShape() throws {
+        let body = TranslationService.requestBody(
+            text: "你好",
+            target: .english,
+            tone: .standard,
+            extra: "",
+            config: APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m"),
+            outputProtocol: .jsonObject
+        )
+        let responseFormat = try XCTUnwrap(body["response_format"] as? [String: String])
+        XCTAssertEqual(responseFormat["type"], "json_object")
+        let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+        XCTAssertTrue(messages[0]["content"]?.contains("JSON field \"translation\"") == true)
+    }
+
+    func testOutputProtocolPreferenceDefaultsAndFlowsIntoConfig() {
+        var profile = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        XCTAssertEqual(profile.outputProtocolPreference, .automatic)
+        XCTAssertEqual(profile.config.outputProtocolPreference, .automatic)
+        profile.outputProtocolPreference = .plainText
+        XCTAssertEqual(profile.config.outputProtocolPreference, .plainText)
+    }
+
+    func testOutputProtocolPreferencePersistsPerProfileInIsolatedDefaults() throws {
+        let suite = "com.tusi.tests.protocol-preference.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profiles = [
+            APIProfile(outputProtocolPreference: .plainText),
+            APIProfile(outputProtocolPreference: .automatic),
+            APIProfile(outputProtocolPreference: .plainText),
+        ]
+
+        SettingsStore.saveProfilePreferences(profiles, defaults: defaults)
+
+        XCTAssertEqual(SettingsStore.loadOutputProtocolPreference(defaults: defaults, index: 0), .plainText)
+        XCTAssertEqual(SettingsStore.loadOutputProtocolPreference(defaults: defaults, index: 1), .automatic)
+        XCTAssertEqual(SettingsStore.loadOutputProtocolPreference(defaults: defaults, index: 2), .plainText)
+        XCTAssertEqual(SettingsStore.loadOutputProtocolPreference(defaults: defaults, index: 99), .automatic)
+    }
+
+    func testStrictEnvelopeDecoderReturnsOnlyTranslationAndPreservesContent() throws {
+        let translation = "Line one\n\n- `code` \\ path \"quoted\" 😀"
+        let data = try JSONSerialization.data(withJSONObject: ["translation": translation])
+        let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertEqual(try TranslationEnvelopeDecoder.decode(raw), translation)
+    }
+
+    func testStrictEnvelopeDecoderRejectsMissingExtraEmptyAndWrappedContent() {
+        let invalidInputs = [
+            #"{}"#,
+            #"{"translation":"Hello","note":"extra"}"#,
+            #"{"translation":"   \n"}"#,
+            #"Here is the result: {"translation":"Hello"}"#,
+            "```json\n{\"translation\":\"Hello\"}\n```",
+            #"{"translation":"Hello""#,
+        ]
+
+        for input in invalidInputs {
+            XCTAssertThrowsError(try TranslationEnvelopeDecoder.decode(input), input)
+        }
+    }
+
+    func testStrictEnvelopeDecoderRejectsOversizedRawPayload() {
+        let oversized = "{\"translation\":\"" + String(
+            repeating: "x",
+            count: TranslationEnvelopeDecoder.maxRawBytes
+        ) + "\"}"
+
+        XCTAssertThrowsError(try TranslationEnvelopeDecoder.decode(oversized)) { error in
+            XCTAssertEqual(error as? TranslationStructuredOutputError, .outputTooLarge)
+        }
+    }
+
+    func testToolAccumulatorCombinesArgumentFragmentsAndDiscardsAssistantText() throws {
+        var accumulator = TranslationToolCallAccumulator()
+        accumulator.noteAssistantContent("I will translate this now.")
+        try accumulator.append(TranslationToolCallFragment(
+            index: 0,
+            id: "call-1",
+            name: "submit_translation",
+            arguments: #"{"translation":"Hello"#
+        ))
+        try accumulator.append(TranslationToolCallFragment(
+            index: 0,
+            id: nil,
+            name: nil,
+            arguments: #" world"}"#
+        ))
+
+        XCTAssertEqual(
+            try accumulator.finalize(),
+            DecodedTranslationPayload(
+                translation: "Hello world",
+                discardedAssistantContent: true
+            )
+        )
+    }
+
+    func testToolAccumulatorAcceptsFragmentedFunctionName() throws {
+        var accumulator = TranslationToolCallAccumulator()
+        try accumulator.append(TranslationToolCallFragment(
+            index: 0,
+            id: "call-1",
+            name: "submit_",
+            arguments: nil
+        ))
+        try accumulator.append(TranslationToolCallFragment(
+            index: 0,
+            id: nil,
+            name: "translation",
+            arguments: #"{"translation":"Hello"}"#
+        ))
+
+        XCTAssertEqual(try accumulator.finalize().translation, "Hello")
+    }
+
+    func testToolAccumulatorRejectsWrongNameMultipleCallsAndMissingArguments() throws {
+        var wrongName = TranslationToolCallAccumulator()
+        try wrongName.append(TranslationToolCallFragment(
+            index: 0,
+            id: "call-1",
+            name: "other_tool",
+            arguments: #"{"translation":"Hello"}"#
+        ))
+        XCTAssertThrowsError(try wrongName.finalize()) { error in
+            XCTAssertEqual(error as? TranslationStructuredOutputError, .wrongToolName)
+        }
+
+        var multiple = TranslationToolCallAccumulator()
+        try multiple.append(TranslationToolCallFragment(
+            index: 0,
+            id: "call-1",
+            name: "submit_translation",
+            arguments: #"{"translation":"One"}"#
+        ))
+        XCTAssertThrowsError(try multiple.append(TranslationToolCallFragment(
+            index: 1,
+            id: "call-2",
+            name: "submit_translation",
+            arguments: #"{"translation":"Two"}"#
+        ))) { error in
+            XCTAssertEqual(error as? TranslationStructuredOutputError, .multipleToolCalls)
+        }
+
+        var missingArguments = TranslationToolCallAccumulator()
+        try missingArguments.append(TranslationToolCallFragment(
+            index: 0,
+            id: "call-1",
+            name: "submit_translation",
+            arguments: nil
+        ))
+        XCTAssertThrowsError(try missingArguments.finalize())
+    }
+
+    func testProtocolRegistryFingerprintExcludesKeyAndTracksURLModel() {
+        let first = APIConfig(baseURL: "https://api.example.com/v1", apiKey: "secret-one", model: "m")
+        let otherKey = APIConfig(baseURL: "https://api.example.com/v1", apiKey: "secret-two", model: "m")
+        let otherURL = APIConfig(baseURL: "https://api.other.com/v1", apiKey: "secret-one", model: "m")
+        let otherModel = APIConfig(baseURL: "https://api.example.com/v1", apiKey: "secret-one", model: "m2")
+
+        let fingerprint = TranslationProtocolRegistry.fingerprint(for: first)
+        XCTAssertEqual(fingerprint, TranslationProtocolRegistry.fingerprint(for: otherKey))
+        XCTAssertNotEqual(fingerprint, TranslationProtocolRegistry.fingerprint(for: otherURL))
+        XCTAssertNotEqual(fingerprint, TranslationProtocolRegistry.fingerprint(for: otherModel))
+        XCTAssertFalse(fingerprint.contains("secret"))
+        XCTAssertEqual(fingerprint.count, 64)
+    }
+
+    func testProtocolRegistryResolvesDefaultsCachePreferenceAndExpiry() async throws {
+        let suite = "com.tusi.tests.protocol-registry.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = TranslationProtocolRegistry(defaults: defaults, storageKey: "capabilities")
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let remote = APIConfig(baseURL: "https://api.example.com/v1", apiKey: "k", model: "m")
+        let local = APIConfig(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "m")
+        let manualPlain = APIConfig(
+            baseURL: "https://api.example.com/v1",
+            apiKey: "k",
+            model: "m",
+            outputProtocolPreference: .plainText
+        )
+
+        let initialRemote = await registry.resolve(for: remote, now: now)
+        let initialLocal = await registry.resolve(for: local, now: now)
+        let initialManualPlain = await registry.resolve(for: manualPlain, now: now)
+        XCTAssertEqual(initialRemote, .strictJSONSchema)
+        XCTAssertEqual(initialLocal, .plainText)
+        XCTAssertEqual(initialManualPlain, .plainText)
+
+        await registry.record(.forcedToolCall, for: remote, now: now)
+        let cached = await registry.resolve(for: remote, now: now)
+        let expired = await registry.resolve(
+            for: remote,
+            now: now.addingTimeInterval(TranslationProtocolRegistry.timeToLive + 1)
+        )
+        XCTAssertEqual(cached, .forcedToolCall)
+        XCTAssertEqual(expired, .strictJSONSchema)
+    }
+
     func testModelOutputSanitizerRemovesOnlyBoundaryTranslateWrappers() {
         XCTAssertEqual(
             TranslationService.sanitizeModelOutput("<translate>\nHello world\n</translate>"),
@@ -779,6 +1057,7 @@ final class TusiTests: XCTestCase {
         engine.input = "hi"
         engine.translate()
         try await waitUntilDone(engine)
+        try await waitUntil { engine.toast == .raceWon("fast") }
 
         XCTAssertEqual(engine.toast, .raceWon("fast"))
     }
@@ -910,6 +1189,7 @@ final class TusiTests: XCTestCase {
         engine.translate()
 
         try await waitUntilDone(engine)
+        try await waitUntil { engine.toast == .raceWon("correct") }
         XCTAssertEqual(engine.output, "According to the plan, how many EDMs will be sent in September?")
         XCTAssertFalse(engine.outputLanguageMismatch)
         XCTAssertEqual(engine.toast, .raceWon("correct"))
@@ -946,6 +1226,72 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(engine.outputLanguageMismatch)
         XCTAssertNil(engine.toast, "a warned fallback must not be presented as the speed winner")
         XCTAssertEqual(engine.history.count, 1)
+    }
+
+    func testRaceFastestSupportsMixedWireProtocolsAndStoresOnlyDecodedTranslation() async throws {
+        let suite = "com.tusi.tests.mixed-protocol-race.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = TranslationProtocolRegistry(defaults: defaults, storageKey: "capabilities")
+        TranslationService.protocolRegistryOverride = registry
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.raceFastestEnabled = true
+        settings.profiles[0] = APIProfile(
+            baseURL: "https://structured.example.com/v1",
+            apiKey: "k1",
+            model: "structured"
+        )
+        settings.profiles[1] = APIProfile(
+            baseURL: "https://plain.example.com/v1",
+            apiKey: "k2",
+            model: "plain"
+        )
+        await registry.record(.strictJSONSchema, for: settings.profiles[0].config)
+        await registry.record(.plainText, for: settings.profiles[1].config)
+
+        MockURLProtocol.handler = { request in
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: try Self.requestBodyData(from: request)) as? [String: Any]
+            )
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if body["response_format"] != nil {
+                let sse = """
+                data: {"choices":[{"delta":{"content":"{\\\"translation\\\":\\\"Structured result\\\"}"}}]}
+
+                data: [DONE]
+
+                """
+                return (response, Data(sse.utf8))
+            }
+            let sse = """
+            data: {"choices":[{"delta":{"content":"Plain result"}}]}
+
+            data: [DONE]
+
+            """
+            return (response, Data(sse.utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        let engine = TranslationEngine(settings: settings)
+        engine.input = "请翻译这句话"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertTrue(["Structured result", "Plain result"].contains(engine.output))
+        XCTAssertFalse(engine.output.contains("translation"))
+        XCTAssertFalse(engine.output.contains("{"))
+        XCTAssertEqual(engine.history.count, 1)
+        XCTAssertEqual(engine.history.first?.output, engine.output)
     }
 
     func testRaceFastestReportsFailureWhenEmptyCompletionIsPairedWithFailure() async throws {
@@ -1436,6 +1782,13 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.state, .done)
     }
 
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 where !condition() {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition())
+    }
+
     // MARK: - Streaming (mock URLSession)
 
     func testStreamParsesSSEChunksUntilDone() async throws {
@@ -1512,6 +1865,279 @@ final class TusiTests: XCTestCase {
         }
     }
 
+    func testStrictJSONStreamYieldsOneDecodedTranslationAfterCompletion() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"content":"{\\\"translation\\\":\\\"Hel"}}]}
+
+        data: {"choices":[{"delta":{"content":"lo\\\"}"}}]}
+
+        data: [DONE]
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(
+                text: "你好",
+                target: .english,
+                tone: .standard,
+                extra: "",
+                config: config,
+                outputProtocol: .strictJSONSchema
+            ) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["Hello"])
+        }
+    }
+
+    func testToolStreamCombinesArgumentsAndIgnoresAssistantContent() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"content":"This text must be discarded."}}]}
+
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"submit_translation","arguments":"{\\\"translation\\\":\\\"Hel"}}]}}]}
+
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"lo\\\"}"}}]},"finish_reason":"tool_calls"}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            for try await piece in TranslationService.stream(
+                text: "你好",
+                target: .english,
+                tone: .standard,
+                extra: "",
+                config: config,
+                outputProtocol: .forcedToolCall
+            ) {
+                pieces.append(piece)
+            }
+            XCTAssertEqual(pieces, ["Hello"])
+        }
+    }
+
+    func testStructuredStreamRejectsPartialEnvelopeWithoutPublishingRawContent() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"content":"{\\\"translation\\\":\\\"partial"}}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            do {
+                for try await piece in TranslationService.stream(
+                    text: "你好",
+                    target: .english,
+                    tone: .standard,
+                    extra: "",
+                    config: config,
+                    outputProtocol: .strictJSONSchema
+                ) {
+                    pieces.append(piece)
+                }
+                XCTFail("expected truncated stream")
+            } catch {
+                XCTAssertEqual(error as? TranslationError, .truncatedStream)
+                XCTAssertTrue(pieces.isEmpty)
+            }
+        }
+    }
+
+    func testStructuredStreamSurfacesRefusalWithoutPublishingIt() async throws {
+        let sse = """
+        data: {"choices":[{"delta":{"refusal":"I cannot translate that."},"finish_reason":"stop"}]}
+
+        """
+        try await withMockSession(sse: sse) {
+            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            var pieces: [String] = []
+            do {
+                for try await piece in TranslationService.stream(
+                    text: "source",
+                    target: .english,
+                    tone: .standard,
+                    extra: "",
+                    config: config,
+                    outputProtocol: .strictJSONSchema
+                ) {
+                    pieces.append(piece)
+                }
+                XCTFail("expected refusal")
+            } catch {
+                XCTAssertEqual(error as? TranslationStructuredOutputError, .modelRefusal)
+                XCTAssertTrue(pieces.isEmpty)
+            }
+        }
+    }
+
+    func testAutomaticStructured400RetriesPlainOnceAndCachesCompatibility() async throws {
+        let suite = "com.tusi.tests.protocol-fallback.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = TranslationProtocolRegistry(defaults: defaults, storageKey: "capabilities")
+        TranslationService.protocolRegistryOverride = registry
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestBodies: [[String: Any]] = []
+        MockURLProtocol.handler = { request in
+            let body = try Self.requestBodyData(from: request)
+            requestBodies.append(try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any]))
+            if requestBodies.count == 1 {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"error":{"message":"unsupported response_format"}}"#.utf8))
+            }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n".utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        var pieces: [String] = []
+        for try await piece in TranslationService.stream(
+            text: "你好",
+            target: .english,
+            tone: .standard,
+            extra: "",
+            config: config
+        ) {
+            pieces.append(piece)
+        }
+
+        XCTAssertEqual(pieces, ["Hello"])
+        XCTAssertEqual(requestBodies.count, 2)
+        XCTAssertNotNil(requestBodies[0]["response_format"])
+        XCTAssertNil(requestBodies[1]["response_format"])
+        let cachedProtocol = await registry.capability(for: config)?.outputProtocol
+        XCTAssertEqual(cachedProtocol, .plainText)
+    }
+
+    func testAutomaticProtocolDoesNotFallbackForAuthenticationError() async throws {
+        let suite = "com.tusi.tests.protocol-auth.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        TranslationService.protocolRegistryOverride = TranslationProtocolRegistry(
+            defaults: defaults,
+            storageKey: "capabilities"
+        )
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"error":{"message":"bad key"}}"#.utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        do {
+            for try await _ in TranslationService.stream(
+                text: "你好",
+                target: .english,
+                tone: .standard,
+                extra: "",
+                config: APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            ) {}
+            XCTFail("expected authentication error")
+        } catch {
+            XCTAssertEqual(error as? TranslationError, .http(401, "bad key"))
+            XCTAssertEqual(requestCount, 1)
+        }
+    }
+
+    func testAutomaticProtocolDoesNotCompatibilityFallbackForServerError() async throws {
+        let suite = "com.tusi.tests.protocol-server-error.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        TranslationService.protocolRegistryOverride = TranslationProtocolRegistry(
+            defaults: defaults,
+            storageKey: "capabilities"
+        )
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"error":{"message":"unavailable"}}"#.utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        do {
+            for try await _ in TranslationService.stream(
+                text: "你好",
+                target: .english,
+                tone: .standard,
+                extra: "",
+                config: APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            ) {}
+            XCTFail("expected server error")
+        } catch {
+            XCTAssertEqual(error as? TranslationError, .http(503, "unavailable"))
+            XCTAssertEqual(requestCount, 1)
+        }
+    }
+
+    func testAutomaticLocalEndpointStartsWithPlainText() async throws {
+        let suite = "com.tusi.tests.protocol-local.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        TranslationService.protocolRegistryOverride = TranslationProtocolRegistry(
+            defaults: defaults,
+            storageKey: "capabilities"
+        )
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            requestBody = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: try Self.requestBodyData(from: request)) as? [String: Any]
+            )
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n".utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        var pieces: [String] = []
+        for try await piece in TranslationService.stream(
+            text: "你好",
+            target: .english,
+            tone: .standard,
+            extra: "",
+            config: APIConfig(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "m")
+        ) {
+            pieces.append(piece)
+        }
+
+        XCTAssertEqual(pieces, ["Hello"])
+        XCTAssertNil(requestBody["response_format"])
+        XCTAssertNil(requestBody["tools"])
+    }
+
     func testStreamSurfacesHTTPErrorWithParsedMessage() async throws {
         try await withMockSession(sse: #"{"error":{"message":"bad key"}}"#, statusCode: 401) {
             let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
@@ -1582,40 +2208,162 @@ final class TusiTests: XCTestCase {
 
     func testConnectionRejectsHTTP200NonCompletionResponse() async throws {
         try await withMockSession(sse: "<html>not an API response</html>", statusCode: 200) {
-            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+            let config = APIConfig(
+                baseURL: "https://example.com/v1",
+                apiKey: "k",
+                model: "m",
+                outputProtocolPreference: .plainText
+            )
             do {
                 _ = try await TranslationService.testConnection(config: config)
                 XCTFail("expected incompatible response error")
             } catch {
-                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+                XCTAssertEqual(error as? TranslationError, .truncatedStream)
             }
         }
     }
 
     func testConnectionRejectsHTTP200EmptyChoiceResponse() async throws {
-        try await withMockSession(sse: #"{"choices":[{}]}"#, statusCode: 200) {
-            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let sse = "data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"
+        try await withMockSession(sse: sse, statusCode: 200) {
+            let config = APIConfig(
+                baseURL: "https://example.com/v1",
+                apiKey: "k",
+                model: "m",
+                outputProtocolPreference: .plainText
+            )
             do {
                 _ = try await TranslationService.testConnection(config: config)
                 XCTFail("expected incompatible response error")
             } catch {
-                XCTAssertEqual(error as? TranslationError, .invalidResponse)
+                XCTAssertEqual(error as? TranslationError, .emptyResponse)
             }
         }
     }
 
     func testConnectionAcceptsHTTP200CompletionResponse() async throws {
-        let body = #"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#
-        try await withMockSession(sse: body, statusCode: 200) {
-            let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-            let latency = try await TranslationService.testConnection(config: config)
-            XCTAssertGreaterThanOrEqual(latency, 0)
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n"
+        let suite = "com.tusi.tests.connection-plain.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = TranslationProtocolRegistry(defaults: defaults, storageKey: "capabilities")
+        TranslationService.protocolRegistryOverride = registry
+        defer { TranslationService.protocolRegistryOverride = nil }
+        try await withMockSession(sse: sse, statusCode: 200) {
+            let config = APIConfig(
+                baseURL: "https://example.com/v1",
+                apiKey: "k",
+                model: "m",
+                outputProtocolPreference: .plainText
+            )
+            let result = try await TranslationService.testConnection(config: config)
+            XCTAssertGreaterThanOrEqual(result.latencyMilliseconds, 0)
+            XCTAssertEqual(result.outputProtocol, .plainText)
+        }
+        let capability = await registry.capability(for: APIConfig(
+            baseURL: "https://example.com/v1",
+            apiKey: "k",
+            model: "m",
+            outputProtocolPreference: .plainText
+        ))
+        XCTAssertNil(capability)
+    }
+
+    func testConnectionProbeStopsAtForcedToolAndCachesCapability() async throws {
+        let suite = "com.tusi.tests.connection-probe.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = TranslationProtocolRegistry(defaults: defaults, storageKey: "capabilities")
+        TranslationService.protocolRegistryOverride = registry
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestCount = 0
+        var probeSources: [String] = []
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: try Self.requestBodyData(from: request)) as? [String: Any]
+            )
+            let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+            probeSources.append(try XCTUnwrap(messages.last?["content"]))
+            if body["response_format"] != nil {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"error":{"message":"unsupported response_format"}}"#.utf8))
+            }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let toolSSE = """
+            data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"submit_translation","arguments":"{\\\"translation\\\":\\\"Hello\\\"}"}}]},"finish_reason":"tool_calls"}]}
+
+            """
+            return (response, Data(toolSSE.utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        let config = APIConfig(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        let result = try await TranslationService.testConnection(config: config)
+        let capability = await registry.capability(for: config)
+
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(probeSources, ["你好，这是一次翻译测试。", "你好，这是一次翻译测试。"])
+        XCTAssertEqual(result.outputProtocol, .forcedToolCall)
+        XCTAssertEqual(capability?.outputProtocol, .forcedToolCall)
+    }
+
+    func testConnectionProbeNeverExceedsFourAttempts() async throws {
+        let suite = "com.tusi.tests.connection-probe-limit.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        TranslationService.protocolRegistryOverride = TranslationProtocolRegistry(
+            defaults: defaults,
+            storageKey: "capabilities"
+        )
+        defer { TranslationService.protocolRegistryOverride = nil }
+
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"error":{"message":"unsupported protocol"}}"#.utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        TranslationService.sessionOverride = URLSession(configuration: sessionConfig)
+        defer {
+            TranslationService.sessionOverride = nil
+            MockURLProtocol.handler = nil
+        }
+
+        do {
+            _ = try await TranslationService.testConnection(config: APIConfig(
+                baseURL: "https://example.com/v1",
+                apiKey: "k",
+                model: "m"
+            ))
+            XCTFail("expected probe failure")
+        } catch {
+            XCTAssertEqual(error as? TranslationError, .http(400, "unsupported protocol"))
+            XCTAssertEqual(requestCount, 4)
         }
     }
 
     /// Serves `sse` as the body of a mock HTTP response through a URLProtocol-backed
     /// session, runs `body`, and tears the seam down afterwards.
     private func withMockSession(sse: String, statusCode: Int = 200, hangs: Bool = false, body: () async throws -> Void) async throws {
+        let previousRegistry = TranslationService.protocolRegistryOverride
+        let registrySuite = "com.tusi.tests.mock-registry.\(UUID().uuidString)"
+        let registryDefaults = try XCTUnwrap(UserDefaults(suiteName: registrySuite))
+        if previousRegistry == nil {
+            TranslationService.protocolRegistryOverride = TranslationProtocolRegistry(
+                defaults: registryDefaults,
+                storageKey: "capabilities"
+            )
+        }
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
             return (response, Data(sse.utf8))
@@ -1628,8 +2376,26 @@ final class TusiTests: XCTestCase {
             TranslationService.sessionOverride = nil
             MockURLProtocol.handler = nil
             MockURLProtocol.hangsAfterResponse = false
+            TranslationService.protocolRegistryOverride = previousRegistry
+            registryDefaults.removePersistentDomain(forName: registrySuite)
         }
         try await body()
+    }
+
+    private static func requestBodyData(from request: URLRequest) throws -> Data {
+        if let body = request.httpBody { return body }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { throw stream.streamError ?? URLError(.cannotDecodeRawData) }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 
     func testStreamFailsAfterFirstTokenTimeout() async throws {
@@ -2030,6 +2796,31 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 100)
     }
 
+    func testPanelHeightAnimationDoesNotDoubleAnimateSwiftUILayoutFrames() {
+        XCTAssertEqual(Theme.historyTransitionDuration, 0.26, accuracy: 0.001)
+        XCTAssertGreaterThan(Theme.historyTransitionDuration, Theme.layoutChangeDuration)
+        XCTAssertTrue(PanelController.shouldAnimateHeightChange(
+            isTranslating: false,
+            reduceMotion: false,
+            followsAnimatedSwiftUILayout: false
+        ))
+        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
+            isTranslating: true,
+            reduceMotion: false,
+            followsAnimatedSwiftUILayout: false
+        ))
+        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
+            isTranslating: false,
+            reduceMotion: true,
+            followsAnimatedSwiftUILayout: false
+        ))
+        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
+            isTranslating: false,
+            reduceMotion: false,
+            followsAnimatedSwiftUILayout: true
+        ))
+    }
+
     func testBareLetterShortcutsRequireConfirmationButFunctionKeysDoNot() {
         // A plain letter or digit is a character the user still has to be able to type
         // into the panel, so binding it needs a second yes.
@@ -2152,7 +2943,7 @@ final class TusiTests: XCTestCase {
         return found
     }
 
-    // MARK: - Failure classification and diagnostics
+    // MARK: - Failure classification
 
     func testFailureKindClassifiesByWhatTheUserCanDoAboutIt() {
         XCTAssertEqual(FailureKind.classify(TranslationError.http(401, "")), .credentials)
@@ -2215,54 +3006,6 @@ final class TusiTests: XCTestCase {
         XCTAssertNil(engine.failureKind)
     }
 
-    func testDiagnosticsReportCarriesStateButNeitherKeyNorText() async throws {
-        let settings = SettingsStore(preview: true)
-        settings.autoCopy = false
-        settings.profiles[0] = APIProfile(
-            baseURL: "https://api.example.com/v1/secret-path",
-            apiKey: "sk-do-not-leak",
-            model: "m1"
-        )
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
-            AsyncThrowingStream { continuation in
-                continuation.finish(throwing: TranslationError.http(401, "bad key"))
-            }
-        }
-        engine.input = "这是一段不该出现在诊断里的原文"
-        engine.translate()
-        try await waitUntilFailed(engine)
-
-        let report = engine.diagnosticsReport()
-        XCTAssertFalse(report.contains("sk-do-not-leak"), report)
-        XCTAssertFalse(report.contains("这是一段不该出现在诊断里的原文"), report)
-        // The path may hold a private token; only the host is reportable.
-        XCTAssertFalse(report.contains("secret-path"), report)
-        XCTAssertTrue(report.contains("api.example.com"), report)
-        XCTAssertTrue(report.contains("credentials"), report)
-    }
-
-    func testDiagnosticsFlattensAndClampsProviderMessages() {
-        let noisy = String(repeating: "a", count: 400) + "\nsecond line"
-        let report = Diagnostics.text(for: Diagnostics.Report(
-            appVersion: "1.0",
-            systemVersion: "14.0",
-            primaryHost: "api.example.com",
-            primaryModel: "m",
-            backupHost: "",
-            localHost: "",
-            usingLocalModel: false,
-            raceEnabled: false,
-            multiLanguageMode: false,
-            target: "English",
-            failure: noisy,
-            failureKind: .unknown
-        ))
-        let errorLine = report.split(separator: "\n").first { $0.hasPrefix("error:") }
-        XCTAssertNotNil(errorLine)
-        XCTAssertLessThan(errorLine?.count ?? .max, 320)
-        XCTAssertEqual(report.split(separator: "\n").filter { $0.hasPrefix("error:") }.count, 1)
-    }
-
     func testKeychainErrorsExplainTheirOwnSituation() {
         // A locked Keychain, a denied prompt and a signature change are different
         // problems with different remedies; they must not share one sentence.
@@ -2306,6 +3049,7 @@ final class TusiTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
 
         XCTAssertGreaterThan(hosting.fittingSize.height, 160)
+        XCTAssertLessThanOrEqual(hosting.fittingSize.width, 470)
     }
 
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {

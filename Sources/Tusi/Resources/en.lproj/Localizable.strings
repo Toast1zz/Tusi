@@ -31,6 +31,10 @@
 "接口地址" = "Base URL";
 "模型" = "Model";
 "高级选项" = "Advanced";
+"输出协议" = "Output protocol";
+"自动（推荐）" = "Automatic (recommended)";
+"纯文本兼容" = "Plain-text compatibility";
+"自动使用已验证格式；首次不兼容时会改用纯文本并重试一次。" = "Uses a verified format automatically; on first incompatibility, retries once with plain text.";
 "供应商优先顺序（可选）" = "Provider preference order (optional)";
 "仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商" = "Only supported by OpenRouter; separate provider names with commas. These are tried first — if none are available, OpenRouter still falls back to another provider.";
 "隐藏" = "Hide";
@@ -76,8 +80,12 @@
 "按 Esc 取消" = "Press Esc to cancel";
 "点击后按下新的组合键" = "Click, then press a new combination";
 "测试连接" = "Test Connection";
+"会发送最多 4 个极短测试请求来检测输出兼容性" = "Sends up to 4 very short test requests to check output compatibility";
 "连接中…" = "Connecting…";
-"连接正常 · %d ms" = "Connected · %d ms";
+"连接正常 · %d ms · %@" = "Connected · %d ms · %@";
+"结构化输出" = "Structured output";
+"工具输出" = "Tool output";
+"JSON 兼容" = "JSON compatibility";
 "未配置" = "Not set";
 
 /* MARK: - TranslationEngine */
@@ -85,6 +93,8 @@
 "主用连接失败 · %@" = "Primary connection failed · %@";
 "未配置模型" = "No model set";
 "模型没有返回内容" = "The model returned no content";
+"模型没有返回可用译文，请重试或切换服务" = "The model did not return a usable translation. Try again or switch services";
+"模型拒绝返回译文，请改写原文或切换服务" = "The model refused to return a translation. Reword the source or switch services";
 "翻译结果不完整，连接提前中断" = "Translation was cut short — the connection ended before it finished";
 "翻译失败" = "Translation failed";
 "主用和备用都失败了 · %@" = "Both primary and backup failed · %@";
@@ -145,7 +155,6 @@
 
 /* MARK: - Sound preference */
 "翻译成功音效" = "Translation Completion Sound";
-"音效音量" = "Sound volume";
 "正在使用本地模型" = "Using the local model";
 "正在使用本地模型（尚未配置，请在设置中填写）" = "Using the local model — not configured yet; fill it in under Settings";
 "正在使用本地模型 · %@" = "Using the local model · %@";
@@ -159,9 +168,6 @@
 "「%@」没有修饰键：绑定后在输入框里就打不出这个字符了" = "“%@” has no modifier — bind it and you can no longer type that character in the input box";
 "仍然绑定" = "Bind anyway";
 "取消" = "Cancel";
-"复制诊断" = "Copy report";
-"复制诊断信息" = "Copy diagnostic report";
-"复制不含 API Key 和原文的诊断信息" = "Copies a report with no API key and no text from your translation";
 "配置本地模型" = "Set up local model";
 "打开设置" = "Open Settings";
 "接口返回的数据格式不兼容，请检查模型和接口地址" = "The endpoint returned an incompatible response — check the model and base URL";

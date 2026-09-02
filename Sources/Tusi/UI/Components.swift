@@ -437,10 +437,6 @@ struct ErrorBox: View {
     /// reproduces the same error in front of the user, so the caller decides.
     let primaryLabel: String
     let primaryAction: () -> Void
-    /// The de-identified state receipt. Always available: the failures hardest to act on
-    /// are exactly the ones worth reporting, and a user shouldn't have to know which
-    /// details are safe to share.
-    let onCopyDiagnostics: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -452,11 +448,6 @@ struct ErrorBox: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(L("复制诊断"), action: onCopyDiagnostics)
-                .buttonStyle(.plain)
-                .font(Theme.bodySmall)
-                .foregroundStyle(.tertiary)
-                .help(L("复制不含 API Key 和原文的诊断信息"))
             Button(primaryLabel, action: primaryAction)
                 .buttonStyle(.plain)
                 .font(Theme.bodySmallSemibold)

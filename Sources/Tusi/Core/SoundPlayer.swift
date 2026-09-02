@@ -45,14 +45,6 @@ final class SoundPlayer {
         }
     }
 
-    /// Master volume 0...1, applied on top of the cue's own catalog volume.
-    var volume: Double = 0.7 {
-        didSet {
-            volume = min(max(volume, 0), 1)
-            current?.player.volume = effectiveVolume()
-        }
-    }
-
     /// The audio currently playing, if any. Only one completion cue can be audible at
     /// a time; a new play retriggers it.
     private var current: Handle?
@@ -84,7 +76,6 @@ final class SoundPlayer {
 
     /// Preview helper for the Settings "试听" button: plays the completion cue even
     /// when sound is disabled, so the user can judge the sound before enabling it.
-    /// Always respects the master volume.
     @discardableResult
     func previewSuccess() -> Handle? {
         #if DEBUG
@@ -111,14 +102,8 @@ final class SoundPlayer {
     }
 
     private func configure(_ audio: AVAudioPlayer) {
-        audio.volume = effectiveVolume()
         audio.currentTime = 0
         audio.numberOfLoops = 0
-    }
-
-    private func effectiveVolume() -> Float {
-        // Catalog default volume for `success` (0.23) × master volume (0.7 default).
-        Float(min(max(0.23 * volume, 0), 1))
     }
 
     private func audioPlayer() -> AVAudioPlayer? {

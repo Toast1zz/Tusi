@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import ServiceManagement
 
-struct APIConfig: Equatable {
+struct APIConfig: Equatable, Sendable {
     var baseURL: String
     var apiKey: String
     var model: String
@@ -10,6 +10,7 @@ struct APIConfig: Equatable {
     /// OpenRouter's `provider.order` routing hint. It is sent only to OpenRouter hosts;
     /// strict gateways must not receive this provider-specific top-level field.
     var providerOrder: String = ""
+    var outputProtocolPreference: TranslationProtocolPreference = .automatic
 
     /// Whether this endpoint needs an API key. Local (loopback) inference servers —
     /// Ollama, LM Studio, llama.cpp-server — authenticate differently or not at all, so a
@@ -46,14 +47,21 @@ struct APIConfig: Equatable {
 }
 
 /// One of the two BYOK slots. Everything is user-typed — no baked-in providers.
-struct APIProfile: Equatable {
+struct APIProfile: Equatable, Sendable {
     var baseURL = ""
     var apiKey = ""
     var model = ""
     var providerOrder = ""
+    var outputProtocolPreference: TranslationProtocolPreference = .automatic
 
     var config: APIConfig {
-        APIConfig(baseURL: baseURL, apiKey: apiKey, model: model, providerOrder: providerOrder)
+        APIConfig(
+            baseURL: baseURL,
+            apiKey: apiKey,
+            model: model,
+            providerOrder: providerOrder,
+            outputProtocolPreference: outputProtocolPreference
+        )
     }
     var isUsable: Bool { config.isUsable }
 }
@@ -162,15 +170,6 @@ final class SettingsStore: ObservableObject {
             SoundPlayer.shared.enabled = soundEnabled
         }
     }
-    /// Master sound volume 0...1. Persisted; applied live to the shared player.
-    @Published var soundVolume: Double {
-        didSet {
-            guard soundVolume != oldValue else { return }
-            defaults.set(soundVolume, forKey: "soundVolume")
-            SoundPlayer.shared.volume = soundVolume
-        }
-    }
-
     /// All five rebindable shortcuts. Missing entries fall back to the action's default.
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
         didSet { persistShortcuts() }
@@ -238,13 +237,8 @@ final class SettingsStore: ObservableObject {
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
         multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
-        // Sound preferences: enabled defaults to true (sound is opt-out), volume to 0.7.
-        // The player's own defaults must match these so a fresh install behaves the same
-        // whether or not the keys exist. The didSet during init already persisted them;
-        // the live player sync happens at the end of init (see below) once every stored
-        // property is initialized.
+        // Sound is opt-out and follows the system output volume.
         soundEnabled = defaults.object(forKey: "soundEnabled") as? Bool ?? true
-        soundVolume = min(max(defaults.object(forKey: "soundVolume") as? Double ?? 0.7, 0), 1)
         let storedWidth = defaults.double(forKey: "panelWidth")
         if storedWidth > 0 {
             panelWidth = min(max(CGFloat(storedWidth), Theme.panelMinWidth), Theme.panelMaxWidth)
@@ -262,11 +256,9 @@ final class SettingsStore: ObservableObject {
             keychainErrorIsRetryable = loaded.retryable
         }
 
-        // Sync the persisted sound preferences into the shared player. Must come after
-        // every stored property is initialized (reading `soundEnabled`/`soundVolume`
-        // earlier would trip Swift's initialization rules).
+        // Sync the persisted sound preference into the shared player after every stored
+        // property is initialized.
         SoundPlayer.shared.enabled = soundEnabled
-        SoundPlayer.shared.volume = soundVolume
     }
 
     // MARK: - Shortcut persistence
@@ -359,7 +351,8 @@ final class SettingsStore: ObservableObject {
                 baseURL: defaults.string(forKey: "baseURL.\(index)") ?? "",
                 apiKey: keys[index] ?? "",
                 model: defaults.string(forKey: "model.\(index)") ?? "",
-                providerOrder: defaults.string(forKey: "providerOrder.\(index)") ?? ""
+                providerOrder: defaults.string(forKey: "providerOrder.\(index)") ?? "",
+                outputProtocolPreference: loadOutputProtocolPreference(defaults: defaults, index: index)
             )
         }
         return (profiles, keychainError, retryable)
@@ -389,6 +382,7 @@ final class SettingsStore: ObservableObject {
                 $0.baseURL != $1.baseURL
                     || $0.model != $1.model
                     || $0.providerOrder != $1.providerOrder
+                    || $0.outputProtocolPreference != $1.outputProtocolPreference
             }
         if preferencesChanged {
             pendingProfiles = profiles
@@ -423,12 +417,25 @@ final class SettingsStore: ObservableObject {
     }
 
     private func saveProfiles(_ profiles: [APIProfile]) {
+        Self.saveProfilePreferences(profiles, defaults: defaults)
+        pendingProfiles = nil
+    }
+
+    /// Internal pure-UserDefaults seams keep profile persistence testable without reading
+    /// the real Keychain or touching the user's normal defaults domain.
+    static func loadOutputProtocolPreference(defaults: UserDefaults, index: Int) -> TranslationProtocolPreference {
+        TranslationProtocolPreference(
+            rawValue: defaults.string(forKey: "outputProtocolPreference.\(index)") ?? ""
+        ) ?? .automatic
+    }
+
+    static func saveProfilePreferences(_ profiles: [APIProfile], defaults: UserDefaults) {
         for (index, profile) in profiles.enumerated() {
             defaults.set(profile.baseURL, forKey: "baseURL.\(index)")
             defaults.set(profile.model, forKey: "model.\(index)")
             defaults.set(profile.providerOrder, forKey: "providerOrder.\(index)")
+            defaults.set(profile.outputProtocolPreference.rawValue, forKey: "outputProtocolPreference.\(index)")
         }
-        pendingProfiles = nil
     }
 
     private func scheduleKeychainSave() {

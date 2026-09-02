@@ -193,6 +193,9 @@ enum Theme {
     /// following content. Also the duration `PanelController` mirrors on the AppKit
     /// side via `layoutChangeDuration` + `caTimingFunction`.
     static var layoutChange: Animation { motion(0.22) }
+    /// History moves through a larger vertical distance than ordinary row changes, so
+    /// give it a slightly longer version of the same non-bouncy curve.
+    static var historyTransition: Animation { motion(historyTransitionDuration) }
     /// Pushing between the translator, settings, and shortcuts pages.
     static var pageTransition: Animation { motion(0.28) }
 
@@ -200,6 +203,7 @@ enum Theme {
     /// (which takes a `TimeInterval`, not an `Animation`). Keep in sync with the 0.22
     /// above by construction if you ever change one — they're meant to match exactly.
     static let layoutChangeDuration: Double = 0.22
+    static let historyTransitionDuration: Double = 0.26
 
     /// The one legitimate spring in the app: ToneSelector's sliding selection pill has
     /// real inertia (a shape moving from one resting position to another), unlike

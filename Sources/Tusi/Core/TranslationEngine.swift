@@ -1055,52 +1055,6 @@ final class TranslationEngine: ObservableObject {
         self.state = .translating
     }
 
-    // MARK: - Diagnostics
-
-    /// Builds the de-identified state receipt offered next to a failure. Reads the
-    /// engine's own view of the request (target, failure) and the settings' hosts —
-    /// never the key, the source text or the result. See `Diagnostics` for the rules.
-    func diagnosticsReport() -> String {
-        func host(_ index: Int) -> String {
-            settings.profiles.indices.contains(index) ? settings.profiles[index].config.displayHost : ""
-        }
-        let failureMessage: String?
-        if case .failed(let message) = state { failureMessage = message } else { failureMessage = nil }
-        let report = Diagnostics.Report(
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?",
-            systemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            primaryHost: host(settings.primaryIndex),
-            primaryModel: settings.profiles.indices.contains(settings.primaryIndex)
-                ? settings.profiles[settings.primaryIndex].model.trimmingCharacters(in: .whitespaces)
-                : "",
-            backupHost: host(settings.fallbackIndex),
-            localHost: host(SettingsStore.localProfileIndex),
-            usingLocalModel: settings.useLocalModel,
-            raceEnabled: settings.raceFastestEnabled,
-            multiLanguageMode: settings.multiLanguageMode,
-            target: target.apiName,
-            failure: failureMessage,
-            failureKind: failureKind
-        )
-        return Diagnostics.text(for: report)
-    }
-
-    /// Copies the receipt above. Separate from `copyOutput` because it must work when
-    /// there is no output at all — a failed translation is exactly when it is needed.
-    /// It reuses `flashCopied`/`copyFailed` on purpose: "something was copied" has one
-    /// confirmation in this app, and inventing a second one for a support action would
-    /// add UI for the rarest path in the panel.
-    func copyDiagnostics() {
-        let text = diagnosticsReport()
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        if pasteboard.setString(text, forType: .string) {
-            flashCopied()
-        } else {
-            flashToast(.copyFailed)
-        }
-    }
-
     // MARK: - Clipboard
 
     private func copyToPasteboard() -> Bool {

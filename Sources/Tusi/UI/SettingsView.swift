@@ -4,7 +4,6 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
     @EnvironmentObject private var updateChecker: UpdateChecker
-    @EnvironmentObject private var engine: TranslationEngine
 
     @State private var showKey = false
     @State private var testStates: [Int: TestState] = [:]
@@ -13,9 +12,6 @@ struct SettingsView: View {
     @State private var shortcutsRowHovering = false
     @State private var advancedExpandedOverride: [Int: Bool] = [:]
     @State private var extraInstructionExpandedOverride: Bool?
-    /// Debounces the audition cue while the volume slider is being dragged, so one drag
-    /// plays one sound at the level the user landed on instead of a burst per tick.
-    @State private var volumePreviewTask: Task<Void, Never>?
 
     private enum FocusedField: Hashable {
         case baseURL
@@ -29,7 +25,7 @@ struct SettingsView: View {
     enum TestState: Equatable {
         case idle
         case testing
-        case success(Int)
+        case success(TranslationService.ConnectionTestResult)
         case failure(String)
     }
 
@@ -239,7 +235,6 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
                 }
 
-                diagnosticsRow
             }
             .background(
                 GeometryReader { proxy in
@@ -267,8 +262,6 @@ struct SettingsView: View {
             panelState.shortcutError = nil
             testTasks.values.forEach { $0.cancel() }
             testTasks.removeAll()
-            // Leaving the page mid-drag must not fire a cue into an unrelated screen.
-            volumePreviewTask?.cancel()
         }
     }
 
@@ -438,93 +431,27 @@ struct SettingsView: View {
 
     // MARK: - Sound
 
-    /// The sound switch and its volume. Sound plays only for the finished translation
-    /// result, so the switch is a plain on/off for that cue. The label is tappable for
-    /// accessibility, same as the other rows. The small "试听" button next to it plays
-    /// the cue even when the switch is off, so the user can judge the sound before
-    /// enabling it; the slider below appears once it is on.
+    /// Sound plays only for the finished translation result and follows the system
+    /// output volume. The preview remains available even when the cue is disabled.
     private var soundToggleRow: some View {
-        // The volume slider follows the same "sub-item appears when the parent is on"
-        // pattern as the race toast toggle: `soundVolume` was persisted, restored and
-        // applied to SoundPlayer with no way for the user to change it, which is a
-        // setting that exists only in storage. It is revealed with the cue rather than
-        // shown always — a volume control under a muted cue has nothing to control.
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("翻译成功音效")
-                    .onTapGesture { settings.soundEnabled.toggle() }
-                Button {
-                    SoundPlayer.shared.previewSuccess()
-                } label: {
-                    Image(systemName: "play.circle")
-                        .font(Theme.bodySmall)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("试听翻译成功音效")
-                .accessibilityLabel("试听翻译成功音效")
-                Spacer(minLength: 8)
-                Toggle("", isOn: $settings.soundEnabled)
-                    .labelsHidden()
-                    .accessibilityLabel("翻译成功音效")
-            }
-
-            if settings.soundEnabled {
-                HStack(spacing: 6) {
-                    Image(systemName: "speaker.fill")
-                        .font(Theme.caption2)
-                        .foregroundStyle(.tertiary)
-                    Slider(value: $settings.soundVolume, in: 0...1)
-                        .controlSize(.mini)
-                        .accessibilityLabel("音效音量")
-                        // Every drag ends on a cue at the new level: judging a volume
-                        // by the number alone is impossible, and the success sound is
-                        // short enough to audition repeatedly.
-                        .onChange(of: settings.soundVolume) { _, _ in
-                            volumePreviewTask?.cancel()
-                            volumePreviewTask = Task {
-                                try? await Task.sleep(for: .milliseconds(220))
-                                guard !Task.isCancelled else { return }
-                                SoundPlayer.shared.previewSuccess()
-                            }
-                        }
-                    Image(systemName: "speaker.wave.3.fill")
-                        .font(Theme.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .transition(.opacity)
-            }
-        }
-        .animation(Theme.stateChange, value: settings.soundEnabled)
-    }
-
-    // MARK: - Diagnostics
-
-    /// The same receipt the error box offers, reachable when nothing has failed yet —
-    /// "it translated, but wrongly" and "the panel behaves oddly" are reports too, and
-    /// they never pass through an error state. Quiet and last on the page: it is a
-    /// support affordance, not a setting.
-    private var diagnosticsRow: some View {
-        HStack(spacing: 6) {
+        HStack {
+            Text("翻译成功音效")
+                .onTapGesture { settings.soundEnabled.toggle() }
             Button {
-                engine.copyDiagnostics()
+                SoundPlayer.shared.previewSuccess()
             } label: {
-                Label(L("复制诊断信息"), systemImage: "doc.on.doc")
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "play.circle")
+                    .font(Theme.bodySmall)
+                    .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
-            .help(L("复制不含 API Key 和原文的诊断信息"))
-
-            if engine.copied {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(.green)
-                    .transition(.opacity)
-            }
-            Spacer(minLength: 0)
+            .help("试听翻译成功音效")
+            .accessibilityLabel("试听翻译成功音效")
+            Spacer(minLength: 8)
+            Toggle("", isOn: $settings.soundEnabled)
+                .labelsHidden()
+                .accessibilityLabel("翻译成功音效")
         }
-        .animation(Theme.microMotion, value: engine.copied)
     }
 
     // MARK: - Update check
@@ -630,8 +557,10 @@ struct SettingsView: View {
     /// slot had a value, which read as a fake switch.
     private var showAdvanced: Bool {
         get {
-            advancedExpandedOverride[editingIndex]
-                ?? !settings.profiles[safeEditingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
+            advancedExpandedOverride[editingIndex] ?? (
+                !settings.profiles[safeEditingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
+                    || settings.profiles[safeEditingIndex].outputProtocolPreference != .automatic
+            )
         }
         nonmutating set { advancedExpandedOverride[editingIndex] = newValue }
     }
@@ -671,6 +600,28 @@ struct SettingsView: View {
             .buttonStyle(.plain)
 
             if showAdvanced {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("输出协议")
+                            .font(Theme.footnoteMedium)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Picker("输出协议", selection: $settings.profiles[safeEditingIndex].outputProtocolPreference) {
+                            Text("自动（推荐）").tag(TranslationProtocolPreference.automatic)
+                            Text("纯文本兼容").tag(TranslationProtocolPreference.plainText)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .controlSize(.small)
+                        .accessibilityLabel("输出协议")
+                    }
+                    Text("自动使用已验证格式；首次不兼容时会改用纯文本并重试一次。")
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.identity)
+
                 // "优先顺序", not "路由": the request only carries OpenRouter's
                 // `provider.order` preference list. It is not `provider.only` and does
                 // not set `allow_fallbacks: false`, so OpenRouter may still serve the
@@ -828,6 +779,8 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
+            .help("会发送最多 4 个极短测试请求来检测输出兼容性")
+            .accessibilityHint("会发送最多 4 个极短测试请求来检测输出兼容性")
 
             Spacer(minLength: 8)
 
@@ -840,11 +793,15 @@ struct SettingsView: View {
                 Text("连接中…")
                     .font(Theme.footnote)
                     .foregroundStyle(.tertiary)
-            case .success(let ms):
+            case .success(let result):
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text(String(format: L("连接正常 · %d ms"), ms))
+                    Text(String(
+                        format: L("连接正常 · %d ms · %@"),
+                        result.latencyMilliseconds,
+                        result.outputProtocol.statusLabel
+                    ))
                 }
                 .font(Theme.footnote2Medium)
                 .foregroundStyle(.secondary)
@@ -874,9 +831,9 @@ struct SettingsView: View {
 
         let task = Task { @MainActor in
             do {
-                let ms = try await TranslationService.testConnection(config: config)
+                let result = try await TranslationService.testConnection(config: config)
                 guard !Task.isCancelled, testGenerations[index] == generation else { return }
-                testStates[index] = .success(ms)
+                testStates[index] = .success(result)
             } catch {
                 guard !Task.isCancelled, testGenerations[index] == generation else { return }
                 testStates[index] = .failure(error.localizedDescription)

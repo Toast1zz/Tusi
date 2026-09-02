@@ -10,6 +10,13 @@ private struct ResultHeightKey: PreferenceKey {
     }
 }
 
+private struct ResultSectionHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct TranslatorView: View {
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -17,6 +24,7 @@ struct TranslatorView: View {
 
     @FocusState private var inputFocused: Bool
     @State private var resultHeight: CGFloat = 20
+    @State private var resultSectionHeight: CGFloat = 20
     /// Whether the result viewport sits at its bottom edge. Streaming auto-scrolls
     /// only when the user is already there — reading an earlier part of a long
     /// result must not be yanked back to the tail on every chunk.
@@ -140,22 +148,41 @@ struct TranslatorView: View {
                 .padding(.top, 16)
                 .padding(.horizontal, 16)
 
-            if panelState.showHistory {
+            if panelState.showHistory || engine.hasResultSection {
                 SoftDivider()
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
 
-                historyList
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-            } else if engine.hasResultSection {
-                SoftDivider()
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-
-                resultArea
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+                // History is a disclosure in the same place as the result, not a new
+                // page. Keep both states top-anchored, animate only the viewport height,
+                // and crossfade them so no content flies in or out.
+                ZStack(alignment: .topLeading) {
+                    if panelState.showHistory {
+                        historyList
+                            .transition(.opacity)
+                    } else if engine.hasResultSection {
+                        resultArea
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: ResultSectionHeightKey.self,
+                                        value: geometry.size.height
+                                    )
+                                }
+                            )
+                            .transition(.opacity)
+                    }
+                }
+                .frame(height: visibleSectionHeight, alignment: .top)
+                .clipped()
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .onPreferenceChange(ResultSectionHeightKey.self) { height in
+                    guard height > 0 else { return }
+                    resultSectionHeight = height
+                }
             }
 
             // Inline target picker: expands ABOVE the bottom bar (never a popover — a
@@ -199,7 +226,7 @@ struct TranslatorView: View {
         }
         .animation(Theme.layoutChange, value: engine.hasResultSection)
         .animation(Theme.stateChange, value: engine.toast)
-        .animation(Theme.layoutChange, value: panelState.showHistory)
+        .animation(Theme.historyTransition, value: panelState.showHistory)
         .animation(Theme.layoutChange, value: panelState.showLanguagePicker)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
             // Every panel show reposts this; a picker left open last time must not
@@ -310,8 +337,7 @@ struct TranslatorView: View {
             ErrorBox(
                 message: message,
                 primaryLabel: failureActionLabel,
-                primaryAction: performFailureAction,
-                onCopyDiagnostics: { engine.copyDiagnostics() }
+                primaryAction: performFailureAction
             )
         case .translating:
             StreamingPlaceholder()
@@ -395,6 +421,10 @@ struct TranslatorView: View {
     // MARK: - Bottom bar
 
     // MARK: - History
+    private var visibleSectionHeight: CGFloat {
+        panelState.showHistory ? historyViewportHeight : max(resultSectionHeight, 20)
+    }
+
     private var historyViewportHeight: CGFloat {
         guard !engine.history.isEmpty else { return 112 }
         let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows
@@ -447,9 +477,10 @@ struct TranslatorView: View {
                         }
                     }
                 }
-                // A history list longer than the viewport looked exactly like a full
-                // one; the overlay scroller is the system's own answer to that.
-                .scrollIndicators(.automatic)
+                // macOS 27 can reserve an opaque white gutter for an automatic
+                // scroller inside this transparent panel. Hide only the indicator;
+                // trackpad, wheel and keyboard scrolling remain unchanged.
+                .scrollIndicators(.never)
             }
         }
         .frame(height: historyViewportHeight)
@@ -677,7 +708,7 @@ struct TranslatorView: View {
                 isActive: panelState.showHistory,
                 help: panelState.showHistory ? "关闭历史" : "翻译历史"
             ) {
-                withAnimation(Theme.stateChange) {
+                withAnimation(Theme.historyTransition) {
                     panelState.showHistory.toggle()
                 }
             }
@@ -697,7 +728,6 @@ struct TranslatorView: View {
         }
         .animation(Theme.layoutChange, value: engine.output.isEmpty)
         .animation(Theme.layoutChange, value: engine.isTranslating)
-        .animation(Theme.layoutChange, value: panelState.showHistory)
         .animation(Theme.layoutChange, value: settings.useLocalModel)
     }
 }
