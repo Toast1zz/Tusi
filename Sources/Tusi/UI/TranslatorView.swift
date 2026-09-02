@@ -188,11 +188,14 @@ struct TranslatorView: View {
             // Inline target picker: expands ABOVE the bottom bar (never a popover — a
             // popup makes the panel resign key and trip the click-outside auto-hide,
             // the same constraint ToneSelector documents).
-            if panelState.showLanguagePicker {
+            //
+            // A `Disclosure`, not an `if` + `.move(edge: .bottom)`: the row's arrival is
+            // the panel getting taller, and a vertical slide on top of that says the same
+            // thing twice while leaving the stack's own height to change in one step.
+            Disclosure(isExpanded: panelState.showLanguagePicker) {
                 languagePickerRow
                     .padding(.horizontal, 16)
                     .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             // Horizontal padding matches inputArea/resultArea/SoftDivider above (16, not
@@ -204,30 +207,20 @@ struct TranslatorView: View {
                 .padding(.top, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
                 .padding(.bottom, 10)
         }
-        .overlay(alignment: .top) {
-            // All toasts live at the top now, one overlay instead of two split by
-            // case: the bottom spot sits right over the result text the user just
-            // asked to read, and that was true for fellBack/truncatedInput too, not
-            // just raceWon — the top only ever covers the input they already typed
-            // and aren't rereading. A slide-down-and-fade (not scale) reads as a
-            // notification arriving, not a bubble popping.
-            if let toast = engine.toast {
-                Group {
-                    switch toast {
-                    case .fellBack: Toast.fellBack()
-                    case .truncatedInput: Toast.truncatedInput()
-                    case .copyFailed: Toast.copyFailed()
-                    case .raceWon(let host): Toast.raceWon(host)
-                    }
-                }
-                .padding(.top, 10)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(Theme.layoutChange, value: engine.hasResultSection)
-        .animation(Theme.stateChange, value: engine.toast)
-        .animation(Theme.historyTransition, value: panelState.showHistory)
-        .animation(Theme.layoutChange, value: panelState.showLanguagePicker)
+        // Every one of these is declared here, at the top of the page, rather than
+        // wrapped around the mutation that causes it: a value can be changed from the
+        // bottom bar, a keyboard shortcut, or the panel controller, and only a
+        // declaration covers all three. History shares `.layout` with everything else
+        // now — it had its own slightly longer token purely to mask the window lag that
+        // no longer exists.
+        .motion(.layout, value: resultPhase)
+        // The provenance row arriving, and the switch appearing beside it when a second
+        // version lands, both change the panel's height — same clock as everything else.
+        .motion(.layout, value: engine.versions)
+        .motion(.layout, value: engine.escalating)
+        .motion(.layout, value: engine.escalationFailure)
+        .motion(.layout, value: panelState.showHistory)
+        .motion(.layout, value: panelState.showLanguagePicker)
         .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
             // Every panel show reposts this; a picker left open last time must not
             // greet the next invocation already expanded.
@@ -302,6 +295,24 @@ struct TranslatorView: View {
                 .transition(.opacity)
             }
         }
+        // Keyed to *which* notice is showing, not to the input itself. The editor grows
+        // and shrinks on every keystroke and must never animate — that would put the text
+        // behind the caret. A notice appearing or disappearing is a different event: it
+        // adds a line to the panel, so it rides the same clock the window does.
+        .motion(.layout, value: inputNotice)
+    }
+
+    /// The one notice, if any, under the input box.
+    private enum InputNotice: Equatable {
+        case none
+        case truncated
+        case remainingCount
+    }
+
+    private var inputNotice: InputNotice {
+        if engine.inputWasTruncated { return .truncated }
+        if engine.input.count >= Self.inputCountdownThreshold { return .remainingCount }
+        return .none
     }
 
     // MARK: - Result
@@ -311,7 +322,6 @@ struct TranslatorView: View {
     /// the opposite. `FailureKind` carries which case this is.
     private var failureActionLabel: String {
         switch engine.failureKind {
-        case .localModelNotConfigured: return L("配置本地模型")
         case .notConfigured, .credentials, .configuration: return L("打开设置")
         case .transient, .unknown, .none: return L("重试")
         }
@@ -319,19 +329,44 @@ struct TranslatorView: View {
 
     private func performFailureAction() {
         switch engine.failureKind {
-        case .localModelNotConfigured:
-            // Land on the slot that needs filling in rather than the page's last tab.
-            panelState.settingsProfileIndex = SettingsStore.localProfileIndex
-            withAnimation(Theme.pageTransition) { panelState.showSettings = true }
         case .notConfigured, .credentials, .configuration:
-            withAnimation(Theme.pageTransition) { panelState.showSettings = true }
+            panelState.showSettings = true
         case .transient, .unknown, .none:
             engine.translate()
         }
     }
 
+    /// What kind of thing the result box currently holds. One value rather than the two
+    /// it is derived from (`hasResultSection` and `engine.state`), because they change
+    /// together the moment a translation starts or lands — and two `.motion` scopes both
+    /// claiming that moment is precisely the "one action, several overlapping timelines"
+    /// this system exists to prevent. Note what is *not* in here: `engine.output`. It
+    /// grows while a translation streams, and nothing in the panel animates during a
+    /// stream — the window mirrors those heights directly, which is what keeps the text
+    /// from lagging the tokens.
+    private enum ResultPhase: Equatable {
+        case none
+        case waiting
+        case failed
+        case text
+    }
+
+    private var resultPhase: ResultPhase {
+        guard engine.hasResultSection else { return .none }
+        switch engine.state {
+        case .translating: return .waiting
+        case .failed: return .failed
+        default: return .text
+        }
+    }
+
     @ViewBuilder
     private var resultArea: some View {
+        // `.transition(.opacity)` on each branch, driven by `.motion(.layout, value:
+        // resultPhase)` at the top of `body`. Without them the skeleton is replaced by
+        // the finished text in a single frame while the box around it is still easing
+        // its height — the last hard cut in the panel, and the most visible one, since
+        // it lands exactly where the user is looking.
         switch engine.state {
         case .failed(let message):
             ErrorBox(
@@ -339,9 +374,11 @@ struct TranslatorView: View {
                 primaryLabel: failureActionLabel,
                 primaryAction: performFailureAction
             )
+            .transition(.opacity)
         case .translating:
             StreamingPlaceholder()
                 .padding(.vertical, 2)
+                .transition(.opacity)
         default:
             VStack(alignment: .leading, spacing: 8) {
                 ScrollViewReader { proxy in
@@ -379,6 +416,106 @@ struct TranslatorView: View {
                     }
                 }
 
+                // Where this came from, and the offer of a better one — under the
+                // result, in the flow, covering nothing. This row is what the "who was
+                // faster" and "used the backup" toasts turned into: the same facts,
+                // stated for as long as they are true instead of for 2.2 seconds on top
+                // of the text.
+                //
+                // Everything from here down carries the result text's own 5pt leading
+                // inset (see `resultNoticeInset`), so the provenance label, the notices
+                // and the translation all begin on one vertical line — and on the same
+                // line as the input above them, which shares that inset because it comes
+                // from TextEditor's NSTextView line-fragment padding.
+                if !engine.versions.isEmpty || engine.escalating {
+                    HStack(spacing: 8) {
+                        if let shown = shownVersion {
+                            ResultProvenance(
+                                label: versionLabel(shown),
+                                isLocal: shown.tier == .local,
+                                afterFailover: shown.afterFailover
+                            )
+                            .help(slotTooltip(shown.slot))
+                        }
+
+                        Spacer(minLength: 4)
+
+                        if engine.escalating {
+                            // The result stays readable and copyable while this runs: it
+                            // is still the current answer until a better one lands.
+                            HStack(spacing: 5) {
+                                Text("在线重译中…")
+                                    .font(Theme.caption)
+                                    .foregroundStyle(.tertiary)
+                                Button {
+                                    engine.cancelTranslation()
+                                } label: {
+                                    Image(systemName: "stop.circle")
+                                        .font(Theme.bodySmall)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .buttonStyle(.plain)
+                                .help(L("停止"))
+                                .accessibilityLabel(L("停止"))
+                            }
+                            .transition(.opacity)
+                        } else if let other = otherVersion {
+                            // Free, instant and reversible: the other answer is already
+                            // in hand. Swapping it in place is also what makes the
+                            // difference legible — side by side, in a panel this narrow,
+                            // both columns would be too cramped to read.
+                            Button {
+                                engine.showVersion(other.index)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.left.arrow.right")
+                                        .font(Theme.caption2)
+                                    Text(versionLabel(other.version))
+                                        .font(Theme.caption)
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(String(format: L("显示 %@ 的翻译"), versionLabel(other.version)))
+                            .transition(.opacity)
+                        } else if engine.canEscalate {
+                            // The whole feature in one line, at the only moment it is
+                            // useful: after you have read the answer and know whether it
+                            // was enough. The tier, not the provider — which slot answers
+                            // depends on the online strategy, and the label under the next
+                            // result will name it anyway.
+                            Button {
+                                engine.escalate()
+                            } label: {
+                                Text("⏎ 换在线重译")
+                                    .font(Theme.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
+                            .help(engine.escalationTargetLabel.map {
+                                String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
+                            } ?? L("用更强的模型再翻一次，两个结果都会留着"))
+                            .transition(.opacity)
+                        }
+                    }
+                    .padding(.leading, Self.resultNoticeInset)
+                    .transition(.opacity)
+                }
+
+                // An escalation that came back empty-handed says so quietly. The
+                // translation above it is untouched and still perfectly usable — this
+                // is a second opinion that did not arrive, not a failure of the result.
+                if let escalationFailure = engine.escalationFailure {
+                    Label(String(format: L("没能取到在线结果 · %@"), escalationFailure), systemImage: "cloud.slash")
+                        .font(Theme.footnoteMedium)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Self.resultNoticeInset)
+                        .transition(.opacity)
+                }
+
                 // A user-stopped stream keeps its partial text, but it must not pass for
                 // a complete translation — say so right under the result.
                 // `.fixedSize(horizontal: false, vertical: true)` on every notice: the
@@ -393,12 +530,14 @@ struct TranslatorView: View {
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Self.resultNoticeInset)
                         .transition(.opacity)
                 } else if engine.interrupted {
                     Label(L("已停止，结果不完整"), systemImage: "stop.circle.fill")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Self.resultNoticeInset)
                         .transition(.opacity)
                 } else if engine.outputCapped {
                     // Same honesty for an overlong result cut at the length cap.
@@ -406,12 +545,14 @@ struct TranslatorView: View {
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Self.resultNoticeInset)
                         .transition(.opacity)
                 } else if engine.restoredFromTruncatedHistory {
                     Label(L("历史仅保留部分内容"), systemImage: "scissors")
                         .font(Theme.footnoteMedium)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Self.resultNoticeInset)
                         .transition(.opacity)
                 }
             }
@@ -556,9 +697,7 @@ struct TranslatorView: View {
     }
 
     private func closePicker() {
-        withAnimation(Theme.stateChange) {
-            panelState.showLanguagePicker = false
-        }
+        panelState.showLanguagePicker = false
     }
 
     /// Where the remaining-characters count starts appearing: close enough to the
@@ -569,19 +708,43 @@ struct TranslatorView: View {
     /// width measurement has to add it back to report a panel width.
     private static let contentHorizontalInset: CGFloat = 16
 
-    /// Names the slot the local-model mode is pointing at. Host, not base URL: the
-    /// marker should say which machine is answering, not reprint a configuration line.
-    private var localModelTooltip: String {
-        let index = SettingsStore.localProfileIndex
-        guard settings.profiles.indices.contains(index) else { return L("正在使用本地模型") }
-        let profile = settings.profiles[index]
+    /// TextEditor's default NSTextView line-fragment inset. The input editor gets it for
+    /// free, the result text adds it back by hand, and so does everything printed under
+    /// the result — otherwise the provenance label and the notices start 5pt to the left
+    /// of the two blocks of text they are talking about.
+    private static let resultNoticeInset: CGFloat = 5
+
+    /// Names the slot a finished result came from. Host and model, not base URL: the
+    /// label should say which machine answered, not reprint a configuration line.
+    private func slotTooltip(_ slot: Int) -> String {
+        guard settings.profiles.indices.contains(slot) else { return settings.label(for: slot) }
+        let profile = settings.profiles[slot]
         let model = profile.model.trimmingCharacters(in: .whitespaces)
         let host = profile.config.displayHost
-        guard !model.isEmpty || !host.isEmpty else {
-            return L("正在使用本地模型（尚未配置，请在设置中填写）")
-        }
         let detail = [model, host].filter { !$0.isEmpty }.joined(separator: " · ")
-        return String(format: L("正在使用本地模型 · %@"), detail)
+        return detail.isEmpty ? settings.label(for: slot) : detail
+    }
+
+    private var shownVersion: TranslationEngine.ResultVersion? {
+        engine.versions.indices.contains(engine.shownVersion)
+            ? engine.versions[engine.shownVersion]
+            : nil
+    }
+
+    /// The answer that is not on screen. There are at most two — one per tier — so
+    /// "the other one" is always a single, well-defined thing, which is exactly why a
+    /// swap link says more with less than a two-segment picker did.
+    private var otherVersion: (index: Int, version: TranslationEngine.ResultVersion)? {
+        guard engine.versions.count > 1 else { return nil }
+        let index = engine.shownVersion == 0 ? 1 : 0
+        guard engine.versions.indices.contains(index) else { return nil }
+        return (index, engine.versions[index])
+    }
+
+    /// A version's name: the tier for the local slot (its host is an IP nobody reads as
+    /// a name), the provider's short brand for an online one.
+    private func versionLabel(_ version: TranslationEngine.ResultVersion) -> String {
+        version.tier == .local ? L("本地") : settings.label(for: version.slot)
     }
 
     private var bottomBar: some View {
@@ -622,6 +785,20 @@ struct TranslatorView: View {
         )
     }
 
+    /// Which controls the bottom bar is currently showing. See the `.motion` call at the
+    /// bottom of `bottomBarRow` for why this is one value rather than three.
+    private struct BarConfiguration: Equatable {
+        let hasOutput: Bool
+        let isTranslating: Bool
+    }
+
+    private var barConfiguration: BarConfiguration {
+        BarConfiguration(
+            hasOutput: !engine.output.isEmpty,
+            isTranslating: engine.isTranslating
+        )
+    }
+
     private func bottomBarRow(showsCopyShortcut: Bool, measuring: Bool = false) -> some View {
         HStack(spacing: 8) {
             DirectionChip(
@@ -631,9 +808,7 @@ struct TranslatorView: View {
                 isFlipped: engine.flipped,
                 isExpanded: panelState.showLanguagePicker,
                 onTap: {
-                    withAnimation(Theme.stateChange) {
-                        panelState.showLanguagePicker.toggle()
-                    }
+                    panelState.showLanguagePicker.toggle()
                 }
             )
 
@@ -641,22 +816,6 @@ struct TranslatorView: View {
             // is static trivia that settings already shows. It stays in the tooltip.
             ToneSelector(tone: $settings.tone)
                 .help(String(format: L("翻译文风 · 当前模型：%@"), engine.activeModel))
-
-            // "Use the local model" is a standing mode, not a per-request choice: once
-            // it's on, every ⏎ goes to that one slot — no primary, no backup, no race.
-            // A mode with those consequences must be visible where translating happens,
-            // not only on the Settings page where it was switched on. Icon only, no
-            // label: the bar is already the width-critical row, and the tooltip carries
-            // the model and host (never the full URL, which may contain a port and path
-            // the user has no reason to broadcast on screen).
-            if settings.useLocalModel {
-                Image(systemName: "desktopcomputer")
-                    .font(Theme.footnote)
-                    .foregroundStyle(.secondary)
-                    .help(localModelTooltip)
-                    .accessibilityLabel(L("正在使用本地模型"))
-                    .transition(.opacity)
-            }
 
             Spacer(minLength: 4)
 
@@ -673,7 +832,7 @@ struct TranslatorView: View {
             } else if !engine.input.isEmpty && engine.output.isEmpty {
                 let hasInput = !engine.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button {
-                    engine.translate()
+                    engine.submit()
                 } label: {
                     Text("⏎ 翻译")
                         .font(Theme.footnoteMedium)
@@ -708,27 +867,30 @@ struct TranslatorView: View {
                 isActive: panelState.showHistory,
                 help: panelState.showHistory ? "关闭历史" : "翻译历史"
             ) {
-                withAnimation(Theme.historyTransition) {
-                    panelState.showHistory.toggle()
-                }
+                panelState.showHistory.toggle()
             }
 
             BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
-                withAnimation(Theme.pageTransition) {
-                    panelState.showSettings = true
-                }
+                panelState.showSettings = true
             }
 
             if measuring || (!engine.isTranslating && !engine.output.isEmpty) {
-                CopyButton(copied: engine.copied, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
+                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
                     engine.copyOutput()
                 }
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    // Opacity only. The stop and translate controls that share this
+                    // slot both plain-fade; a scale pop on just one of the three made
+                    // the same position behave differently depending on which control
+                    // happened to be in it.
+                    .transition(.opacity)
             }
         }
-        .animation(Theme.layoutChange, value: engine.output.isEmpty)
-        .animation(Theme.layoutChange, value: engine.isTranslating)
-        .animation(Theme.layoutChange, value: settings.useLocalModel)
+        // One value, one timeline. Pressing ⏎ swaps a control here *and* opens the result
+        // section above, and finishing a translation swaps it back *and* resizes the
+        // panel to fit the text — so this row is part of a height change whether or not
+        // its own height moves, and has to run on the same clock as the panel. Three
+        // separate `.motion` scopes would let one keystroke start three animations.
+        .motion(.layout, value: barConfiguration)
     }
 }
 
@@ -786,7 +948,7 @@ private struct HistoryRecordRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(Theme.microMotion, value: hovering)
+        .motion(.micro, value: hovering)
         // Rows truncate to keep the list compact; the hover tooltip shows the full
         // text so a long record is still fully readable without opening it.
         .help(tooltip)

@@ -116,36 +116,28 @@ final class SettingsStore: ObservableObject {
     @Published var primaryIndex: Int {
         didSet { defaults.set(primaryIndex, forKey: "primaryIndex") }
     }
-    @Published var fallbackEnabled: Bool {
-        didSet { defaults.set(fallbackEnabled, forKey: "fallbackEnabled") }
+    /// Which tier a translation starts at. `.local` does not mean "local only" — it
+    /// means the local model answers first and the online tier stays one keystroke
+    /// away (see `TranslationRoute` and `TranslationEngine.escalate`). This replaced
+    /// `useLocalModel`, a standing mode that made the local slot bypass every other
+    /// code path in the app.
+    @Published var routeStart: RouteStart {
+        didSet { defaults.set(routeStart.rawValue, forKey: "routeStart") }
     }
-    /// Race primary and backup concurrently and commit whichever answers first,
-    /// instead of trying them strictly in order. Off by default: this doubles the
-    /// number of requests sent per translation whenever both slots are usable, which
-    /// is a real cost/quota trade-off the user must opt into, not a free win.
+
+    /// What to do when both online slots are filled in. Replaced the
+    /// `fallbackEnabled` / `raceFastestEnabled` pair, which were never actually
+    /// independent: `resolvedChain` gated the backup on `fallbackEnabled`, and the
+    /// race path required a two-slot chain — so racing with fallback switched off did
+    /// nothing at all, silently, with both switches showing as on.
     ///
-    /// Only ever applies when BOTH slots are non-loopback (`requiresAuth == true`) —
-    /// a local model's near-zero network latency would trivially win every race
-    /// regardless of whether its answers are actually good enough, which defeats the
-    /// point of racing two comparable online providers. When either slot is local,
-    /// this setting has no effect and the ordinary sequential primary→backup behavior
-    /// (governed by `fallbackEnabled`) applies unchanged.
-    @Published var raceFastestEnabled: Bool {
-        didSet { defaults.set(raceFastestEnabled, forKey: "raceFastestEnabled") }
-    }
-    /// Whether a race's winner gets named in a one-time toast (Toast.raceWon). On by
-    /// default when racing itself is on — racing silently otherwise looks identical
-    /// to ordinary translation, which is confusing the first few times. Independent
-    /// key so turning the toast off doesn't also turn off racing itself.
-    @Published var raceToastEnabled: Bool {
-        didSet { defaults.set(raceToastEnabled, forKey: "raceToastEnabled") }
-    }
-    /// Standing mode switch, flipped from the local-model slot's own Settings tab —
-    /// when on, `translate()` talks ONLY to `localProfileIndex`: no primary/backup, no
-    /// race, no failover. This is the entire manual-only contract for that slot; there
-    /// is no other trigger anywhere in the app.
-    @Published var useLocalModel: Bool {
-        didSet { defaults.set(useLocalModel, forKey: "useLocalModel") }
+    /// `.concurrent` is only ever *offered* when both online slots are non-loopback
+    /// (see `concurrentAvailable`): a loopback slot's near-zero network latency wins
+    /// every race regardless of answer quality, which defeats the point. The route
+    /// builder enforces the same rule, so a stale preference degrades to `.failover`
+    /// instead of quietly behaving like something the settings page never showed.
+    @Published var onlineStrategy: OnlineStrategy {
+        didSet { defaults.set(onlineStrategy.rawValue, forKey: "onlineStrategy") }
     }
     @Published var autoCopy: Bool {
         didSet { defaults.set(autoCopy, forKey: "autoCopy") }
@@ -229,10 +221,9 @@ final class SettingsStore: ObservableObject {
         }
 
         primaryIndex = defaults.object(forKey: "primaryIndex") as? Int == 1 ? 1 : 0
-        fallbackEnabled = defaults.object(forKey: "fallbackEnabled") as? Bool ?? true
-        raceFastestEnabled = defaults.bool(forKey: "raceFastestEnabled")
-        raceToastEnabled = defaults.object(forKey: "raceToastEnabled") as? Bool ?? true
-        useLocalModel = defaults.bool(forKey: "useLocalModel")
+        let routing = Self.loadRouting(defaults: defaults)
+        routeStart = routing.start
+        onlineStrategy = routing.strategy
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
@@ -259,6 +250,38 @@ final class SettingsStore: ObservableObject {
         // Sync the persisted sound preference into the shared player after every stored
         // property is initialized.
         SoundPlayer.shared.enabled = soundEnabled
+    }
+
+    // MARK: - Routing persistence
+
+    /// Reads the two routing preferences, migrating the four booleans they replaced.
+    ///
+    /// The migration preserves *observed* behavior rather than the switch positions:
+    /// `raceFastestEnabled` with `fallbackEnabled` off never actually raced, so it
+    /// maps to `.failover`, not `.concurrent`. Users who had fallback switched off
+    /// with a usable backup do gain automatic failover — that switch only ever chose
+    /// between "translate" and "show an error while a working provider sits idle",
+    /// which is why it is gone.
+    static func loadRouting(defaults: UserDefaults) -> (start: RouteStart, strategy: OnlineStrategy) {
+        if let rawStart = defaults.string(forKey: "routeStart"),
+           let start = RouteStart(rawValue: rawStart) {
+            let strategy = defaults.string(forKey: "onlineStrategy")
+                .flatMap(OnlineStrategy.init(rawValue:)) ?? .failover
+            return (start, strategy)
+        }
+
+        let start: RouteStart = defaults.bool(forKey: "useLocalModel") ? .local : .online
+        let hadFallback = defaults.object(forKey: "fallbackEnabled") as? Bool ?? true
+        let strategy: OnlineStrategy = (defaults.bool(forKey: "raceFastestEnabled") && hadFallback)
+            ? .concurrent
+            : .failover
+
+        defaults.set(start.rawValue, forKey: "routeStart")
+        defaults.set(strategy.rawValue, forKey: "onlineStrategy")
+        for retired in ["useLocalModel", "fallbackEnabled", "raceFastestEnabled", "raceToastEnabled"] {
+            defaults.removeObject(forKey: retired)
+        }
+        return (start, strategy)
     }
 
     // MARK: - Shortcut persistence
@@ -547,22 +570,65 @@ final class SettingsStore: ObservableObject {
 
     var fallbackIndex: Int { primaryIndex == 0 ? 1 : 0 }
 
-    /// Whether the automatic primary/backup pair has anything usable — deliberately
-    /// excludes the local-model slot, since filling in only that slot leaves ordinary
-    /// ⏎-to-translate still unconfigured (the local slot is manual-only).
-    var isConfigured: Bool { profiles[0].isUsable || profiles[1].isUsable }
+    /// Whether the local slot is filled in enough to be routed to.
+    var localAvailable: Bool { profiles[Self.localProfileIndex].isUsable }
 
-    /// Slots to try, in order: primary first, then the fallback if enabled and filled in.
-    /// Unusable slots are skipped so a half-filled backup never breaks a working primary.
-    var resolvedChain: [(index: Int, config: APIConfig)] {
-        var chain: [(Int, APIConfig)] = []
-        if profiles[primaryIndex].isUsable {
-            chain.append((primaryIndex, profiles[primaryIndex].config))
+    /// Whether either online slot is filled in.
+    var onlineAvailable: Bool { profiles[0].isUsable || profiles[1].isUsable }
+
+    /// Whether there is any usable slot at all. Unlike the old `isConfigured`, a
+    /// filled-in local slot counts: it is a normal route start now, not a manual-only
+    /// mode that left ⏎ unconfigured.
+    var isConfigured: Bool { !route.isEmpty }
+
+    /// Whether "同时请求" is a real choice right now. Both online slots must be filled
+    /// in and remote — a loopback slot would win every race on network latency alone,
+    /// so racing it says nothing about which answer is better. The settings page hides
+    /// the option when this is false rather than showing a switch that does nothing.
+    var concurrentAvailable: Bool {
+        profiles[0].isUsable && profiles[1].isUsable
+            && profiles[0].config.requiresAuth && profiles[1].config.requiresAuth
+    }
+
+    /// Whether the start-tier choice is a real choice: both tiers have to exist for
+    /// picking between them to mean anything.
+    var startChoiceAvailable: Bool { localAvailable && onlineAvailable }
+
+    /// The single online stage, or nil when no online slot is usable. A half-filled
+    /// backup collapses this to one slot rather than breaking a working primary.
+    private var onlineStage: RouteStage? {
+        let ordered = [primaryIndex, fallbackIndex].filter { profiles[$0].isUsable }
+        guard let sole = ordered.first else { return nil }
+        guard ordered.count == 2 else {
+            return RouteStage(tier: .online, slots: [sole], strategy: .single)
         }
-        if fallbackEnabled, profiles[fallbackIndex].isUsable {
-            chain.append((fallbackIndex, profiles[fallbackIndex].config))
+        return RouteStage(
+            tier: .online,
+            slots: ordered,
+            strategy: (onlineStrategy == .concurrent && concurrentAvailable) ? .concurrent : .failover
+        )
+    }
+
+    /// The stages this translation may pass through, in order. Everything the engine
+    /// needs to know about routing is here: which slots, in what order, under what
+    /// strategy, at which tier — so `translate()` no longer branches on preferences.
+    ///
+    /// A `.local` start with no usable local slot is not an error state to report; the
+    /// route simply begins online, exactly as it would if the preference were unset.
+    var route: TranslationRoute {
+        var stages: [RouteStage] = []
+        if routeStart == .local, localAvailable {
+            stages.append(RouteStage(tier: .local, slots: [Self.localProfileIndex], strategy: .single))
         }
-        return chain
+        if let onlineStage {
+            stages.append(onlineStage)
+        }
+        return TranslationRoute(stages: stages)
+    }
+
+    /// Resolves a slot index to the config the engine should send.
+    func config(for slot: Int) -> APIConfig {
+        profiles[profiles.indices.contains(slot) ? slot : 0].config
     }
 
     /// Slot label for the tabs: the provider's short name (e.g. "deepseek",

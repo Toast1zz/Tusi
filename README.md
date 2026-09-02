@@ -8,8 +8,10 @@ A menubar translator for macOS. Type Chinese and get English; type anything else
 - Explicit targets when you want them: English, Chinese, Japanese, Korean
 - Menubar panel, summoned with ⌥Space
 - BYOK — any OpenAI-compatible endpoint (DeepSeek, OpenRouter, SiliconFlow, Ollama, …)
-- Three slots: primary and backup (with automatic failover), plus a separate local-model slot
-- Optional "race for fastest": ask primary and backup at once and keep whichever answers first
+- Three slots: primary and backup online services, plus a local-model slot
+- Start local and press ⏎ again for an online second opinion — both answers are kept, and
+  the clipboard follows whichever one you are looking at
+- Two online services, used either primary-first or asked at the same time
 - Three tone presets (casual / standard / formal)
 - Optional auto-copy to clipboard, and a bounded local history of recent translations
 - Smart quotes on output, leaving code spans and blocks untouched
@@ -42,10 +44,29 @@ Open Settings (⌘,) and fill in a profile:
   preference, not a restriction: OpenRouter may still fall back to a provider you did not list.
 
 There are two remote profiles, primary and backup, plus a third slot for a local model
-(Ollama, LM Studio, llama.cpp-server). The local slot is a standing mode: while it is on,
-every translation goes to it alone — no failover and no race.
+(Ollama, LM Studio, llama.cpp-server). How they are used is one section on the Settings
+page, "翻译路线", with two questions:
 
-With failover enabled, a primary request that fails before producing any output is retried on the backup. API keys are stored in the Keychain, not on disk, and each profile has a "test connection" button. One note on launch-at-login: before macOS completes its first unlock after boot, the Keychain is not yet accessible, so a login-item launch that early may briefly see no API key — it recovers automatically once the system is unlocked.
+- **从哪开始** — the local model, or an online service. Starting local does not mean local
+  only: the local answer arrives first, and one more ⏎ asks an online service for its own
+  version. Both are kept, and a small label under the result switches between them.
+- **两套在线服务** — 主用优先 (the backup takes over only when the primary fails) or
+  同时请求 (both are asked at once and the first usable answer wins, which doubles what you
+  are billed per translation). The second option is offered only when both slots are remote:
+  a loopback slot would win on network latency alone, which says nothing about the answer.
+
+Each question appears only when it is a real choice, and a primary request that fails
+before producing any output is always retried on the backup. API keys are stored in the
+Keychain, not on disk, and each profile has a "test connection" button.
+
+If a freshly installed build asks you to authorize the API keys again, run
+`./build.sh keychain-unpin` once. macOS guards a Keychain item with a partition list whose
+entries are `teamid:` for an app signed by an identity carrying a Team ID and `cdhash:` for
+one that is not — and a cdhash changes with every build, so a self-signed app looks like a
+new application each time no matter how stably it is signed. Local builds therefore prefer
+an `Apple Development:` identity if one is present; the command above repoints an existing
+item at that Team ID. Release archives stay on the anonymous self-signed identity, since a
+Development certificate carries the developer's name and email. One note on launch-at-login: before macOS completes its first unlock after boot, the Keychain is not yet accessible, so a login-item launch that early may briefly see no API key — it recovers automatically once the system is unlocked.
 
 ## Shortcuts
 
@@ -53,6 +74,7 @@ With failover enabled, a primary request that fails before producing any output 
 |---|---|
 | Show / hide panel | ⌥Space |
 | Translate | ⏎ |
+| Retranslate online (after a local answer) | ⏎ again |
 | Newline | ⇧⏎ or ⌘⏎ |
 | Copy result | ⇧⌘C |
 | Settings | ⌘, |

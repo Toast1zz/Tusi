@@ -6,8 +6,6 @@ import Foundation
 enum FailureKind: Equatable {
     /// No slot is filled in at all — retrying cannot help, only configuring can.
     case notConfigured
-    /// Local-model mode is on but its slot is incomplete.
-    case localModelNotConfigured
     /// The endpoint rejected the key (or the account behind it).
     case credentials
     /// The base URL or the response protocol is wrong — a settings problem, not a
@@ -48,7 +46,7 @@ enum FailureKind: Equatable {
     var isWorthRetrying: Bool {
         switch self {
         case .transient, .unknown: return true
-        case .notConfigured, .localModelNotConfigured, .credentials, .configuration: return false
+        case .notConfigured, .credentials, .configuration: return false
         }
     }
 }

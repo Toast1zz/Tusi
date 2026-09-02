@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 /// Borderless floating panel that can receive keyboard input.
@@ -27,9 +26,6 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private var keyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
-    private var cancellables = Set<AnyCancellable>()
-    private var historyResizeTask: Task<Void, Never>?
-    private var followsAnimatedHistoryHeight = false
     private var desiredHeight: CGFloat = 160
 
     /// The narrowest the content can be drawn without clipping, reported by the view via
@@ -49,14 +45,6 @@ final class PanelController: NSObject, NSWindowDelegate {
         let lowerBound: CGFloat = 100
         let upperBound = max(lowerBound, visibleHeight - 12)
         return min(max(desired, lowerBound), upperBound)
-    }
-
-    static func shouldAnimateHeightChange(
-        isTranslating: Bool,
-        reduceMotion: Bool,
-        followsAnimatedSwiftUILayout: Bool
-    ) -> Bool {
-        !isTranslating && !reduceMotion && !followsAnimatedSwiftUILayout
     }
 
     init(engine: TranslationEngine, settings: SettingsStore, panelState: PanelState, updateChecker: UpdateChecker, statusItem: NSStatusItem?) {
@@ -115,16 +103,6 @@ final class PanelController: NSObject, NSWindowDelegate {
         installKeyMonitor()
         installResignObserver()
 
-        // SwiftUI already interpolates the translator's natural height while history
-        // folds and unfolds. Follow those measured frames directly; starting a fresh
-        // AppKit animation for every intermediate measurement makes the window chase
-        // the content and produces visible expand/collapse jitter.
-        panelState.$showHistory
-            .dropFirst()
-            .sink { [weak self] _ in
-                self?.beginFollowingAnimatedHistoryHeight()
-            }
-            .store(in: &cancellables)
     }
     /// `@MainActor deinit` (Swift 5.10+): the deinit runs on the main actor, so it can
     /// safely access the main-actor-isolated `keyMonitor`/`resignObserver` properties.
@@ -133,25 +111,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// here because the panel's monitors must be torn down with it.
     @MainActor
     deinit {
-        historyResizeTask?.cancel()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
         }
         if let resignObserver {
             NotificationCenter.default.removeObserver(resignObserver)
-        }
-    }
-
-    private func beginFollowingAnimatedHistoryHeight() {
-        historyResizeTask?.cancel()
-        followsAnimatedHistoryHeight = true
-        historyResizeTask = Task { @MainActor [weak self] in
-            // Keep one display-frame-sized tail so the final GeometryReader preference
-            // cannot arrive just after the SwiftUI duration and start a tiny second hop.
-            let duration = Theme.historyTransitionDuration * Theme.animationScale + 0.05
-            try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            self?.followsAnimatedHistoryHeight = false
         }
     }
 
@@ -169,15 +133,29 @@ final class PanelController: NSObject, NSWindowDelegate {
         position()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        // Reduce Motion skips the fade-in entirely rather than just speeding it up —
-        // this is the app's most frequent animation (summoned constantly, via a global
-        // hotkey), and a user who turned the setting on wants the panel there
-        // immediately, not a still-perceptible cross-fade every single time.
+        // The one animation in the app that cannot go through `.motion`: `alphaValue`
+        // belongs to the window, not to any view. It is still driven by Theme's curve
+        // and duration so the summon shares the app's motion character.
+        //
+        // `hide()` has no counterpart on purpose: a summon should feel like the panel
+        // was already there, a dismissal like it is already gone. Fading out would put
+        // a translucent panel over whatever the user just turned back to look at.
+        //
+        // Reduce Motion skips the fade entirely rather than shortening it — this is the
+        // app's most frequent animation (⌥Space, dozens of times a day), and a user who
+        // turned the setting on wants the panel there, not a brief cross-fade every
+        // single time. Read from NSWorkspace rather than the environment because there
+        // is no SwiftUI view here to read one from.
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.alphaValue = 1
         } else {
             panel.alphaValue = 0
-            panel.animator().alphaValue = 1
+            // motion-exception: the window's own alphaValue, which no SwiftUI view owns.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Theme.panelAppearDuration * Theme.animationScale
+                context.timingFunction = Theme.caTimingFunction
+                panel.animator().alphaValue = 1
+            }
         }
 
         if !hasShownOnce {
@@ -274,29 +252,34 @@ final class PanelController: NSObject, NSWindowDelegate {
         frame.size.height = clamped
         frame.origin.y = top - clamped
 
-        // While a translation streams, line growth arrives in a rapid burst: a full
-        // animated resize per line would stack dozens of overlapping animations and
-        // lag the text. Set the frame directly during streaming (the engine already
-        // coalesces updates to ~30/s); the eased animation is reserved for discrete
-        // layout jumps (history toggle, fold/unfold, mode switch). Reduce Motion
-        // collapses it to an instant resize too — this app resizes the panel
-        // constantly, and animating through that setting is a standing annoyance, not
-        // a nicety.
+        // How the window and the content stay together, and why this is not a second
+        // timeline in disguise:
         //
-        // For a single final-height jump, duration/timingFunction come from the same
-        // curve as SwiftUI's `Theme.layoutChange`. History is different: SwiftUI emits
-        // the intermediate heights itself, so the window follows them directly instead
-        // of easing each already-eased frame a second time.
-        let shouldAnimate = Self.shouldAnimateHeightChange(
-            isTranslating: engine.isTranslating,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-            followsAnimatedSwiftUILayout: followsAnimatedHistoryHeight
-        )
-        if !shouldAnimate {
+        // SwiftUI does not hand out interpolated heights. A `GeometryReader` preference
+        // fires *once* per transition, carrying the final value, about one layout pass
+        // after the action starts — measured directly, not assumed. So this method never
+        // sees the frames of the animation the view layer is running; it sees its
+        // destination. The window therefore has to animate there itself, and the only way
+        // for the two to look like one motion is for them to be the same animation:
+        // `Theme.windowResizeDuration` is the duration of `.layout` and `.page` (the two
+        // tokens allowed to move the panel's height), and `caTimingFunction` is the same
+        // curve `Theme.timed` builds from. Same start, same shape, same end.
+        //
+        // Two cases genuinely must not animate:
+        //
+        // - Streaming. Line growth arrives in a burst, and a fresh 0.22s animation per
+        //   line would stack dozens of overlapping resizes and lag the text behind its
+        //   own tokens. Nothing animates this in the view layer either, so setting the
+        //   frame directly keeps both sides consistent.
+        // - Reduce Motion. This panel resizes constantly; animating through that setting
+        //   is a standing annoyance rather than a nicety.
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if engine.isTranslating || reduceMotion {
             panel.setFrame(frame, display: true)
         } else {
+            // motion-exception: the window's own frame, which no SwiftUI view owns.
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = Theme.layoutChangeDuration * Theme.animationScale
+                context.duration = Theme.windowResizeDuration * Theme.animationScale
                 context.timingFunction = Theme.caTimingFunction
                 panel.animator().setFrame(frame, display: true)
             }
@@ -336,9 +319,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             // the frequent Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
-                    withAnimation(Theme.pageTransition) { self.panelState.showShortcuts = false }
+                    self.panelState.showShortcuts = false
                 } else if self.panelState.showSettings {
-                    withAnimation(Theme.pageTransition) { self.panelState.showSettings = false }
+                    self.panelState.showSettings = false
                 } else {
                     self.hide()
                 }
@@ -347,7 +330,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // ⌘, opens settings (not user-configurable — a macOS convention).
             if flags == .command, event.charactersIgnoringModifiers == "," {
-                withAnimation(Theme.pageTransition) { self.panelState.showSettings = true }
+                self.panelState.showSettings = true
                 return nil
             }
 
@@ -365,7 +348,10 @@ final class PanelController: NSObject, NSWindowDelegate {
                 return nil
             }
             if let combo = self.settings.shortcut(.translate), combo.matches(event) {
-                self.engine.translate()
+                // `submit`, not `translate`: once a result is on screen and a better
+                // tier is available, this key asks for that instead of re-running the
+                // same model. See `TranslationEngine.submit`.
+                self.engine.submit()
                 return nil
             }
             // Anything else (e.g. ⇧Return) falls through to the text view, which inserts

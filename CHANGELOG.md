@@ -2,6 +2,66 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-09-02
+
+### Added
+
+- A local answer is no longer the end of the line: press ⏎ again and an online service translates the same text, keeping both answers. A small label under the result switches between them, and the clipboard always holds whichever one is on screen
+- The result now says where it came from, permanently, in the flow of the panel — which slot answered, and whether it only answered because the primary failed. It is a label, not a control: with two answers in hand, the other one is offered as a swap link at the end of the same row, where the "⏎ 换在线重译" offer already sits. One row, one grammar in every state — a statement on the left, the action on the right — and no second segmented pill sitting a few points above the tone selector pretending to be its sibling
+- A local answer that is not in the language that was asked for escalates on its own, without a keystroke: that is not a matter of taste, it is the model failing the job. The suspicious answer is kept and stays marked
+
+### Changed
+
+- **Settings: four routing switches became two questions.** "主用失败时自动切换到备用", "谁快用谁", "完成后提示谁更快" and the local slot's "设为翻译模型" are replaced by one "翻译路线" section asking 从哪开始 (本地模型 / 在线服务) and 两套在线服务 (主用优先 / 同时请求). Each appears only when it is a real choice, and each states what the *selected* option does rather than what its label names
+- "同时请求" is shown but unselectable when one of the online slots is a local address, with the reason given: a loopback slot wins on network latency alone, which says nothing about which answer is better. It used to be selectable and silently do nothing
+- Under "同时请求" the slot tabs no longer offer "设为主用" — both slots are asked at the same time, so there is no primary to set
+- The local slot is an ordinary slot with an ordinary role now. It used to be a standing mode that bypassed the primary, the backup, failover and racing entirely; it is the first stage of a route that can continue upward
+- Filling in only the local slot counts as a configured app. It used to leave ⏎ reporting "nothing configured"
+- Choosing a local start whose slot is not filled in starts online instead of refusing to translate
+- ⏎ on a result that already came from the best tier configured does nothing, rather than restarting the route at the local slot and billing for it
+- Failure messages name what was actually tried: "两套在线服务都失败了", "本地和在线都失败了"
+
+### Removed
+
+- **Every floating toast.** "%@ 更快", "主用连接失败，已用备用翻译", "已截断至 %d 字" and "复制失败，请重试" each covered the panel's own content for two seconds and then took the information away with them. The first two were never events — they are properties of the result, and they live on the result now. The truncation notice was already stated beside the editor for as long as it was true. A failed copy is reported by the copy button itself, in the place the confirmation appears
+- The bottom bar's standing local-model marker, along with the mode it marked
+- `FailureKind.localModelNotConfigured`, which no longer has a way to happen
+
+### Fixed
+
+- Switching "谁快用谁" on while "主用失败时自动切换到备用" was off did nothing at all — the race path read the same resolved chain the fallback switch gated — with both switches showing as on and no indication anywhere. Neither switch exists any more, and the arrangement that produced it cannot be expressed
+- An escalation that fails leaves the answer you already had exactly where it was, with a quiet line explaining why the second opinion did not arrive, instead of replacing a good translation with an error box
+- Escalating updates the newest history entry instead of filing the same input twice
+
+### Fixed
+
+- Installing a new build no longer re-triggers the Keychain authorization prompt. The stable signing identity added in 1.10.0 was only half the fix, and the note that shipped with it — "the 「始终允许」 authorization persists across rebuilds and reinstalls" — was not true. A login-keychain item is guarded by two mechanisms: the ACL's trusted-application list, which matches a signed app by its designated requirement and does survive a rebuild, and the **partition ID list**, which overrides it. Partition entries are `teamid:<TEAM>` for an identity that carries a Team ID and `cdhash:<hash>` for one that does not — and a self-signed certificate has no Team ID, so every click of 「始终允许」 only pinned that one build. The item had accumulated eleven cdhashes. Local builds now sign with an `Apple Development:` identity, whose Team ID is stable across rebuilds; `./build.sh keychain-unpin` repoints an existing item's list once. Release archives keep the anonymous self-signed identity on purpose, because a Development certificate embeds the developer's name and email in the binary and `codesign -dvvv` on a published zip would expose it
+
+### Migration
+
+Existing preferences carry over on first launch by observed behavior, not by switch position: `raceFastestEnabled` with `fallbackEnabled` off maps to 主用优先, because that combination never actually raced. `useLocalModel` becomes a local start. Users who had switched failover off with a usable backup now get automatic failover — that switch only ever chose between translating and showing an error while a working provider sat idle.
+
+## [1.11.8] - 2026-09-02
+
+### Changed
+
+- Every animation that changes the panel's height — page pushes, settings folds, the language picker, history, the result section — now runs for the same duration on the same curve as the window's own resize, so the window and its content start, move and stop together instead of on separate clocks
+- The settings page's collapsible "高级选项"/"附加要求" sections now animate open and closed as one motion. Previously the chevron turned over 0.18s, the fields appeared instantly, and the window resized over 0.22s — three phases for one click
+- Opening the language picker expands the row into place rather than sliding it up from below the panel edge, matching how every other disclosure in the app behaves
+- The result area now crossfades between the waiting skeleton, a finished translation, and an error, instead of cutting between them while the box around them resizes
+- The panel's summon fade is faster (0.14s, down from AppKit's default 0.25s) and uses the app's own curve
+- Copy confirmation swaps its glyph as a symbol replacement instead of fading two separate icons past each other
+- Controls no longer pop or grow: the copy button appears by fading like its neighbours rather than scaling up, stops growing under the cursor, and the Keychain confirmation checkmark no longer scales 30% in 120ms
+
+### Fixed
+
+- History expand/collapse resized the window instantly while its content animated over 0.26s; the window now follows on the same timeline
+- "Reduce Motion" now takes effect the moment it is switched on, including stopping the waiting skeleton's pulse, instead of applying whenever a view next happened to redraw
+
+### Removed
+
+- Removed the timer-gated special cases that decided whether a height change should animate, along with the compensation constant they needed
+
 ## [1.11.7] - 2026-09-02
 
 ### Added

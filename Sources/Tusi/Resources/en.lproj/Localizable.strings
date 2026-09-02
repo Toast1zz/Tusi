@@ -42,15 +42,11 @@
 "附加要求（可选）" = "Additional instructions (optional)";
 "对所有翻译生效，例如统一术语、保留格式" = "Applies to every translation — e.g. consistent terminology, preserved formatting";
 "例：commit 统一译作「提交」" = "e.g. always translate “commit” as “提交”";
-"主用失败时自动切换到备用" = "Switch to backup automatically if primary fails";
 "翻译完成后自动复制" = "Copy automatically when translation finishes";
 "登录时启动" = "Launch at login";
 "自动检查更新" = "Check for updates automatically";
 "选择目标语言" = "Choose target language";
 "互换" = "Swap";
-"谁快用谁" = "Race for the fastest";
-"同时向主备发起请求，请留意计费" = "Sends a request to both primary and backup — watch your billing";
-"完成后提示谁更快" = "Show which one won";
 "本地模型" = "Local";
 "独立 slot，手动触发翻译时才会用到" = "A standalone slot — only used when you trigger it manually";
 "用本地模型翻译这次" = "Translate this with the local model";
@@ -69,7 +65,6 @@
 "当前为主用，优先使用这套" = "This is the primary — tried first";
 "设为主用" = "Make primary";
 "· 现在是主用失败后的备用" = "· Used as backup if the primary fails";
-"· 备用已关闭，这套不会被使用" = "· Backup is off — this profile won't be used";
 "主用" = "Primary";
 "备用" = "Backup";
 "快捷键" = "Shortcuts";
@@ -89,28 +84,19 @@
 "未配置" = "Not set";
 
 /* MARK: - TranslationEngine */
-"还没有配置可用的 API 服务，请先在设置中填写" = "No usable API service configured yet — fill one in Settings";
-"主用连接失败 · %@" = "Primary connection failed · %@";
 "未配置模型" = "No model set";
 "模型没有返回内容" = "The model returned no content";
 "模型没有返回可用译文，请重试或切换服务" = "The model did not return a usable translation. Try again or switch services";
 "模型拒绝返回译文，请改写原文或切换服务" = "The model refused to return a translation. Reword the source or switch services";
 "翻译结果不完整，连接提前中断" = "Translation was cut short — the connection ended before it finished";
 "翻译失败" = "Translation failed";
-"主用和备用都失败了 · %@" = "Both primary and backup failed · %@";
-"两个供应商都失败了 · %@" = "Both providers failed · %@";
 
 /* MARK: - Components (direction chip, copy button, fallback toast, error box) */
 "自动" = "Auto";
 "已复制" = "Copied";
 "复制" = "Copy";
-"主用连接失败，已用备用翻译" = "Primary connection failed — used backup instead";
-"已截断至 %d 字" = "Truncated to %d characters";
 "输入已截断，最多保留 %d 字" = "Input was truncated to %d characters";
-"更快" = "Faster";
-"%@ 更快" = "%@ was faster";
 "重试" = "Retry";
-"复制失败，请重试" = "Couldn't copy — try again";
 
 /* MARK: - ShortcutAction labels */
 "全局呼出" = "Summon";
@@ -148,27 +134,18 @@
 "历史仅保留部分内容" = "History only retains part of this content";
 "服务器长时间无响应，请稍后重试" = "The server did not respond for a long time — try again later";
 "服务器长时间未返回新内容，连接已中断，请重试" = "The server stopped returning content for too long — try again";
-"本地模型尚未配置，请先在设置中填写" = "The local model is not configured yet — fill it in Settings";
 
 "切换翻译方向" = "Switch translation direction";
 "该快捷键没有修饰键，绑定字母或数字后，输入时无法再打出这个字符" = "No modifier on this shortcut — binding a letter or digit will make it untypeable";
 
 /* MARK: - Sound preference */
 "翻译成功音效" = "Translation Completion Sound";
-"正在使用本地模型" = "Using the local model";
-"正在使用本地模型（尚未配置，请在设置中填写）" = "Using the local model — not configured yet; fill it in under Settings";
-"正在使用本地模型 · %@" = "Using the local model · %@";
-"当前为翻译模型" = "Current translation model";
-"改回主用/备用" = "Use primary / backup instead";
-"设为翻译模型" = "Make translation model";
-"· 翻译将只使用这套，不走主用/备用或竞速" = "· Translations will use only this profile — no primary, backup or race";
 "· 还需要填好下面的接口地址和模型" = "· Fill in the base URL and model below first";
 "试听翻译成功音效" = "Preview the completion sound";
 "还可以输入 %d 字" = "%d characters left";
 "「%@」没有修饰键：绑定后在输入框里就打不出这个字符了" = "“%@” has no modifier — bind it and you can no longer type that character in the input box";
 "仍然绑定" = "Bind anyway";
 "取消" = "Cancel";
-"配置本地模型" = "Set up local model";
 "打开设置" = "Open Settings";
 "接口返回的数据格式不兼容，请检查模型和接口地址" = "The endpoint returned an incompatible response — check the model and base URL";
 "钥匙串读取失败（错误码 %d）" = "Couldn't read the Keychain (error %d)";
@@ -177,3 +154,46 @@
 "应用签名已变化，钥匙串拒绝访问，请在设置中重新保存 API Key" = "The app signature changed, so the Keychain refused access — save the API key again in Settings";
 "钥匙串当前不可用，请稍后重试" = "The Keychain is unavailable right now — try again in a moment";
 "钥匙串数据损坏，请在设置中重新保存 API Key" = "The Keychain data is corrupted — save the API key again in Settings";
+
+/* Routing — the two questions that replaced four tangled switches */
+"翻译路线" = "Route";
+"从哪开始" = "Start with";
+"本地模型" = "Local model";
+"在线服务" = "Online service";
+"先用本地模型翻译，不满意按 ⏎ 换在线重译，两个结果都留着" = "The local model answers first; press ⏎ again for an online retranslation, and both answers are kept";
+"每次翻译都直接走在线服务" = "Every translation goes straight to an online service";
+"填好本地模型后，可以让它先翻，不满意再按 ⏎ 换在线" = "Fill in a local model and it can answer first, with ⏎ for an online second opinion";
+"目前只有本地模型可用，所有翻译都由它完成" = "Only the local model is usable right now, so it handles every translation";
+"两套在线服务" = "Two online services";
+"主用优先" = "Primary first";
+"同时请求" = "Ask both";
+"先用主用，只有它失败时才换备用" = "Uses the primary; only a failure moves to the backup";
+"两套一起问，先答完的用它 · 每次翻译计费翻倍" = "Both are asked at once and the first finished answer wins · doubles the billing per translation";
+"其中一套是本机地址，本机几乎必定先答完，比不出快慢" = "One of them is a local address, which would almost always finish first — that is no comparison";
+"同时请求，两套地位相同" = "Asked at the same time — neither one is primary";
+"· 填好后可作为主用失败时的备用" = "· Once filled in, it takes over when the primary fails";
+
+/* Route start on the local slot */
+"翻译从这里开始" = "Translations start here";
+"改为先用在线" = "Start online instead";
+"设为起点" = "Make the starting point";
+"· 先用本地翻译，不满意按 ⏎ 换在线" = "· Answers first; press ⏎ again for an online retranslation";
+"还需要填好下面的接口地址和模型" = "Still needs the base URL and model below";
+
+/* Result provenance and escalation */
+"本地" = "Local";
+"在线" = "Online";
+"⏎ 换在线重译" = "⏎ retranslate online";
+"用 %@ 再翻一次，两个结果都会留着" = "Translate again with %@ — both answers are kept";
+"用更强的模型再翻一次，两个结果都会留着" = "Translate again with a stronger model — both answers are kept";
+"在线重译中…" = "Retranslating online…";
+"没能取到在线结果 · %@" = "Couldn't get an online answer · %@";
+"%@ · 主用失败后接手" = "%@ · took over after the primary failed";
+"结果来自 %@" = "Answered by %@";
+"显示 %@ 的翻译" = "Show the translation from %@";
+"复制失败" = "Copy failed";
+
+/* Routing failures */
+"还没有配置可用的翻译服务，请先在设置中填写" = "No usable translation service configured yet — fill one in Settings";
+"本地和在线都失败了 · %@" = "Both the local model and the online service failed · %@";
+"两套在线服务都失败了 · %@" = "Both online services failed · %@";

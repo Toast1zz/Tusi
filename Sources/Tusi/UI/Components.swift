@@ -166,14 +166,25 @@ struct DirectionChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { inside in
-            withAnimation(Theme.microMotion) { hovering = inside }
-        }
+        .onHover { hovering = $0 }
         .help(L("选择目标语言"))
-        .animation(Theme.stateChange, value: isActive)
-        .animation(Theme.stateChange, value: sourceLabel)
-        .animation(Theme.stateChange, value: isFlipped)
-        .animation(Theme.stateChange, value: isExpanded)
+        .motion(.micro, value: hovering)
+        .motion(.state, value: restingState)
+    }
+
+    /// All four of the chip's resting-state inputs change for the same reason (the user
+    /// typed, flipped, or opened the picker) and animate identically, so they ride one
+    /// modifier instead of four stacked ones that would each claim to be a separate
+    /// cause.
+    private struct RestingState: Equatable {
+        let isActive: Bool
+        let sourceLabel: String
+        let isFlipped: Bool
+        let isExpanded: Bool
+    }
+
+    private var restingState: RestingState {
+        RestingState(isActive: isActive, sourceLabel: sourceLabel, isFlipped: isFlipped, isExpanded: isExpanded)
     }
 }
 
@@ -213,9 +224,9 @@ struct LanguagePill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { inside in
-            withAnimation(Theme.microMotion) { hovering = inside }
-        }
+        .onHover { hovering = $0 }
+        .motion(.micro, value: hovering)
+        .motion(.state, value: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -237,7 +248,7 @@ struct ToneSelector: View {
             ForEach(Tone.allCases) { option in
                 let selected = option == tone
                 Button {
-                    withAnimation(Theme.selectionSlide) { tone = option }
+                    tone = option
                 } label: {
                     Text(option.label)
                         .font(selected ? Theme.toneLabel : Theme.caption2Medium)
@@ -263,6 +274,10 @@ struct ToneSelector: View {
         }
         .padding(2)
         .background(Capsule().fill(Theme.fillQuiet))
+        // Declared here rather than wrapped around the mutation in the button: the pill
+        // has to slide whoever changed the tone, including the settings page and the
+        // keyboard, and a `withAnimation` at one call site only covers that call site.
+        .motion(.selection, value: tone)
     }
 
     /// The sliding highlight. Clear Liquid Glass where the OS supports it, a soft
@@ -281,41 +296,153 @@ struct ToneSelector: View {
 /// Primary copy button — flat solid capsule that morphs into a green check.
 struct CopyButton: View {
     let copied: Bool
+    /// The pasteboard write was rejected. Reported here, by the control that was asked
+    /// to do it, rather than by a banner floating over the text it failed to copy.
+    var failed = false
     var shortcutHint: String?
     let action: () -> Void
 
     @State private var hovering = false
 
+    private enum Phase: CaseIterable {
+        case idle, copied, failed
+    }
+
+    private var phase: Phase {
+        if failed { return .failed }
+        return copied ? .copied : .idle
+    }
+
+    private var fill: AnyShapeStyle {
+        switch phase {
+        case .failed: return AnyShapeStyle(Color.orange)
+        case .copied: return AnyShapeStyle(Theme.success)
+        case .idle: return AnyShapeStyle(Theme.accent)
+        }
+    }
+
+    private var accessibilityTitle: LocalizedStringKey {
+        switch phase {
+        case .failed: return "复制失败"
+        case .copied: return "已复制"
+        case .idle: return "复制"
+        }
+    }
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(Theme.caption2Bold)
-                Text(copied ? "已复制" : "复制")
-                    .font(Theme.bodySmallSemibold)
-                    .lineLimit(1)
-                if !copied, let shortcutHint, !shortcutHint.isEmpty {
-                    Text(shortcutHint)
-                        .font(Theme.captionMedium)
-                        .opacity(0.65)
-                        .lineLimit(1)
+            // Every phase is laid out, only one is drawn: the capsule is therefore as
+            // wide as its widest wording and never changes size. It used to swap
+            // "复制 ⇧⌘C" for "已复制", which is a different string and a different
+            // number of children — so confirming a copy resized the control, and the
+            // bottom bar shifted under the cursor that had just clicked it. A control
+            // confirming itself should look like the same control.
+            ZStack {
+                ForEach(Phase.allCases, id: \.self) { candidate in
+                    label(for: candidate)
+                        .opacity(candidate == phase ? 1 : 0)
+                        .accessibilityHidden(candidate != phase)
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(
-                Capsule().fill(copied ? AnyShapeStyle(Theme.success) : AnyShapeStyle(Theme.accent))
-            )
-            .brightness(hovering && !copied ? 0.06 : 0)
-            .scaleEffect(hovering && !copied ? 1.03 : 1.0)
+            .background(Capsule().fill(fill))
+            // Brightness only. This used to also scale to 1.03 on hover, which made it
+            // the one control in the app that grows under the cursor — every other
+            // hover state in the panel is a fill or brightness change, and the odd one
+            // out reads as a glitch rather than as emphasis.
+            .brightness(hovering && phase == .idle ? 0.06 : 0)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .accessibilityLabel(copied ? "已复制" : "复制")
-        .animation(Theme.stateChange, value: copied)
-        .animation(Theme.microMotion, value: hovering)
+        .accessibilityLabel(accessibilityTitle)
+        .motion(.state, value: phase)
+        .motion(.micro, value: hovering)
+    }
+
+    @ViewBuilder
+    private func label(for phase: Phase) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: {
+                switch phase {
+                case .failed: return "exclamationmark.triangle.fill"
+                case .copied: return "checkmark"
+                case .idle: return "doc.on.doc"
+                }
+            }())
+                .font(Theme.caption2Bold)
+                // A symbol swapping for another symbol, animated as exactly that. The
+                // alternative (fade one out, fade the other in) reads as two separate
+                // glyphs rather than one control confirming itself.
+                .contentTransition(.symbolEffect(.replace))
+            Text({
+                switch phase {
+                case .failed: return LocalizedStringKey("复制失败")
+                case .copied: return LocalizedStringKey("已复制")
+                case .idle: return LocalizedStringKey("复制")
+                }
+            }())
+                .font(Theme.bodySmallSemibold)
+                .lineLimit(1)
+            if phase == .idle, let shortcutHint, !shortcutHint.isEmpty {
+                Text(shortcutHint)
+                    .font(Theme.captionMedium)
+                    .opacity(0.65)
+                    .lineLimit(1)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+/// A `Disclosure`'s measured natural height. File-scope because a `PreferenceKey` cannot
+/// be nested inside a generic type; nothing else should use it.
+struct DisclosureHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// The app's one way to fold content away, and the reason the window no longer needs a
+/// second timeline.
+///
+/// `if expanded { … }` inside a stack changes that stack's height in a single step, so
+/// the panel could only ever cut to the new size — which is why the settings folds used
+/// to animate nothing but their chevron and let the field pop in at full opacity. Here
+/// the content is always laid out at its natural size and the *container's* height is
+/// what animates, so the height passes through every value in between, SwiftUI stays the
+/// only timeline, and the window has something continuous to mirror.
+///
+/// `.fixedSize(vertical:)` is load-bearing: it makes the content report its ideal height
+/// even while the frame around it is proposing zero. Without it the measurement collapses
+/// along with the fold and the section can never open again.
+struct Disclosure<Content: View>: View {
+    let isExpanded: Bool
+    @ViewBuilder var content: Content
+
+    @State private var naturalHeight: CGFloat = 0
+
+    var body: some View {
+        content
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: DisclosureHeightKey.self, value: proxy.size.height)
+                }
+            )
+            .frame(height: isExpanded ? naturalHeight : 0, alignment: .top)
+            .opacity(isExpanded ? 1 : 0)
+            .clipped()
+            // Collapsed content is still in the view tree (that is how it stays
+            // measured), so it has to be taken out of the tab order and off the
+            // accessibility tree explicitly — otherwise Tab lands in an invisible text
+            // field and VoiceOver reads a section the user closed.
+            .disabled(!isExpanded)
+            .accessibilityHidden(!isExpanded)
+            .onPreferenceChange(DisclosureHeightKey.self) { naturalHeight = $0 }
     }
 }
 
@@ -340,12 +467,12 @@ struct SoftDivider: View {
 struct StreamingPlaceholder: View {
     @State private var pulsing = false
 
-    /// The one deliberate exception to "everything routes through Theme.motion":
-    /// a decorative loop, not a state transition, so easeInOut + repeatForever is the
-    /// right shape here rather than a bug. Still honors Reduce Motion — a system
-    /// setting meant to stop exactly this kind of continuous animation — by never
-    /// starting the pulse and resting at a fixed, still-legible opacity instead.
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// The one deliberate exception to "everything goes through `.motion`": a decorative
+    /// loop, not a state transition, so easeInOut + repeatForever is the right shape here
+    /// rather than a bug. Still honors Reduce Motion — a system setting aimed at exactly
+    /// this kind of continuous animation — by never starting the pulse and resting at a
+    /// fixed, still-legible opacity instead.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -358,6 +485,12 @@ struct StreamingPlaceholder: View {
         .onAppear {
             guard !reduceMotion else { return }
             pulsing = true
+        }
+        // Turning the setting on mid-pulse has to stop it, not wait for the next
+        // translation — which is the whole reason Reduce Motion is read from the
+        // environment now instead of straight off NSWorkspace.
+        .onChange(of: reduceMotion) { _, isOn in
+            pulsing = !isOn
         }
     }
 
@@ -374,57 +507,33 @@ struct StreamingPlaceholder: View {
     }
 }
 
-/// Bottom transient toast — copy confirmation or a one-time "switched to backup" notice.
-struct Toast: View {
-    let icon: String
-    let text: String
-    var tint: AnyShapeStyle
-
-    static func fellBack() -> Toast {
-        Toast(icon: "arrow.triangle.branch", text: L("主用连接失败，已用备用翻译"), tint: AnyShapeStyle(Color.orange))
-    }
-
-    static func truncatedInput() -> Toast {
-        Toast(
-            icon: "scissors",
-            text: String(format: L("已截断至 %d 字"), TranslationEngine.maxInputCharacters),
-            tint: AnyShapeStyle(Color.secondary)
-        )
-    }
-
-    static func copyFailed() -> Toast {
-        Toast(icon: "exclamationmark.triangle.fill", text: L("复制失败，请重试"), tint: AnyShapeStyle(Color.orange))
-    }
-
-    /// One-time, informational (not a warning — `.secondary`, not `.orange` like
-    /// `fellBack`) notice for `SettingsStore.raceFastestEnabled`. `label` is already
-    /// the short per-slot name (e.g. "deepseek", from `SettingsStore.label(for:)`),
-    /// not the full host — kept to a glance, not a sentence, since it fires on every
-    /// successful race rather than a rare event.
-    static func raceWon(_ label: String) -> Toast {
-        Toast(
-            icon: "bolt.fill",
-            text: label.isEmpty ? L("更快") : String(format: L("%@ 更快"), label),
-            tint: AnyShapeStyle(Color.secondary)
-        )
-    }
+/// Where the result on screen came from. A statement, not a control.
+///
+/// This used to be a two-segment pill that both named the source and switched between
+/// versions — which put it in the same clothes as the tone selector one row below, and
+/// welded two different parts of speech together. Attribution is a label; showing the
+/// other version is an action, and the action lives on the other end of the row where
+/// every other result-row action already lives.
+struct ResultProvenance: View {
+    let label: String
+    let isLocal: Bool
+    /// This answer exists only because the slot ahead of it failed — the one thing the
+    /// old "已用备用翻译" toast said that the slot name alone does not.
+    let afterFailover: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(Theme.bodySmallSemibold)
-                .foregroundStyle(tint)
-            Text(text)
-                .font(Theme.bodySmallMedium)
+        HStack(spacing: 4) {
+            Image(systemName: afterFailover
+                  ? "arrow.triangle.branch"
+                  : (isLocal ? "desktopcomputer" : "cloud"))
+                .font(Theme.caption2)
+            Text(afterFailover ? String(format: L("%@ · 主用失败后接手"), label) : label)
+                .font(Theme.caption)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(
-            Capsule()
-                .fill(.regularMaterial)
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
-        )
-        .overlay(Capsule().strokeBorder(Theme.strokeHairline, lineWidth: 1))
+        .foregroundStyle(afterFailover ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(String(format: L("结果来自 %@"), label))
     }
 }
 
@@ -462,5 +571,97 @@ struct ErrorBox: View {
             RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                 .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
         )
+    }
+}
+
+/// A row-wide segmented choice: a title, the options, and one caption that describes
+/// what the *selected* option actually does.
+///
+/// Deliberately not a switch. A switch answers "on or off", and every routing question
+/// in this app is "which of these", which a switch can only express by pairing with
+/// another switch — the arrangement that let racing be silently disabled by the
+/// fallback toggle. The caption belongs to the selection, not to the control, so the
+/// page always states the behavior the user is about to get rather than the one the
+/// label happens to name.
+struct SegmentedChoice: View {
+    struct Option: Identifiable, Equatable {
+        var id: String
+        var label: String
+        /// When set, the option is shown but unselectable, and this says why. Hiding it
+        /// instead would leave the user looking for a feature they read about with no
+        /// hint that two fields above are what stand in the way.
+        var disabledReason: String?
+    }
+
+    let title: String
+    let options: [Option]
+    let selection: String
+    let onSelect: (String) -> Void
+    var caption: String?
+
+    @Namespace private var pill
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(Theme.body)
+                    .fixedSize()
+                Spacer(minLength: 8)
+                segments
+            }
+            if let caption, !caption.isEmpty {
+                Text(caption)
+                    .font(Theme.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var segments: some View {
+        HStack(spacing: 2) {
+            ForEach(options) { option in
+                let selected = option.id == selection
+                let disabled = option.disabledReason != nil
+                Button {
+                    onSelect(option.id)
+                } label: {
+                    Text(option.label)
+                        .font(selected ? Theme.caption2Semibold : Theme.caption2Medium)
+                        .foregroundStyle(
+                            disabled ? AnyShapeStyle(.quaternary)
+                                : selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+                        )
+                        .fixedSize()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background {
+                            if selected {
+                                ChoicePill().matchedGeometryEffect(id: "choicePill", in: pill)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(disabled)
+                .help(option.disabledReason ?? "")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Theme.fillQuiet))
+        .motion(.selection, value: selection)
+    }
+
+    private struct ChoicePill: View {
+        var body: some View {
+            if #available(macOS 26.0, *) {
+                Capsule().fill(.clear).glassEffect(.clear, in: Capsule())
+            } else {
+                Capsule().fill(Theme.fillSelection)
+            }
+        }
     }
 }

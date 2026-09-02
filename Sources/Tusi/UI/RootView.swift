@@ -21,6 +21,15 @@ struct PanelContentWidthKey: PreferenceKey {
     }
 }
 
+/// Which of the three pages is on screen. A single value, rather than the two booleans
+/// it is derived from, so one `.motion(.page, value:)` drives the whole push — the
+/// slide, the panel height, and every fade inside both pages — on one timeline.
+enum Page: Hashable {
+    case translator
+    case settings
+    case shortcuts
+}
+
 struct RootView: View {
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -28,6 +37,11 @@ struct RootView: View {
 
     let onHeightChange: (CGFloat) -> Void
     let onContentMinWidthChange: (CGFloat) -> Void
+
+    private var activePage: Page {
+        guard panelState.showSettings else { return .translator }
+        return panelState.showShortcuts ? .shortcuts : .settings
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -54,6 +68,20 @@ struct RootView: View {
             }
         }
         .frame(width: panelState.panelWidth, alignment: .top)
+        // One value for the whole push. Previously two `.animation` modifiers watched
+        // `showSettings` and `showShortcuts` separately; `activePage` is the thing the
+        // user actually changed, and one modifier on it means one timeline.
+        //
+        // The stack's height is deliberately left to the content. An earlier version of
+        // this constrained it to the *active* page's measured height, on the theory that
+        // both pages stay in layout during a push and pin the panel to the taller one.
+        // Measuring it says otherwise: SwiftUI drops the outgoing page from layout as
+        // soon as the transition starts and keeps it only for drawing, so the new
+        // height already reaches PanelController about 35ms into the push, in both
+        // directions. The constraint bought nothing and cost correctness — it raced with
+        // the remounted translator's own measurement and could latch the panel 21pt
+        // short, clipping the last line of a result.
+        .motion(.page, value: activePage)
         .background(
             GeometryReader { proxy in
                 Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
@@ -74,8 +102,6 @@ struct RootView: View {
         // drawn by PanelContainerView. Sizing them from the content instead means they
         // animate on the content's timeline while the window resizes on AppKit's, and the
         // gap between the two timelines is where the corners flash square.
-        .animation(Theme.pageTransition, value: panelState.showSettings)
-        .animation(Theme.pageTransition, value: panelState.showShortcuts)
     }
 
     /// The outgoing page's half of a page-push transition. A full-width `.move` on

@@ -136,82 +136,137 @@ enum Theme {
     /// no eye can actually pick out, so it was cycle-of-history, not a real scale.
     static let radiusStandard: CGFloat = 8
 
-    // MARK: - Animation
+    // MARK: - Motion
     //
-    // A tool panel's chrome (folds, page pushes, toggles, panel resizing) is a state
-    // switch, not a direct-manipulation gesture — it should decelerate cleanly and
-    // never overshoot. SwiftUI's `.snappy` is a spring with built-in bounce, which is
-    // the wrong shape for that: it reads as "bouncy" precisely where the system
-    // conventions (Spotlight, menus, popovers) read as "crisp". Every animation in this
-    // app goes through `motion(_:)` below except `selectionSlide`, the one place a
-    // spring is actually correct (a pill sliding to a new position has real inertia).
+    // Four rules hold this system together. They are not style preferences; each one
+    // is a bug class that was actually hit and then designed out.
     //
-    // `motion(_:)` and `caTimingFunction` are built from the SAME control points on
-    // purpose: PanelController's AppKit-side window resize and this file's SwiftUI
-    // curves need to move in lockstep during a fold/unfold, or the window and its
-    // content visibly drift apart mid-animation.
+    // 1. **One user action = one timeline = one token.** Tokens are chosen by *cause*
+    //    (what the user did), never by *property* (which thing happens to be changing).
+    //    A page push animates the slide, the panel height, and every fade inside it
+    //    with `.page` — so it reads as one motion instead of three overlapping ones
+    //    at 0.18 / 0.22 / 0.28.
+    // 2. **Everything is declared with `.motion(_:value:)`; nothing uses
+    //    `withAnimation`.** An imperative transaction animates whatever else happened
+    //    to change on the same runloop turn — that is how an unrelated control ends up
+    //    twitching because a translation landed while the mouse was moving. Binding a
+    //    token to a *value* keeps the cause explicit and the blast radius local.
+    // 3. **Everything that can change the panel's height shares one duration.** SwiftUI
+    //    does not deliver interpolated heights: a `GeometryReader` preference fires
+    //    *once* per transition, with the final value, about a layout pass after the
+    //    action starts (measured, not assumed — see `windowResizeDuration`). So the
+    //    window cannot mirror the content frame by frame; it necessarily runs its own
+    //    animation towards that one value. The only way for the two to stay together is
+    //    for them to be the same animation: same curve, same duration. Hence `.layout`
+    //    and `.page` share a duration, `windowResizeDuration` equals it, and anything
+    //    that moves the panel's height must use one of those two — never `.state`.
+    // 4. **A tool panel's chrome decelerates and never overshoots.** Folds, pushes,
+    //    toggles and resizes are state switches, not direct manipulation — the system's
+    //    own Spotlight/menus/popovers read as crisp for exactly this reason.
+    //    `.selection` is the single deliberate exception.
 
-    /// The one curve every non-spring animation in the app uses: the standard "ease
-    /// out" shape (macOS/CSS/CA's own `easeOut` uses the same numbers), not a
-    /// hand-picked one. An earlier version of this used (0.2, 0.8, 0.3, 1.0), which
-    /// reaches 80% of the distance in the first 20% of the duration and crawls through
-    /// the remaining 80% of the time for the last 20% — mathematically zero overshoot,
-    /// but that front-loaded a "snap, then slowly creep to settle" shape that read as
-    /// jumpy/multi-phase in practice (reported directly against the settings folds).
-    /// This shape decelerates far more evenly across the full duration.
+    /// The one curve every non-spring animation uses: the standard ease-out shape
+    /// (the same control points macOS/CSS/CA's own `easeOut` uses), not a hand-picked
+    /// one. An earlier version used (0.2, 0.8, 0.3, 1.0), which covers 80% of the
+    /// distance in the first 20% of the duration and then crawls — mathematically zero
+    /// overshoot, but it reads as "snap, then creep", which is worse than a bounce.
     private static let curve: (Double, Double, Double, Double) = (0.25, 0.1, 0.25, 1.0)
 
-    /// AppKit equivalent of `curve`, for `NSAnimationContext` (PanelController's window
-    /// resize) — same shape as every SwiftUI animation below, so the window and its
-    /// content stay in sync during a layout change instead of drifting apart on two
-    /// different timing curves.
+    /// TUSI_SLOWMO stretches every animation so transitions can be inspected frame by
+    /// frame. 1 in normal runs.
+    static let animationScale: Double = ProcessInfo.processInfo.environment["TUSI_SLOWMO"] != nil ? 10 : 1
+
+    /// What caused the change. The only vocabulary call sites get: no durations, no
+    /// curves, no raw `Animation` values. Adding a sixth case should feel expensive —
+    /// the last token to be removed (`historyTransition`, 0.26) existed only to mask
+    /// the window-lag described in rule 3, and had nothing left to do once that went.
+    enum Motion: Hashable {
+        /// Hover and press feedback — the fastest, most frequent thing in the app.
+        case micro
+        /// A discrete state flipping: toggles, chevrons, selection, inline notices,
+        /// controls swapping in the bottom bar.
+        case state
+        /// Anything that changes the panel's height: folds, disclosures, the result
+        /// section, history, the language picker row. Shares `windowResizeDuration` with
+        /// `.page` so the window and the content always finish together.
+        case layout
+        /// Pushing between the translator, settings and shortcuts pages — including the
+        /// panel height change that comes with it. A separate case from `.layout` because
+        /// it names a different cause, not a different timing: a push travels much
+        /// further than a fold, and pricing it longer for that reason is what put the
+        /// window (0.22) and the slide (0.28) on visibly different clocks.
+        case page
+        /// The one legitimate spring in the app: ToneSelector's selection pill has real
+        /// inertia (a shape moving between resting positions), unlike everything above,
+        /// which is a state switching rather than an object moving.
+        case selection
+
+        var animation: Animation {
+            switch self {
+            case .micro: return Theme.timed(0.12)
+            case .state: return Theme.timed(0.18)
+            case .layout: return Theme.timed(windowResizeDuration)
+            case .page: return Theme.timed(windowResizeDuration)
+            case .selection: return .spring(duration: 0.3 * Theme.animationScale, bounce: 0.15)
+            }
+        }
+    }
+
+    fileprivate static func timed(_ duration: Double) -> Animation {
+        .timingCurve(curve.0, curve.1, curve.2, curve.3, duration: duration * animationScale)
+    }
+
+    /// How long the window itself takes to reach a new height, and therefore how long
+    /// every height-changing animation in the view layer takes.
+    ///
+    /// This is a shared constant rather than the window copying whatever SwiftUI is
+    /// doing, because SwiftUI will not tell it. Preferences are not interpolated: a
+    /// height measured through a `GeometryReader` reaches `PanelController` exactly once
+    /// per transition, carrying the final value, roughly one layout pass after the action
+    /// begins. The window therefore has to run its own animation to that value — so the
+    /// two are kept identical by construction instead, and the small arrival delay is the
+    /// only difference left between them.
+    static let windowResizeDuration: Double = 0.22
+
+    // MARK: - Panel summon (AppKit)
+
+    /// The panel's fade-in is the only animation left outside SwiftUI: `alphaValue`
+    /// belongs to the window, not to any view, so it cannot go through `.motion`.
+    /// It is deliberately faster than any in-panel token — this is the app's most-seen
+    /// animation (⌥Space, dozens of times a day) and a summon should feel like the
+    /// panel was already there, not like it is arriving.
+    static let panelAppearDuration: Double = 0.14
+
+    /// AppKit form of `curve`, for the summon above. Nothing else in the app uses
+    /// `NSAnimationContext` — see rule 3.
     static var caTimingFunction: CAMediaTimingFunction {
         CAMediaTimingFunction(controlPoints: Float(curve.0), Float(curve.1), Float(curve.2), Float(curve.3))
     }
+}
 
-    /// TUSI_SLOWMO stretches every panel animation so transitions can be inspected
-    /// frame by frame. 1 in normal runs.
-    static let animationScale: Double = ProcessInfo.processInfo.environment["TUSI_SLOWMO"] != nil ? 10 : 1
+/// The app's sole animation entry point.
+///
+/// Reduce Motion comes from the environment rather than a direct
+/// `NSWorkspace.accessibilityDisplayShouldReduceMotion` read: an environment value
+/// establishes a real SwiftUI dependency, so toggling the system setting re-renders
+/// the panel immediately instead of taking effect whenever a body next happens to be
+/// evaluated. This app animates a lot — pushes, folds, resizes, toasts — so ignoring
+/// the setting is a standing annoyance rather than a missing nicety.
+struct MotionModifier<V: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let motion: Theme.Motion
+    let value: V
 
-    /// Every non-spring animation's sole entry point. Honors System Settings ▸
-    /// Accessibility ▸ Display ▸ Reduce Motion — this app animates a lot (page pushes,
-    /// folds, panel resizing, toasts), and ignoring that setting would make every one of
-    /// them a standing annoyance for users who turned it on. Checked in exactly one
-    /// place so it can never be forgotten at a call site.
-    private static func motion(_ duration: Double) -> Animation {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            return .linear(duration: 0)
-        }
-        return .timingCurve(curve.0, curve.1, curve.2, curve.3, duration: duration * animationScale)
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : motion.animation, value: value)
     }
+}
 
-    /// Hover states, icon micro-interactions — the fastest, most frequent feedback.
-    static var microMotion: Animation { motion(0.12) }
-    /// Toggles, selection changes, chevrons, toasts — a discrete state flipping.
-    static var stateChange: Animation { motion(0.18) }
-    /// Content folding/unfolding, rows appearing or disappearing, panel height
-    /// following content. Also the duration `PanelController` mirrors on the AppKit
-    /// side via `layoutChangeDuration` + `caTimingFunction`.
-    static var layoutChange: Animation { motion(0.22) }
-    /// History moves through a larger vertical distance than ordinary row changes, so
-    /// give it a slightly longer version of the same non-bouncy curve.
-    static var historyTransition: Animation { motion(historyTransitionDuration) }
-    /// Pushing between the translator, settings, and shortcuts pages.
-    static var pageTransition: Animation { motion(0.28) }
-
-    /// Seconds version of `layoutChange`'s duration, for `NSAnimationContext.duration`
-    /// (which takes a `TimeInterval`, not an `Animation`). Keep in sync with the 0.22
-    /// above by construction if you ever change one — they're meant to match exactly.
-    static let layoutChangeDuration: Double = 0.22
-    static let historyTransitionDuration: Double = 0.26
-
-    /// The one legitimate spring in the app: ToneSelector's sliding selection pill has
-    /// real inertia (a shape moving from one resting position to another), unlike
-    /// everything else here, which is a state switching, not an object moving.
-    static var selectionSlide: Animation {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            return .linear(duration: 0)
-        }
-        return .spring(duration: 0.3 * animationScale, bounce: 0.15)
+extension View {
+    /// Animate everything in this subtree that changes because `value` changed, on the
+    /// timeline `motion` names. Prefer attaching this once, high up, at the point the
+    /// user action lands — one action should drive one timeline, not one per property.
+    func motion<V: Equatable>(_ motion: Theme.Motion, value: V) -> some View {
+        modifier(MotionModifier(motion: motion, value: value))
     }
 }

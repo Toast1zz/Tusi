@@ -125,7 +125,7 @@ struct SettingsView: View {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(Theme.footnote)
                                     .foregroundStyle(.green)
-                                    .transition(.scale(scale: 0.7).combined(with: .opacity))
+                                    .transition(.opacity)
                             }
 
                             Button {
@@ -139,7 +139,10 @@ struct SettingsView: View {
                             .help(showKey ? "隐藏" : "显示")
                             .accessibilityLabel(showKey ? "隐藏" : "显示")
                         }
-                        .animation(Theme.microMotion, value: settings.keychainSaved)
+                        // `.state`, not `.micro`: this is a confirmation appearing, not
+                        // hover feedback. It used to scale up from 0.7 over 0.12s, which
+                        // is not an element arriving — it is a flash.
+                        .motion(.state, value: settings.keychainSaved)
                         .accessibilityLabel("API Key")
                     }
                 }
@@ -174,13 +177,22 @@ struct SettingsView: View {
 
             shortcutsNavRow
 
+            SoftDivider()
+
+            routingSection
+
+            // Bounded on both sides. Without the second divider the rows below —
+            // auto-copy, launch at login, updates — read as part of "翻译路线", which
+            // is exactly the kind of false grouping this page is being cleaned up to
+            // stop making.
+            SoftDivider()
+
             // One VStack, one spacing value, for every row on the page from here down
             // (including the multi-line race unit below) — three separately-spaced
             // blocks used to rely on the outer page spacing (14) between them and an
             // inner spacing (10) within them, which read as uneven rhythm rather than
             // a deliberate grouping.
             VStack(alignment: .leading, spacing: 10) {
-                settingToggle("主用失败时自动切换到备用", isOn: $settings.fallbackEnabled)
                 settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
                 settingToggle("登录时启动", isOn: $settings.launchAtLogin)
                 if let error = settings.launchAtLoginError {
@@ -196,33 +208,10 @@ struct SettingsView: View {
                 // announce itself); switching it on plays one quiet toggle-on cue.
                 soundToggleRow
 
-                // The caption is load-bearing: this setting doubles outbound requests
-                // whenever both slots are usable remote APIs, and that cost trade-off
-                // must be visible at the point of opting in, not buried in a tooltip.
-                // Nested spacing (4) between the toggle and its own caption/sub-toggle
-                // stays tighter than the 10 between unrelated rows, but the whole
-                // group is still just one child of the outer VStack — one 10pt gap to
-                // its neighbors, same as every other row.
-                VStack(alignment: .leading, spacing: 4) {
-                    settingToggle("谁快用谁", isOn: $settings.raceFastestEnabled)
-                    Text("同时向主备发起请求，请留意计费")
-                        .font(Theme.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if settings.raceFastestEnabled {
-                        // Flush with every other row's label, not indented: an indent
-                        // here just reads as misalignment against the caption line
-                        // above and every sibling toggle, not as "this is a sub-item".
-                        settingToggle("完成后提示谁更快", isOn: $settings.raceToastEnabled)
-                            .padding(.top, 2)
-                            .transition(.opacity)
-                    }
-                }
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(Theme.body)
-            .animation(Theme.stateChange, value: settings.raceFastestEnabled)
 
                 if panelState.globalHotkeyFailed {
                     HStack(spacing: 5) {
@@ -270,9 +259,7 @@ struct SettingsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(Theme.pageTransition) {
-                    panelState.showSettings = false
-                }
+                panelState.showSettings = false
             } label: {
                 Image(systemName: "chevron.left")
                     .font(Theme.bodySmallSemibold)
@@ -311,69 +298,9 @@ struct SettingsView: View {
             }
 
             if isEditingLocalSlot {
-                HStack(spacing: 6) {
-                    if settings.useLocalModel {
-                        Label("当前为翻译模型", systemImage: "checkmark.seal.fill")
-                            .font(Theme.caption)
-                            .foregroundStyle(.tertiary)
-
-                        Text("·")
-                            .font(Theme.caption)
-                            .foregroundStyle(.quaternary)
-
-                        Button {
-                            withAnimation(Theme.stateChange) {
-                                settings.useLocalModel = false
-                            }
-                        } label: {
-                            Text("改回主用/备用")
-                                .font(Theme.caption2Medium)
-                                .foregroundStyle(Theme.accent)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Button {
-                            withAnimation(Theme.stateChange) {
-                                settings.useLocalModel = true
-                            }
-                        } label: {
-                            Label("设为翻译模型", systemImage: "arrow.up.circle")
-                                .font(Theme.caption2Medium)
-                                .foregroundStyle(Theme.accent)
-                        }
-                        .buttonStyle(.plain)
-
-                        Text(settings.profiles[SettingsStore.localProfileIndex].isUsable
-                             ? "· 翻译将只使用这套，不走主用/备用或竞速"
-                             : "· 还需要填好下面的接口地址和模型")
-                            .font(Theme.caption)
-                            .foregroundStyle(.quaternary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                localSlotRoleRow
             } else {
-                HStack(spacing: 6) {
-                    if settings.primaryIndex == editingIndex {
-                        Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
-                            .font(Theme.caption)
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        Button {
-                            withAnimation(Theme.stateChange) {
-                                settings.primaryIndex = editingIndex
-                            }
-                        } label: {
-                            Label("设为主用", systemImage: "arrow.up.circle")
-                                .font(Theme.caption2Medium)
-                                .foregroundStyle(Theme.accent)
-                        }
-                        .buttonStyle(.plain)
-
-                        Text(settings.fallbackEnabled ? "· 现在是主用失败后的备用" : "· 备用已关闭，这套不会被使用")
-                            .font(Theme.caption)
-                            .foregroundStyle(.quaternary)
-                    }
-                }
+                onlineSlotRoleRow
             }
         }
     }
@@ -383,7 +310,7 @@ struct SettingsView: View {
         let isPrimary = settings.primaryIndex == index
         let isLocal = index == SettingsStore.localProfileIndex
         return Button {
-            withAnimation(Theme.stateChange) { editingIndex = index }
+            editingIndex = index
         } label: {
             HStack(spacing: 5) {
                 Circle()
@@ -415,6 +342,187 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: - Slot roles
+
+    /// The local slot's role line. Same "action, or current state plus the way out"
+    /// pattern as the primary/backup line below — the local slot is an ordinary slot
+    /// with an ordinary role now, not a standing mode that bypassed the rest of the app.
+    @ViewBuilder
+    private var localSlotRoleRow: some View {
+        HStack(spacing: 6) {
+            if !settings.localAvailable {
+                Text("还需要填好下面的接口地址和模型")
+                    .font(Theme.caption)
+                    .foregroundStyle(.quaternary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if settings.routeStart == .local {
+                Label("翻译从这里开始", systemImage: "checkmark.seal.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(.tertiary)
+
+                if settings.onlineAvailable {
+                    Text("·")
+                        .font(Theme.caption)
+                        .foregroundStyle(.quaternary)
+                    Button {
+                        settings.routeStart = .online
+                    } label: {
+                        Text("改为先用在线")
+                            .font(Theme.caption2Medium)
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Button {
+                    settings.routeStart = .local
+                } label: {
+                    Label("设为起点", systemImage: "arrow.up.circle")
+                        .font(Theme.caption2Medium)
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+
+                Text("· 先用本地翻译，不满意按 ⏎ 换在线")
+                    .font(Theme.caption)
+                    .foregroundStyle(.quaternary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The primary/backup role line. Under 同时请求 there is no primary — both slots are
+    /// asked at the same time — so the page says that instead of offering a choice that
+    /// would change nothing.
+    @ViewBuilder
+    private var onlineSlotRoleRow: some View {
+        HStack(spacing: 6) {
+            if settings.onlineStrategy == .concurrent && settings.concurrentAvailable {
+                Label("同时请求，两套地位相同", systemImage: "arrow.trianglehead.branch")
+                    .font(Theme.caption)
+                    .foregroundStyle(.tertiary)
+            } else if settings.primaryIndex == editingIndex {
+                Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Button {
+                    settings.primaryIndex = editingIndex
+                } label: {
+                    Label("设为主用", systemImage: "arrow.up.circle")
+                        .font(Theme.caption2Medium)
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+
+                Text(settings.profiles[editingIndex].isUsable
+                     ? "· 现在是主用失败后的备用"
+                     : "· 填好后可作为主用失败时的备用")
+                    .font(Theme.caption)
+                    .foregroundStyle(.quaternary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Routing
+
+    /// The two questions that used to be four booleans.
+    ///
+    /// They were never independent: the race path read the same resolved chain that
+    /// `fallbackEnabled` gated, so switching racing on with fallback off did nothing at
+    /// all — silently, with both switches showing as on. And `useLocalModel` overrode
+    /// every one of them. Two segmented choices, each shown only when it is a real
+    /// choice, can't produce that state.
+    @ViewBuilder
+    private var routingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("翻译路线")
+                .font(Theme.footnoteSemibold)
+                .foregroundStyle(.secondary)
+
+            if settings.startChoiceAvailable {
+                SegmentedChoice(
+                    title: L("从哪开始"),
+                    options: [
+                        .init(id: RouteStart.local.rawValue, label: L("本地模型")),
+                        .init(id: RouteStart.online.rawValue, label: L("在线服务")),
+                    ],
+                    selection: settings.routeStart.rawValue,
+                    onSelect: { settings.routeStart = RouteStart(rawValue: $0) ?? .online },
+                    caption: settings.routeStart == .local
+                        ? L("先用本地模型翻译，不满意按 ⏎ 换在线重译，两个结果都留着")
+                        : L("每次翻译都直接走在线服务")
+                )
+            } else if settings.onlineAvailable, !settings.localAvailable {
+                routingNote(L("填好本地模型后，可以让它先翻，不满意再按 ⏎ 换在线"))
+            } else if settings.localAvailable, !settings.onlineAvailable {
+                routingNote(L("目前只有本地模型可用，所有翻译都由它完成"))
+            }
+
+            if settings.profiles[0].isUsable && settings.profiles[1].isUsable {
+                SegmentedChoice(
+                    title: L("两套在线服务"),
+                    options: [
+                        .init(id: OnlineStrategy.failover.rawValue, label: L("主用优先")),
+                        .init(
+                            id: OnlineStrategy.concurrent.rawValue,
+                            label: L("同时请求"),
+                            // Not hidden, disabled with its reason: a missing option
+                            // reads as a bug, and the reason is fixable in two fields
+                            // right above.
+                            disabledReason: settings.concurrentAvailable
+                                ? nil
+                                : L("其中一套是本机地址，本机几乎必定先答完，比不出快慢")
+                        ),
+                    ],
+                    selection: effectiveOnlineStrategy.rawValue,
+                    onSelect: { settings.onlineStrategy = OnlineStrategy(rawValue: $0) ?? .failover },
+                    caption: effectiveOnlineStrategy == .failover
+                        ? L("先用主用，只有它失败时才换备用")
+                        : L("两套一起问，先答完的用它 · 每次翻译计费翻倍")
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // One value for the whole section: any of these choices can reveal or hide a
+        // row, which is the page getting taller or shorter.
+        .motion(.layout, value: routingShape)
+    }
+
+    /// What the strategy actually resolves to right now. A stored `.concurrent` with a
+    /// loopback slot degrades to `.failover` in the route builder, and the page must
+    /// show what will happen rather than what was once chosen.
+    private var effectiveOnlineStrategy: OnlineStrategy {
+        (settings.onlineStrategy == .concurrent && settings.concurrentAvailable) ? .concurrent : .failover
+    }
+
+    private struct RoutingShape: Equatable {
+        let start: RouteStart
+        let strategy: OnlineStrategy
+        let startChoice: Bool
+        let bothOnline: Bool
+        let concurrentAvailable: Bool
+    }
+
+    private var routingShape: RoutingShape {
+        RoutingShape(
+            start: settings.routeStart,
+            strategy: effectiveOnlineStrategy,
+            startChoice: settings.startChoiceAvailable,
+            bothOnline: settings.profiles[0].isUsable && settings.profiles[1].isUsable,
+            concurrentAvailable: settings.concurrentAvailable
+        )
+    }
+
+    private func routingNote(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.caption)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Toggles
@@ -496,7 +604,9 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .animation(Theme.stateChange, value: updateChecker.state)
+        // `.layout`: the update status line appears and disappears, changing the row's
+        // height.
+        .motion(.layout, value: updateChecker.state)
     }
 
     /// The short, non-actionable states shown inline next to the check button. An available
@@ -525,9 +635,7 @@ struct SettingsView: View {
     /// keeps this page from ballooning with a full per-action row list.
     private var shortcutsNavRow: some View {
         Button {
-            withAnimation(Theme.pageTransition) {
-                panelState.showShortcuts = true
-            }
+            panelState.showShortcuts = true
         } label: {
             HStack {
                 Text("快捷键")
@@ -546,7 +654,7 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .onHover { shortcutsRowHovering = $0 }
-        .animation(Theme.microMotion, value: shortcutsRowHovering)
+        .motion(.micro, value: shortcutsRowHovering)
     }
 
     // MARK: - Advanced
@@ -569,22 +677,9 @@ struct SettingsView: View {
     /// everyone — collapsed by default so it doesn't cost every user a field + two lines
     /// of explanation.
     private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
-                // Tried animating the field's opacity in lockstep with the window
-                // resize (twice — once on one shared timeline, once on two
-                // deliberately offset ones). Both produced a visible three-phase
-                // motion (page shifts, then the field pops, then it settles):
-                // SwiftUI reports this fold's in-flight height to the window
-                // continuously while ANY part of it is mid-animation, so as long as
-                // the field's own appearance is animated at all, the window is
-                // chasing a moving target and shows it. Back to the original
-                // approach instead: only the chevron animates here, the field pops
-                // in at full opacity immediately, and the window's own (now
-                // non-bouncy since Theme.layoutChange replaced the old spring curve)
-                // resize is the ONLY motion — one timeline, because there is only
-                // one thing left to animate.
-                withAnimation(Theme.stateChange) { showAdvanced.toggle() }
+                showAdvanced.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
@@ -599,48 +694,59 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
 
-            if showAdvanced {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("输出协议")
-                            .font(Theme.footnoteMedium)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Picker("输出协议", selection: $settings.profiles[safeEditingIndex].outputProtocolPreference) {
-                            Text("自动（推荐）").tag(TranslationProtocolPreference.automatic)
-                            Text("纯文本兼容").tag(TranslationProtocolPreference.plainText)
+            Disclosure(isExpanded: showAdvanced) {
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("输出协议")
+                                .font(Theme.footnoteMedium)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Picker("输出协议", selection: $settings.profiles[safeEditingIndex].outputProtocolPreference) {
+                                Text("自动（推荐）").tag(TranslationProtocolPreference.automatic)
+                                Text("纯文本兼容").tag(TranslationProtocolPreference.plainText)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .controlSize(.small)
+                            .accessibilityLabel("输出协议")
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .controlSize(.small)
-                        .accessibilityLabel("输出协议")
+                        Text("自动使用已验证格式；首次不兼容时会改用纯文本并重试一次。")
+                            .font(Theme.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("自动使用已验证格式；首次不兼容时会改用纯文本并重试一次。")
-                        .font(Theme.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .transition(.identity)
 
-                // "优先顺序", not "路由": the request only carries OpenRouter's
-                // `provider.order` preference list. It is not `provider.only` and does
-                // not set `allow_fallbacks: false`, so OpenRouter may still serve the
-                // request from a provider that isn't listed here. Calling it routing
-                // promised a guarantee the request never asks for.
-                labeledField(
-                    "供应商优先顺序（可选）",
-                    hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商",
-                    focused: focusedField == .providerOrder
-                ) {
-                    TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
-                        .textFieldStyle(.plain)
-                        .font(Theme.bodyMonospaced)
-                        .focused($focusedField, equals: .providerOrder)
-                        .accessibilityLabel("供应商优先顺序（可选）")
+                    // "优先顺序", not "路由": the request only carries OpenRouter's
+                    // `provider.order` preference list. It is not `provider.only` and does
+                    // not set `allow_fallbacks: false`, so OpenRouter may still serve the
+                    // request from a provider that isn't listed here. Calling it routing
+                    // promised a guarantee the request never asks for.
+                    labeledField(
+                        "供应商优先顺序（可选）",
+                        hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商",
+                        focused: focusedField == .providerOrder
+                    ) {
+                        TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
+                            .textFieldStyle(.plain)
+                            .font(Theme.bodyMonospaced)
+                            .focused($focusedField, equals: .providerOrder)
+                            .accessibilityLabel("供应商优先顺序（可选）")
+                    }
                 }
-                .transition(.identity)
+                // The stack's own 8pt spacing is above the chevron row, not inside the
+                // fold — a collapsed `Disclosure` is zero-height, but a sibling gap is
+                // not, and it would leave a hole under a closed section.
+                .padding(.top, 8)
             }
         }
+        // The chevron, the fields and the panel's own height all move on this one
+        // timeline. Both of these sections used to animate nothing but the chevron and
+        // let the content pop in at full opacity, because the window was easing an
+        // already-eased height and visibly lagged anything that moved. With the window
+        // mirroring instead of easing (see PanelController.setContentHeight), there is
+        // nothing left to work around.
+        .motion(.layout, value: showAdvanced)
     }
 
     /// Defaults to expanded when there's already an instruction saved (so it isn't
@@ -658,15 +764,9 @@ struct SettingsView: View {
     /// Collapsed by default for the same reason `advancedSection` is: most users never
     /// touch it, so it shouldn't cost every user a field + explanation line by default.
     private var extraInstructionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
-                // See advancedSection's comment: only the chevron animates here, the
-                // field pops in immediately, and the window's own resize is the only
-                // motion — animating the field too (tried two variants of it) made
-                // the window visibly chase a moving target and produced a three-phase
-                // "page shifts, then pops, then settles" motion instead of one clean
-                // resize.
-                withAnimation(Theme.stateChange) { showExtraInstruction.toggle() }
+                showExtraInstruction.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Text("附加要求（可选）")
@@ -681,7 +781,7 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
 
-            if showExtraInstruction {
+            Disclosure(isExpanded: showExtraInstruction) {
                 // Not `labeledField`: that helper renders its own "附加要求（可选）"
                 // label row, which the collapse header above already is — reusing it
                 // here would print the same text twice.
@@ -705,9 +805,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .transition(.identity)
+                // See advancedSection: the gap belongs above the fold, not inside it.
+                .padding(.top, 8)
             }
         }
+        .motion(.layout, value: showExtraInstruction)
     }
 
     // MARK: - Fields
@@ -818,7 +920,9 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .animation(Theme.stateChange, value: testState)
+        // `.layout`: a connection result can wrap onto a second line, so this row's
+        // height is not fixed.
+        .motion(.layout, value: testState)
     }
 
     private func runTest() {

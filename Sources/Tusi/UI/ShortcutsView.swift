@@ -27,9 +27,12 @@ struct ShortcutsView: View {
                             .transition(.opacity)
                     }
                 }
-                .animation(Theme.stateChange, value: panelState.recordingShortcut)
-                .animation(Theme.stateChange, value: panelState.shortcutError)
-                .animation(Theme.stateChange, value: panelState.pendingBareShortcut)
+                // `.layout`, not `.state`: each of these adds or removes a row, so the
+                // panel gets taller or shorter and the window animates with it. Only
+                // `.layout` and `.page` share the window's duration.
+                .motion(.layout, value: panelState.recordingShortcut)
+                .motion(.layout, value: panelState.shortcutError)
+                .motion(.layout, value: panelState.pendingBareShortcut)
             }
             .background(
                 GeometryReader { proxy in
@@ -55,9 +58,7 @@ struct ShortcutsView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(Theme.pageTransition) {
-                    panelState.showShortcuts = false
-                }
+                panelState.showShortcuts = false
             } label: {
                 Image(systemName: "chevron.left")
                     .font(Theme.bodySmallSemibold)

@@ -606,35 +606,35 @@ final class TusiTests: XCTestCase {
 
     // MARK: - Dedicated local-model slot
 
-    func testLocalModelSlotIsExcludedFromIsConfigured() {
-        // Filling in only the local slot must not satisfy "is there anything for
-        // ordinary ⏎-to-translate to use" — that slot is manual-only.
+    func testLocalSlotAloneIsEnoughToBeConfigured() {
+        // The local slot used to be manual-only, so filling it in left ⏎ "unconfigured".
+        // It is an ordinary route start now: a filled local slot is a working app.
         let settings = SettingsStore(preview: true)
         XCTAssertFalse(settings.isConfigured)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
-        XCTAssertFalse(settings.isConfigured)
-
-        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+        settings.routeStart = .local
         XCTAssertTrue(settings.isConfigured)
+        XCTAssertEqual(settings.route.stages.map(\.tier), [.local])
     }
 
-    func testLocalModelSlotIsExcludedFromResolvedChain() {
-        // Even usable, the local slot must never appear in the automatic chain — it
-        // never races, never fails over, never gets tried by translate().
+    func testLocalSlotStaysOutOfTheRouteWhenTheStartIsOnline() {
+        // Filled in but not chosen as the start: the local slot must not be contacted,
+        // raced, or failed over to.
         let settings = SettingsStore(preview: true)
+        settings.routeStart = .online
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
-        XCTAssertEqual(settings.resolvedChain.map(\.index), [0])
+        XCTAssertEqual(settings.route.stages.map(\.slots), [[0]])
     }
 
-    func testUseLocalModelSendsOnlyToThatSlotAndIgnoresChain() async throws {
+    func testLocalStartContactsOnlyTheLocalSlotUntilEscalated() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.useLocalModel = true
+        settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "backup")
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
@@ -649,21 +649,46 @@ final class TusiTests: XCTestCase {
                 continuation.finish()
             }
         }
-        XCTAssertTrue(engine.localModelAvailable)
+        XCTAssertTrue(settings.localAvailable)
 
         engine.input = "hi"
         engine.translate()
         try await waitUntilDone(engine)
 
         XCTAssertEqual(engine.output, "本地结果")
-        XCTAssertEqual(calledModels, ["local"], "only the local slot may be contacted")
+        XCTAssertEqual(calledModels, ["local"], "the first translation may only contact the local slot")
+        XCTAssertEqual(engine.versions.map(\.tier), [.local])
+        XCTAssertTrue(engine.canEscalate, "an online tier is configured, so a better answer must be one keystroke away")
     }
 
-    func testUseLocalModelFailsClearlyWhenSlotNotConfigured() async throws {
+    func testLocalStartWithAnEmptySlotJustStartsOnline() async throws {
+        // Preferring a local start that is not actually filled in is not an error to
+        // report — a working online slot is right there. The old behavior refused to
+        // translate at all and sent the user to Settings.
         let settings = SettingsStore(preview: true)
-        settings.useLocalModel = true
+        settings.autoCopy = false
+        settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
 
+        var calledModels: [String] = []
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            calledModels.append(config.model)
+            return AsyncThrowingStream { continuation in
+                continuation.yield("online result")
+                continuation.finish()
+            }
+        }
+        engine.input = "你好"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.output, "online result")
+        XCTAssertEqual(calledModels, ["primary"])
+        XCTAssertFalse(engine.canEscalate, "already at the top tier — there is nothing better to offer")
+    }
+
+    func testNothingConfiguredAtAllFailsWithoutContactingAnyone() async throws {
+        let settings = SettingsStore(preview: true)
         var calls = 0
         let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
             calls += 1
@@ -671,22 +696,21 @@ final class TusiTests: XCTestCase {
         }
         engine.input = "hi"
         engine.translate()
-        guard case .failed(let message) = engine.state else {
+        guard case .failed = engine.state else {
             return XCTFail("expected immediate failed state, got \(engine.state)")
         }
-        XCTAssertTrue(message.contains("本地模型"), message)
-        XCTAssertEqual(calls, 0, "an unconfigured local slot must not be contacted, and the usable primary must not be used as a fallback")
+        XCTAssertEqual(engine.failureKind, .notConfigured)
+        XCTAssertEqual(calls, 0)
     }
 
     func testLocalModelAvailableReflectsSlotUsability() {
         let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
-        XCTAssertFalse(engine.localModelAvailable)
+        XCTAssertFalse(settings.localAvailable)
 
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
-        XCTAssertTrue(engine.localModelAvailable)
+        XCTAssertTrue(settings.localAvailable)
     }
 
     func testSlotLabelShowsShortBrandNameNotFullHost() {
@@ -925,7 +949,7 @@ final class TusiTests: XCTestCase {
         engine.input = "hi"
         engine.translate()
         if case .failed(let message) = engine.state {
-            XCTAssertTrue(message.contains("还没有配置可用的 API 服务"), message)
+            XCTAssertTrue(message.contains("还没有配置可用的翻译服务"), message)
         } else {
             XCTFail("expected failed state, got \(engine.state)")
         }
@@ -985,7 +1009,7 @@ final class TusiTests: XCTestCase {
         // primary is attempted twice and the backup twice: 4 calls total.
         XCTAssertEqual(calls, 4)
         if case .failed(let message) = engine.state {
-            XCTAssertTrue(message.contains("备用"), message)
+            XCTAssertTrue(message.contains("两套在线服务都失败了"), message)
         } else {
             XCTFail("expected failed state")
         }
@@ -996,7 +1020,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestCommitsWinnerWithoutWaitingForLoser() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "fast")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "slow")
 
@@ -1035,7 +1059,7 @@ final class TusiTests: XCTestCase {
         // first, not the loser.
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.fast.com/v1", apiKey: "k1", model: "fast")
         settings.profiles[1] = APIProfile(baseURL: "https://api.slow.com/v1", apiKey: "k2", model: "slow")
 
@@ -1057,9 +1081,10 @@ final class TusiTests: XCTestCase {
         engine.input = "hi"
         engine.translate()
         try await waitUntilDone(engine)
-        try await waitUntil { engine.toast == .raceWon("fast") }
 
-        XCTAssertEqual(engine.toast, .raceWon("fast"))
+        XCTAssertEqual(engine.versions.map(\.slot), [0], "the fast slot answered, so the fast slot is named")
+        XCTAssertEqual(settings.label(for: engine.versions[0].slot), "fast")
+        XCTAssertFalse(engine.versions[0].afterFailover)
     }
 
     func testRaceFastestSkippedWhenEitherSlotIsLoopback() async throws {
@@ -1068,7 +1093,7 @@ final class TusiTests: XCTestCase {
         // slot is loopback — sequential primary-first behavior applies instead.
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "remote")
 
@@ -1092,7 +1117,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestBothFailProducesCombinedErrorMessage() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
@@ -1107,13 +1132,13 @@ final class TusiTests: XCTestCase {
         guard case .failed(let message) = engine.state else {
             return XCTFail("expected failed state")
         }
-        XCTAssertTrue(message.contains("两个供应商都失败了"), message)
+        XCTAssertTrue(message.contains("两套在线服务都失败了"), message)
     }
 
     func testRaceFastestWaitsForUsableResultAfterEmptyCompletion() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
 
@@ -1140,7 +1165,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestWaitsForUsableResultAfterOtherLegFails() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "failed")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
 
@@ -1166,7 +1191,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestWaitsForTargetLanguageAfterWrongLanguageCompletion() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.wrong.com/v1", apiKey: "k1", model: "wrong")
         settings.profiles[1] = APIProfile(baseURL: "https://api.correct.com/v1", apiKey: "k2", model: "correct")
 
@@ -1189,17 +1214,16 @@ final class TusiTests: XCTestCase {
         engine.translate()
 
         try await waitUntilDone(engine)
-        try await waitUntil { engine.toast == .raceWon("correct") }
         XCTAssertEqual(engine.output, "According to the plan, how many EDMs will be sent in September?")
         XCTAssertFalse(engine.outputLanguageMismatch)
-        XCTAssertEqual(engine.toast, .raceWon("correct"))
+        XCTAssertEqual(settings.label(for: engine.versions[0].slot), "correct")
         XCTAssertEqual(engine.history.count, 1)
     }
 
     func testRaceFastestPreservesFirstWrongLanguageResultWhenNeitherLegMatchesTarget() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.first.com/v1", apiKey: "k1", model: "first")
         settings.profiles[1] = APIProfile(baseURL: "https://api.second.com/v1", apiKey: "k2", model: "second")
 
@@ -1224,7 +1248,7 @@ final class TusiTests: XCTestCase {
         try await waitUntilDone(engine)
         XCTAssertEqual(engine.output, "第一家返回了中文回答。")
         XCTAssertTrue(engine.outputLanguageMismatch)
-        XCTAssertNil(engine.toast, "a warned fallback must not be presented as the speed winner")
+        XCTAssertTrue(engine.versions[0].languageMismatch, "a preserved fallback stays marked as suspicious")
         XCTAssertEqual(engine.history.count, 1)
     }
 
@@ -1238,7 +1262,7 @@ final class TusiTests: XCTestCase {
 
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(
             baseURL: "https://structured.example.com/v1",
             apiKey: "k1",
@@ -1297,7 +1321,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestReportsFailureWhenEmptyCompletionIsPairedWithFailure() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "failed")
 
@@ -1325,7 +1349,7 @@ final class TusiTests: XCTestCase {
     func testRaceFastestReportsEmptyResponseOnlyWhenBothLegsAreEmpty() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty-a")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "empty-b")
 
@@ -1787,6 +1811,297 @@ final class TusiTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertTrue(condition())
+    }
+
+    // MARK: - Routing model
+
+    func testRoutingMigratesTheFourRetiredSwitches() {
+        // Behavior, not switch positions: racing with fallback off never actually
+        // raced (the race path read the chain fallback gated), so it must not migrate
+        // into "ask both".
+        let suite = "com.tusi.test.migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        defaults.set(true, forKey: "useLocalModel")
+        defaults.set(false, forKey: "fallbackEnabled")
+        defaults.set(true, forKey: "raceFastestEnabled")
+        let migrated = SettingsStore.loadRouting(defaults: defaults)
+        XCTAssertEqual(migrated.start, .local)
+        XCTAssertEqual(migrated.strategy, .failover, "racing was inert without fallback, so it must not migrate as active")
+
+        // The retired keys are gone, and the migration does not run twice.
+        XCTAssertNil(defaults.object(forKey: "useLocalModel"))
+        XCTAssertNil(defaults.object(forKey: "raceFastestEnabled"))
+        XCTAssertNil(defaults.object(forKey: "fallbackEnabled"))
+        XCTAssertNil(defaults.object(forKey: "raceToastEnabled"))
+        defaults.set(RouteStart.online.rawValue, forKey: "routeStart")
+        XCTAssertEqual(SettingsStore.loadRouting(defaults: defaults).start, .online)
+    }
+
+    func testRacingThatActuallyRacedMigratesToConcurrent() {
+        let suite = "com.tusi.test.migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "fallbackEnabled")
+        defaults.set(true, forKey: "raceFastestEnabled")
+        XCTAssertEqual(SettingsStore.loadRouting(defaults: defaults).strategy, .concurrent)
+    }
+
+    func testConcurrentDegradesToFailoverWhenASlotIsLoopback() {
+        // The old pair could be switched on together and silently do nothing. The route
+        // resolves the conflict instead, and `concurrentAvailable` is what the settings
+        // page reads to say so out loud.
+        let settings = SettingsStore(preview: true)
+        settings.onlineStrategy = .concurrent
+        settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "remote")
+        XCTAssertFalse(settings.concurrentAvailable)
+        XCTAssertEqual(settings.route.stages.map(\.strategy), [.failover])
+
+        settings.profiles[0] = APIProfile(baseURL: "https://other.com/v1", apiKey: "k", model: "remote2")
+        XCTAssertTrue(settings.concurrentAvailable)
+        XCTAssertEqual(settings.route.stages.map(\.strategy), [.concurrent])
+    }
+
+    func testLocalStartBuildsATwoTierRouteWithOnlineAbove() {
+        let settings = SettingsStore(preview: true)
+        settings.routeStart = .local
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        let route = settings.route
+        XCTAssertEqual(route.stages.map(\.tier), [.local, .online])
+        XCTAssertTrue(route.hasHigherTier(after: 0))
+        XCTAssertFalse(route.hasHigherTier(after: 1), "the top tier has nothing better to offer")
+        XCTAssertEqual(route.nextHigherStage(after: 0)?.index, 1)
+    }
+
+    // MARK: - Escalation
+
+    /// A local slot that answers, plus an online slot that answers differently.
+    private func makeTieredEngine(
+        localOutput: String,
+        onlineOutput: String,
+        onlineFails: Error? = nil,
+        record: @escaping (String) -> Void = { _ in }
+    ) -> (SettingsStore, TranslationEngine) {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.routeStart = .local
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            record(config.model)
+            return AsyncThrowingStream { continuation in
+                if config.model == "local" {
+                    continuation.yield(localOutput)
+                    continuation.finish()
+                } else if let onlineFails {
+                    continuation.finish(throwing: onlineFails)
+                } else {
+                    continuation.yield(onlineOutput)
+                    continuation.finish()
+                }
+            }
+        }
+        return (settings, engine)
+    }
+
+    func testEscalationKeepsBothAnswersAndShowsTheNewOne() async throws {
+        var models: [String] = []
+        let (settings, engine) = makeTieredEngine(
+            localOutput: "A rough local answer.",
+            onlineOutput: "A careful online answer.",
+            record: { models.append($0) }
+        )
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(engine.output, "A rough local answer.")
+        XCTAssertEqual(models, ["local"])
+
+        engine.escalate()
+        try await waitUntil { !engine.escalating }
+
+        XCTAssertEqual(models, ["local", "online"])
+        XCTAssertEqual(engine.output, "A careful online answer.", "the newer answer takes the display")
+        XCTAssertEqual(engine.versions.map(\.tier), [.local, .online], "the local answer is kept, not discarded")
+        XCTAssertEqual(engine.shownVersion, 1)
+        XCTAssertFalse(engine.canEscalate, "already at the top tier")
+        XCTAssertEqual(engine.history.count, 1, "an escalation answers the same question — it must not file a second entry")
+        XCTAssertEqual(engine.history.first?.output, "A careful online answer.")
+        _ = settings
+    }
+
+    func testSubmitTranslatesFirstThenEscalates() async throws {
+        // The user's own instinct was a double-press. This is that gesture, with the
+        // second press meaningful only once there is a result to judge — so there is no
+        // timing window and a double-tap on a typo cannot spend anything.
+        var models: [String] = []
+        let (_, engine) = makeTieredEngine(
+            localOutput: "Local.", onlineOutput: "Online.", record: { models.append($0) }
+        )
+        engine.input = "一句中文。"
+        engine.submit()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(models, ["local"])
+
+        engine.submit()
+        try await waitUntil { !engine.escalating }
+        XCTAssertEqual(models, ["local", "online"])
+
+        engine.submit()
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(
+            models, ["local", "online"],
+            "at the top tier there is nothing left to ask for — a third ⏎ must not restart the route at the local slot and bill for it"
+        )
+        XCTAssertEqual(engine.output, "Online.")
+    }
+
+    func testSwitchingVersionsMovesTheClipboardWithTheDisplay() async throws {
+        // The one rule that makes two answers unambiguous: the pasteboard holds whatever
+        // is on screen.
+        let (settings, engine) = makeTieredEngine(localOutput: "Local text.", onlineOutput: "Online text.")
+        settings.autoCopy = true
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "Local text.")
+
+        engine.escalate()
+        try await waitUntil { !engine.escalating }
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "Online text.")
+
+        engine.showVersion(0)
+        XCTAssertEqual(engine.output, "Local text.")
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "Local text.")
+    }
+
+    func testFailedEscalationLeavesTheGoodAnswerAlone() async throws {
+        // A second opinion that did not arrive is not a failure of the translation the
+        // user already has.
+        let (_, engine) = makeTieredEngine(
+            localOutput: "Perfectly fine local answer.",
+            onlineOutput: "",
+            onlineFails: TranslationError.http(500, "boom")
+        )
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        engine.escalate()
+        try await waitUntil { !engine.escalating }
+
+        XCTAssertEqual(engine.state, .done)
+        XCTAssertEqual(engine.output, "Perfectly fine local answer.")
+        XCTAssertEqual(engine.versions.count, 1)
+        XCTAssertNotNil(engine.escalationFailure)
+        XCTAssertNil(engine.failureKind, "the translation did not fail — the optional extra did")
+    }
+
+    func testStoppingAnEscalationKeepsTheAnswerAlreadyOnScreen() async throws {
+        // The half-arrived online tokens must not overwrite a finished translation the
+        // user already has, and must not be marked as an interrupted result either.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.routeStart = .local
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
+        settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
+        )
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            AsyncThrowingStream { continuation in
+                if config.model == "local" {
+                    continuation.yield("The finished local answer.")
+                    continuation.finish()
+                } else {
+                    Task {
+                        continuation.yield("Half an onl")
+                        try? await Task.sleep(for: .seconds(5))
+                        continuation.finish()
+                    }
+                }
+            }
+        }
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        engine.escalate()
+        try await Task.sleep(for: .milliseconds(50))
+        engine.cancelTranslation()
+
+        XCTAssertFalse(engine.escalating)
+        XCTAssertEqual(engine.state, .done)
+        XCTAssertEqual(engine.output, "The finished local answer.")
+        XCTAssertFalse(engine.interrupted, "the translation on screen finished normally — only the extra was stopped")
+        XCTAssertEqual(engine.versions.count, 1)
+    }
+
+    func testWrongLanguageAtALowerTierEscalatesOnItsOwn() async throws {
+        // Not a matter of taste: the local model answered the remark instead of
+        // translating it, which is that tier demonstrably failing the job.
+        var models: [String] = []
+        let (_, engine) = makeTieredEngine(
+            localOutput: "是的，感谢您的反馈。",
+            onlineOutput: "Yes, thanks for the feedback.",
+            record: { models.append($0) }
+        )
+        engine.input = "真的吗，你们的回答好官方。"
+        engine.translate()
+        try await waitUntil { !engine.escalating && engine.versions.count == 2 }
+
+        XCTAssertEqual(models, ["local", "online"], "no keystroke was needed")
+        XCTAssertEqual(engine.output, "Yes, thanks for the feedback.")
+        XCTAssertFalse(engine.outputLanguageMismatch)
+        XCTAssertTrue(engine.versions[0].languageMismatch, "the suspicious answer is kept and stays marked")
+        XCTAssertEqual(engine.history.count, 1)
+    }
+
+    func testEditingTheInputDropsBothVersionsAndTheEscalationOffer() async throws {
+        let (_, engine) = makeTieredEngine(localOutput: "Local.", onlineOutput: "Online.")
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertTrue(engine.canEscalate)
+
+        engine.input = "换一句中文。"
+        XCTAssertTrue(engine.versions.isEmpty)
+        XCTAssertFalse(engine.canEscalate)
+        XCTAssertNil(engine.escalationFailure)
+    }
+
+    func testFailoverInsideOneStageIsMarkedOnTheResult() async throws {
+        // What the "used the backup" toast used to say, said by the result itself for
+        // as long as the result is on screen.
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://api.first.com/v1", apiKey: "k1", model: "primary")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.second.com/v1", apiKey: "k2", model: "backup")
+        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+            AsyncThrowingStream { continuation in
+                if config.model == "primary" {
+                    continuation.finish(throwing: TranslationError.http(401, "nope"))
+                } else {
+                    continuation.yield("From the backup.")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "一句中文。"
+        engine.translate()
+        try await waitUntilDone(engine)
+
+        XCTAssertEqual(engine.output, "From the backup.")
+        XCTAssertEqual(engine.versions.count, 1)
+        XCTAssertTrue(engine.versions[0].afterFailover)
+        XCTAssertEqual(settings.label(for: engine.versions[0].slot), "second")
     }
 
     // MARK: - Streaming (mock URLSession)
@@ -2796,29 +3111,16 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 100)
     }
 
-    func testPanelHeightAnimationDoesNotDoubleAnimateSwiftUILayoutFrames() {
-        XCTAssertEqual(Theme.historyTransitionDuration, 0.26, accuracy: 0.001)
-        XCTAssertGreaterThan(Theme.historyTransitionDuration, Theme.layoutChangeDuration)
-        XCTAssertTrue(PanelController.shouldAnimateHeightChange(
-            isTranslating: false,
-            reduceMotion: false,
-            followsAnimatedSwiftUILayout: false
-        ))
-        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
-            isTranslating: true,
-            reduceMotion: false,
-            followsAnimatedSwiftUILayout: false
-        ))
-        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
-            isTranslating: false,
-            reduceMotion: true,
-            followsAnimatedSwiftUILayout: false
-        ))
-        XCTAssertFalse(PanelController.shouldAnimateHeightChange(
-            isTranslating: false,
-            reduceMotion: false,
-            followsAnimatedSwiftUILayout: true
-        ))
+    /// The window no longer decides whether to animate a height change — it mirrors what
+    /// SwiftUI reports, always — so the predicate this test used to pin is gone along
+    /// with the three special cases it arbitrated between. What replaced it is
+    /// `MotionConventionTests`, which checks the invariant that makes mirroring safe:
+    /// nothing outside `Theme` starts an animation of its own.
+    func testPanelSummonIsTheFastestMotionInTheApp() {
+        XCTAssertEqual(Theme.panelAppearDuration, 0.14, accuracy: 0.001)
+        for motion in [Theme.Motion.micro, .state, .layout, .page] {
+            XCTAssertNotNil(motion.animation)
+        }
     }
 
     func testBareLetterShortcutsRequireConfirmationButFunctionKeysDoNot() {
@@ -2961,20 +3263,22 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(FailureKind.unknown.isWorthRetrying)
         XCTAssertFalse(FailureKind.credentials.isWorthRetrying)
         XCTAssertFalse(FailureKind.notConfigured.isWorthRetrying)
-        XCTAssertFalse(FailureKind.localModelNotConfigured.isWorthRetrying)
     }
 
     func testUnconfiguredFailuresAreMarkedAsConfigurationProblems() {
+        // One case covers it now. "Local mode is on but its slot is empty" used to be
+        // its own dead end; it is just an online start today, so the only unconfigured
+        // failure left is "nothing at all is filled in".
         let settings = SettingsStore(preview: true)
         let engine = TranslationEngine(settings: settings)
         engine.input = "hi"
         engine.translate()
         XCTAssertEqual(engine.failureKind, .notConfigured)
 
-        settings.useLocalModel = true
+        settings.routeStart = .local
         engine.input = "hi there"
         engine.translate()
-        XCTAssertEqual(engine.failureKind, .localModelNotConfigured)
+        XCTAssertEqual(engine.failureKind, .notConfigured)
     }
 
     func testBadCredentialsFailureIsClassifiedAndClearedOnSuccess() async throws {
@@ -3035,7 +3339,7 @@ final class TusiTests: XCTestCase {
             APIProfile(baseURL: "https://api.two.example/v1", apiKey: "k", model: "m"),
             APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"),
         ]
-        settings.raceFastestEnabled = true
+        settings.onlineStrategy = .concurrent
         let panelState = PanelState()
         let updateChecker = UpdateChecker(preview: true)
         let engine = TranslationEngine(settings: settings)
@@ -3049,7 +3353,34 @@ final class TusiTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
 
         XCTAssertGreaterThan(hosting.fittingSize.height, 160)
-        XCTAssertLessThanOrEqual(hosting.fittingSize.width, 470)
+
+        // The page must *reflow* at the minimum panel width, not overflow it — measured
+        // with the advanced section open, since that is where the longest caption on the
+        // page lives. "Narrower proposal ⇒ taller layout" is the claim: a row that
+        // refused to compress would keep its height and spill sideways instead.
+        //
+        // This used to assert `fittingSize.width <= 470` on the unconstrained collapsed
+        // page, which is a weaker and rather accidental claim — it says no *ideal*
+        // (unwrapped, single-line) width exceeds the minimum panel, which held only
+        // because no visible caption happened to be that long. It stopped holding when
+        // collapsed disclosures began staying mounted so they can animate their own
+        // height: a collapsed `Disclosure` contributes no height, but its content's
+        // ideal width still reaches the measurement. That width is inert — SettingsView
+        // is always laid out inside `RootView`'s fixed-width frame and never feeds
+        // `PanelContentWidthKey` — whereas a row that cannot compress is a real clipping
+        // risk, and that case is covered by
+        // `testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth`.
+        settings.profiles[0].providerOrder = "novita"  // opens the advanced fold
+        let expanded = SettingsView()
+            .environmentObject(settings)
+            .environmentObject(panelState)
+            .environmentObject(updateChecker)
+            .environmentObject(engine)
+        let atMinWidth = NSHostingView(rootView: expanded.frame(width: Theme.panelMinWidth))
+        atMinWidth.layoutSubtreeIfNeeded()
+        let atMaxWidth = NSHostingView(rootView: expanded.frame(width: Theme.panelMaxWidth))
+        atMaxWidth.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(atMinWidth.fittingSize.height, atMaxWidth.fittingSize.height)
     }
 
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {

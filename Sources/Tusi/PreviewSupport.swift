@@ -62,26 +62,53 @@ extension AppDelegate {
                 let receipt = "TUSI_STATE=\(self.engine.state) OUTPUT=\(self.engine.output) HISTORY=\(self.engine.history.count)\n"
                 FileHandle.standardError.write(Data(receipt.utf8))
             }
+        case "push":
+            // Cycles translator → settings → translator → settings on a timer so the page
+            // push can be traced in both directions without driving the UI by hand. Pair
+            // with TUSI_SLOWMO=1, which stretches each push to 2.8s.
+            engine.debugPreview(
+                input: "得益于全新的架构，这次更新带来了显著的性能提升。",
+                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost."
+            )
+            settings.profiles = [
+                APIProfile(baseURL: "https://api.deepseek.com", apiKey: "sk-preview", model: "deepseek-chat"),
+                APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
+                APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
+            ]
+            panelState.showSettings = false
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let script: [(Double, () -> Void)] = [
+                    (4, { self.panelState.showLanguagePicker = true }),   // Disclosure
+                    (4, { self.panelState.showLanguagePicker = false }),
+                    (4, { self.panelState.showHistory = true }),
+                    (4, { self.panelState.showHistory = false }),
+                    (4, { self.panelState.showSettings = true }),         // 1st push
+                    (5, { self.panelState.showSettings = false }),
+                    (5, { self.panelState.showSettings = true }),         // 2nd push
+                    (5, { self.panelState.showSettings = false }),
+                ]
+                for (delay, step) in script {
+                    try? await Task.sleep(for: .seconds(delay))
+                    step()
+                }
+            }
         case "corners":
             // Opens settings on a delay so a screenshot burst can catch the
             // transition mid-flight; pair with TUSI_SLOWMO to stretch it out.
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升。",
-                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost.",
-                toast: nil
+                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost."
             )
             panelState.showSettings = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation(Theme.pageTransition) {
-                    self.panelState.showSettings = true
-                }
+                self.panelState.showSettings = true
             }
         case "reopen":
             panelState.showSettings = false
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升。",
-                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost.",
-                toast: nil
+                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost."
             )
             panelController.show()
         case "falltest":
@@ -100,9 +127,55 @@ extension AppDelegate {
             panelState.showSettings = false
             engine.debugPreview(
                 input: "真的吗，你们的回答好官方。",
-                output: "是的，感谢您的反馈。",
-                toast: nil
+                output: "是的，感谢您的反馈。"
             )
+        case "escalated", "provenance", "fallback", "copied":
+            // Two answers to one question: the provenance label becomes the switch
+            // between them. "provenance" shows the single-answer form instead.
+            settings.profiles = [
+                APIProfile(baseURL: "https://api.deepseek.com", apiKey: "sk-preview", model: "deepseek-chat"),
+                APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
+                APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
+            ]
+            settings.routeStart = .local
+            panelState.showSettings = false
+            let local = TranslationEngine.ResultVersion(
+                text: "Maybe you could fill in this form every day, for Mitchelle.",
+                slot: SettingsStore.localProfileIndex, tier: .local,
+                languageMismatch: false, capped: false, afterFailover: false
+            )
+            let online = TranslationEngine.ResultVersion(
+                text: "Perhaps you could fill out this form every day, for Mitchelle.",
+                slot: 0, tier: .online,
+                languageMismatch: false, capped: false, afterFailover: false
+            )
+            // "fallback": one online answer that only exists because the primary failed —
+            // what the old "已用备用翻译" toast used to say for 2.4 seconds.
+            let backup = TranslationEngine.ResultVersion(
+                text: online.text, slot: 1, tier: .online,
+                languageMismatch: false, capped: false, afterFailover: true
+            )
+            let shown: [TranslationEngine.ResultVersion]
+            switch preview {
+            case "escalated": shown = [local, online]
+            case "fallback": shown = [backup]
+            default: shown = [local]
+            }
+            engine.debugPreview(
+                input: "或许你每天可以填一下这份表格，为了 Mitchelle。",
+                output: shown[shown.count - 1].text,
+                versions: shown
+            )
+            if preview == "copied" {
+                // Holds the confirmation open long enough to screenshot: the capsule
+                // must be exactly as wide here as it is in its resting state.
+                Task { @MainActor [weak self] in
+                    for _ in 0..<120 {
+                        self?.engine.copyOutput()
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                }
+            }
         case "waiting":
             panelState.showSettings = false
             engine.debugPreviewTranslating(input: "得益于全新的架构，这次更新带来了显著的性能提升。")
@@ -112,8 +185,7 @@ extension AppDelegate {
             panelState.showSettings = false
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
-                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",
-                toast: nil
+                output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible."
             )
             if preview == "picker-multi" {
                 engine.selectExplicitTarget(.japanese)
@@ -124,9 +196,7 @@ extension AppDelegate {
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",
-                toast: preview == "fallback" ? .fellBack
-                    : preview == "racewon" ? .raceWon("deepseek")
-                    : nil
+                versions: []
             )
         }
     }
