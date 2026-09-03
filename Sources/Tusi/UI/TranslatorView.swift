@@ -140,6 +140,24 @@ struct TranslatorView: View {
         return ceil(manager.usedRect(for: container).height)
     }
 
+    /// Whether the result is taller than the viewport it was given, and therefore has
+    /// content the panel cannot show at once.
+    private var resultOverflows: Bool { resultHeight + textLineGap > maxResultHeight }
+
+    /// Fades the final line rather than cutting it flat. One line of gradient — enough to
+    /// read as "continues", not so much that the text looks dimmed.
+    private var fadeOutBottom: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 1 - (lineStep / max(maxResultHeight, 1))),
+                .init(color: .black.opacity(0.12), location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     /// The `Text` grid's trailing gap, the counterpart of `editorLineGap` for the result.
     private var textLineGap: CGFloat { lineStep - firstLineHeight }
 
@@ -159,10 +177,18 @@ struct TranslatorView: View {
     // Each cap is measured with the metrics of the view it caps: the input is a TextEditor,
     // the result is a Text, and they lay text out differently.
     //
-    // Six and fourteen whole grid cells, gap included — not `first + n × step`, which is
-    // the same lines with the last one's spacing shaved off.
+    // Whole grid cells, gap included — not `first + n × step`, which is the same lines
+    // with the last one's spacing shaved off.
+    //
+    // The two caps are not the same number because they are not the same job. The input
+    // is a draft the user already knows the contents of, and six lines of it is context;
+    // the result is the thing they came for, and a translation that stops mid-sentence
+    // reads as damage no matter how correct the arithmetic above it is. The result's cap
+    // is therefore as tall as the panel can be without taking over the screen, and exists
+    // only to keep the window inside `clampedPanelHeight` — not as an editorial decision
+    // about how much translation is worth showing.
     private var maxInputHeight: CGFloat { 6 * editorLineStep }
-    private var maxResultHeight: CGFloat { 14 * lineStep }
+    private var maxResultHeight: CGFloat { 24 * lineStep }
 
     private var editorTextWidth: CGFloat { panelState.panelWidth - 32 - 10 }
 
@@ -343,6 +369,12 @@ struct TranslatorView: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         Color.clear.frame(height: editorLineGap)
                     }
+                    // The two positions the app scrolls to itself — the top, and the end
+                    // of the text — land on the grid by construction. A trackpad does not:
+                    // it leaves the view wherever the flick stopped, which is why the top
+                    // and bottom rows were cut through the glyphs at some scroll positions
+                    // and not others.
+                    .snapsScrollToLines(step: editorLineStep)
                     .frame(height: min(max(height, 24), maxInputHeight))
             }
 
@@ -493,7 +525,17 @@ struct TranslatorView: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         Color.clear.frame(height: textLineGap)
                     }
+                    // Same treatment on the `Text` grid: a result long enough to scroll is
+                    // read by scrolling, and a hand-scrolled result has the same problem.
+                    .snapsScrollToLines(step: lineStep)
                     .frame(height: min(max(resultHeight + textLineGap, 20), maxResultHeight))
+                    // A translation longer than the panel can be has to say so, or it
+                    // reads as one that simply stops mid-sentence — which is exactly how
+                    // it read once the system scroller (an opaque white gutter against
+                    // this panel) was taken away. The last line fades instead: it says
+                    // "there is more" in the panel's own vocabulary, costs no width, and
+                    // goes away the moment the text is fully scrolled.
+                    .mask(resultOverflows && !isAtBottom ? AnyView(fadeOutBottom) : AnyView(Rectangle()))
                     .trackBottomEdge($isAtBottom)
                     .onPreferenceChange(ResultHeightKey.self) { height in
                         HeightTrace.log("result text \(height)")

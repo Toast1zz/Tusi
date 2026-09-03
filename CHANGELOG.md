@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-09-03
+
+### Fixed
+
+- **Scrolling either text area could cut the top and bottom rows through the middle of the glyphs.** Both areas are capped at a whole number of lines, and both were already aligned at the two positions the app scrolls them to itself — the top of the text, and the end of it. A trackpad is the case neither covers: it leaves the view wherever the flick stopped, and an offset that is not a multiple of the line step slices the rows at both edges. That is why it looked intermittent — whether it clipped depended entirely on where the scroll happened to stop, not on the text. Both areas now settle onto the line grid when the scroll ends, moving by at most half a line
+- **A translation longer than fourteen lines stopped mid-sentence with nothing to say so.** The cap was inherited from a panel that had a system scroller to signal the rest; that scroller was an opaque white gutter against this panel and was removed in 1.12.1, which left the result simply ending. The result's cap is now twenty-four lines — as tall as the panel can be without taking over the screen, and no longer an editorial opinion about how much translation is worth showing — and a result that still overflows fades its last line rather than ending flat. The input keeps its six-line cap: it is a draft whose contents the user already knows, while the translation is the thing they came for
+
 ## [1.12.1] - 2026-09-03
 
 ### Fixed
@@ -431,6 +438,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.12.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.2
 [1.12.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.1
 [1.12.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.0
 [1.11.7]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.7
