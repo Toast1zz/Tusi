@@ -105,6 +105,23 @@ TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
 ```
 
+### Diagnosing panel height
+
+The panel's height is not one measurement — the result text sizes the result viewport,
+which sizes the content, which sizes the window — and a hop that stops reporting leaves
+the window sized for the previous result. When the panel looks too tall, too short, or
+lets its content run past the bottom edge, turn the trace on rather than guessing:
+
+```bash
+defaults write com.tusi.app heightDiagnostics -bool true   # then relaunch Tusi
+/usr/bin/log show --predicate 'subsystem == "com.tusi.app"' --last 10m --style compact | grep "height:"
+defaults delete com.tusi.app heightDiagnostics             # off again
+```
+
+Each line names the hop it came from, in order, so the one that stopped reporting is the
+one that is broken. Use the full path `/usr/bin/log`: a shell function named `log` is a
+common thing to have, and it will silently eat the arguments.
+
 Signing with the same certificate on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds change the signature's cdhash each build and re-prompt for the API key on every install, so keep a stable identity around for local builds.
 
 ## License

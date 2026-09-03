@@ -28,6 +28,12 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var resignObserver: NSObjectProtocol?
     private var desiredHeight: CGFloat = 160
 
+    /// The SwiftUI host, kept so the fit audit can ask AppKit what the content measures
+    /// instead of asking the preference chain that may be the thing at fault.
+    private var contentHost: NSView?
+    /// Debounces the audit to one run per settled resize.
+    private var fitAudit: DispatchWorkItem?
+
     /// The narrowest the content can be drawn without clipping, reported by the view via
     /// `PanelContentWidthKey`. Distinct from `settings.panelWidth`, which is the width the
     /// *user* chose: the effective width is the larger of the two, so a wider localisation
@@ -41,10 +47,31 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
     private var hasShownOnce = false
 
+    /// The floor under the panel's height. Its only job is to reject a nonsense
+    /// measurement (a view mid-teardown reporting nothing), so it has to sit *below* the
+    /// smallest height the panel legitimately wants — which is an empty one-line input
+    /// plus the bottom bar, measured at 86pt. The floor used to be 100pt: taller than
+    /// the real thing, so the emptiest state of the panel was padded by 14pt of nothing.
+    /// Split evenly above and below the content that read as slightly loose spacing;
+    /// once content was anchored to the top it read as the bottom bar sitting too high,
+    /// which is what it had always been.
+    static let minimumPanelHeight: CGFloat = 60
+
     static func clampedPanelHeight(desired: CGFloat, visibleHeight: CGFloat) -> CGFloat {
-        let lowerBound: CGFloat = 100
-        let upperBound = max(lowerBound, visibleHeight - 12)
-        return min(max(desired, lowerBound), upperBound)
+        let upperBound = max(minimumPanelHeight, visibleHeight - 12)
+        return min(max(desired, minimumPanelHeight), upperBound)
+    }
+
+    /// Whether the window has to move for a content height of `target`.
+    ///
+    /// `actual` is the window's own height — never the last height this controller
+    /// *asked* for. The two come apart whenever a resize does not land (an animation
+    /// interrupted by a panel drag, a frame set while the panel was ordered out), and an
+    /// intent-against-intent comparison discards precisely the report that would put
+    /// them back together, leaving the panel wrong until the content height happens to
+    /// change again.
+    static func heightNeedsApply(actual: CGFloat, target: CGFloat) -> Bool {
+        abs(actual - target) > 0.5
     }
 
     init(engine: TranslationEngine, settings: SettingsStore, panelState: PanelState, updateChecker: UpdateChecker, statusItem: NSStatusItem?) {
@@ -67,7 +94,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         settings.panelWidth = width
         panelState.panelWidth = width
         panel.delegate = self
-        panel.minSize = NSSize(width: Theme.panelMinWidth, height: 100)
+        panel.minSize = NSSize(width: Theme.panelMinWidth, height: Self.minimumPanelHeight)
         panel.maxSize = NSSize(width: Theme.panelMaxWidth, height: 2000)
         panel.isFloatingPanel = true
         panel.level = .floating
@@ -89,6 +116,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         .environmentObject(settings)
         .environmentObject(panelState)
         .environmentObject(updateChecker)
+        // NSHostingView centres a root view shorter than its bounds, which turns any
+        // window/content height mismatch into padding (or clipping) split evenly across
+        // the top and bottom edges. The panel is anchored at its top edge everywhere
+        // else — `position()`, `applyHeight` — so anchor the content there too: slack
+        // then collects harmlessly at the bottom instead of eating the input's padding.
+        .frame(maxHeight: .infinity, alignment: .top)
 
         let container = PanelContainerView(cornerRadius: Theme.panelCornerRadius)
         container.frame = panel.contentRect(forFrameRect: panel.frame)
@@ -99,6 +132,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
         panel.contentView = container
+        contentHost = hosting
 
         installKeyMonitor()
         installResignObserver()
@@ -192,7 +226,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard let screen else { return }
 
         let visible = screen.visibleFrame
+        // Write the clamp back: `windowWillResize` pins every non-animated resize to
+        // `desiredHeight`, so a clamp that only lives in this local would be undone by
+        // the delegate on the very `setFrame` below.
         let height = Self.clampedPanelHeight(desired: desiredHeight, visibleHeight: visible.height)
+        desiredHeight = height
         var x = visible.midX - width / 2
 
         // If the status icon is visible on this screen, anchor under it instead.
@@ -216,7 +254,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         contentMinWidth = needed
         // AppKit enforces this during a live drag, so the user cannot pull the panel
         // narrower than its own controls.
-        panel.minSize = NSSize(width: needed, height: 100)
+        panel.minSize = NSSize(width: needed, height: Self.minimumPanelHeight)
 
         let target = effectiveWidth
         guard abs(target - panelState.panelWidth) > 0.5 else { return }
@@ -225,7 +263,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         // Keep the top edge and re-clamp horizontally: growing a panel that sits near a
         // screen edge must not push it off the visible area.
         var frame = panel.frame
-        frame.origin.y = frame.maxY - frame.height
+        let top = frame.maxY
+        // `desiredHeight`, not the current height: a width change must not carry a
+        // height the window drifted into (see `applyHeight`) into the new frame.
+        frame.size.height = desiredHeight
+        frame.origin.y = top - desiredHeight
         frame.size.width = target
         if let visible = panel.screen?.visibleFrame {
             frame.origin.x = min(max(frame.origin.x, visible.minX + 8), visible.maxX - target - 8)
@@ -236,21 +278,101 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Called by SwiftUI whenever the measured content height changes.
     /// Keeps the top edge anchored so the panel grows downward.
     private func setContentHeight(_ height: CGFloat) {
-        var clamped = max(height, 100)
+        var clamped = max(height, Self.minimumPanelHeight)
         // A tall result (many lines) plus a small screen (a compact external display,
         // a projector) could otherwise push the panel's bottom edge off the visible
         // area — `panel.maxSize` alone (2000pt) doesn't know about the actual screen.
         if let screenHeight = panel.screen?.visibleFrame.height {
             clamped = Self.clampedPanelHeight(desired: clamped, visibleHeight: screenHeight)
         }
-        guard abs(clamped - desiredHeight) > 0.5 else { return }
         desiredHeight = clamped
-
         guard panel.isVisible else { return }
+        applyHeight(clamped)
+        scheduleFitAudit()
+    }
+
+    /// Checks, once the dust has settled, that the window is actually the size its
+    /// content needs — measured independently of the chain that reported the height.
+    ///
+    /// Every hop from the result text to this window is a preference feeding a `@State`
+    /// that sets the next hop's frame, and SwiftUI does not promise to redeliver a
+    /// preference for the layout its own state write caused. A link that goes quiet
+    /// cannot report that it went quiet; the window simply keeps the height it had while
+    /// the content grows past the bottom edge, taking the bottom bar with it. `fittingSize`
+    /// asks AppKit what the hosted content measures right now, which is the one question
+    /// a missing preference cannot corrupt.
+    ///
+    /// Delayed past `windowResizeDuration` so it audits the settled state rather than
+    /// racing the resize it was scheduled by, and debounced so a streaming translation
+    /// runs it once at the end instead of once per chunk.
+    private func scheduleFitAudit() {
+        fitAudit?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Order matters: land the resize that was already asked for, then ask
+                // whether what landed actually fits. Auditing first would measure a
+                // window still in mid-animation and report a mismatch that was about to
+                // resolve itself.
+                self.verifyHeightLanded()
+                self.auditContentFit()
+            }
+        }
+        fitAudit = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Theme.windowResizeDuration * Theme.animationScale + 0.12,
+            execute: work
+        )
+    }
+
+    private func auditContentFit() {
+        guard panel.isVisible, let contentHost else { return }
+        let needed = contentHost.fittingSize.height
+        let actual = panel.frame.height
+        // Logged before it is judged: a measurement rejected below is exactly the one
+        // worth seeing when this audit turns out to be doing nothing.
+        HeightTrace.log("audit window \(actual) vs fitting \(needed)")
+        // A fitting size outside any height this panel could legitimately want means the
+        // measurement itself is not to be trusted (an unconstrained proposal, a view mid
+        // teardown). Repairing the window from it would be worse than the mismatch.
+        guard needed >= Self.minimumPanelHeight, needed < 4_000 else { return }
+        guard abs(actual - needed) > 1 else { return }
+
+        HeightTrace.dump(reason: "window \(actual)pt, content needs \(needed)pt")
+
+        // Grow only. Content taller than its window is the visible failure — the result
+        // and the bottom bar run off the bottom edge — and growing to fit can only reveal
+        // what is already drawn. Shrinking on this signal would let a single suspect
+        // measurement cut a result short, so a window that is merely too tall is reported
+        // and left to the next real height report.
+        guard needed > actual else { return }
+        var clamped = needed
+        if let screenHeight = panel.screen?.visibleFrame.height {
+            clamped = Self.clampedPanelHeight(desired: clamped, visibleHeight: screenHeight)
+        }
+        desiredHeight = clamped
+        applyHeight(clamped)
+    }
+
+    /// Moves the window to `target`, keeping the top edge anchored.
+    ///
+    /// The early-out compares against the window's *actual* height, never against
+    /// `desiredHeight`. Those two can come apart — a resize animation interrupted by a
+    /// panel drag (this window is `isMovableByWindowBackground`, and a pinned panel gets
+    /// dragged around while it resizes), a frame set while the panel was ordered out, a
+    /// screen clamp in `position()` — and comparing intent against intent means the one
+    /// report that could repair the split is exactly the one that gets swallowed. The
+    /// window then stays at the wrong height until the content height happens to change
+    /// again, and because `NSHostingView` centres content that is shorter than its
+    /// bounds, the error shows up split evenly across the top and bottom edges: the
+    /// panel looks stretched, or looks like it is crushing its own padding.
+    private func applyHeight(_ target: CGFloat) {
+        HeightTrace.log("window \(panel.frame.height) -> \(target) (translating \(engine.isTranslating))")
+        guard Self.heightNeedsApply(actual: panel.frame.height, target: target) else { return }
         var frame = panel.frame
         let top = frame.maxY
-        frame.size.height = clamped
-        frame.origin.y = top - clamped
+        frame.size.height = target
+        frame.origin.y = top - target
 
         // How the window and the content stay together, and why this is not a second
         // timeline in disguise:
@@ -277,6 +399,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         if engine.isTranslating || reduceMotion {
             panel.setFrame(frame, display: true)
         } else {
+            // No completion handler. `NSAnimationContext`'s completion fires about 11ms
+            // after this call for a window animator — measured, not assumed — rather than
+            // when the 0.22s resize finishes, so verifying the landing from there snapped
+            // the window to its destination immediately and the panel stopped animating
+            // its height at all. The settle check is scheduled on the clock instead.
+            //
             // motion-exception: the window's own frame, which no SwiftUI view owns.
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = Theme.windowResizeDuration * Theme.animationScale
@@ -284,6 +412,21 @@ final class PanelController: NSObject, NSWindowDelegate {
                 panel.animator().setFrame(frame, display: true)
             }
         }
+    }
+
+    /// Repairs a window height the resize failed to reach. Recorded rather than logged:
+    /// on its own this is a correction, not an incident, and the record is what the fit
+    /// audit dumps if the panel does turn out to be the wrong size.
+    private func verifyHeightLanded() {
+        guard panel.isVisible else { return }
+        let actual = panel.frame.height
+        guard Self.heightNeedsApply(actual: actual, target: desiredHeight) else { return }
+        HeightTrace.log("resize did not land: window \(actual) vs target \(desiredHeight); snapping")
+        var frame = panel.frame
+        let top = frame.maxY
+        frame.size.height = desiredHeight
+        frame.origin.y = top - desiredHeight
+        panel.setFrame(frame, display: true)
     }
 
     // MARK: - Keyboard

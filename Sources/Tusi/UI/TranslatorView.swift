@@ -10,13 +10,6 @@ private struct ResultHeightKey: PreferenceKey {
     }
 }
 
-private struct ResultSectionHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct TranslatorView: View {
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -24,7 +17,6 @@ struct TranslatorView: View {
 
     @FocusState private var inputFocused: Bool
     @State private var resultHeight: CGFloat = 20
-    @State private var resultSectionHeight: CGFloat = 20
     /// Whether the result viewport sits at its bottom edge. Streaming auto-scrolls
     /// only when the user is already there — reading an earlier part of a long
     /// result must not be yanked back to the tail on every chunk.
@@ -36,6 +28,10 @@ struct TranslatorView: View {
     // Measured empirically: the first line is 19pt and every line after adds 22pt.
     private let firstLineHeight: CGFloat
     private let lineStep: CGFloat
+    /// The same two numbers for the *input editor*, which does not lay text out the way
+    /// `Text` does. See `measureEditorLineMetrics`.
+    private let editorFirstLineHeight: CGFloat
+    private let editorLineStep: CGFloat
     /// Exact height of one `HistoryRecordRow`, measured (not guessed) from the same
     /// AppKit metrics as the other line-height math below — see `measureHistoryRowHeight`.
     private let historyRowHeight: CGFloat
@@ -43,6 +39,9 @@ struct TranslatorView: View {
         let metrics = Self.measureLineMetrics()
         firstLineHeight = metrics.first
         lineStep = metrics.step
+        let editorMetrics = Self.measureEditorLineMetrics()
+        editorFirstLineHeight = editorMetrics.first
+        editorLineStep = editorMetrics.step
         historyRowHeight = Self.measureHistoryRowHeight(firstLineHeight: metrics.first, lineStep: metrics.step)
     }
     private func height(lines: Int) -> CGFloat { firstLineHeight + CGFloat(lines - 1) * lineStep }
@@ -93,17 +92,83 @@ struct TranslatorView: View {
         return (ceil(h1), ceil(h2 - h1))
     }
 
+    /// Line metrics for the *input editor*, measured with the machinery `TextEditor`
+    /// actually lays out with.
+    ///
+    /// `Text` and `TextEditor` do not agree, and the difference is not noise. Measured on
+    /// this font (system 15, `lineSpacing(3)`), against a live view of each:
+    ///
+    ///     lines   Text (and boundingRect)   TextEditor (and NSLayoutManager)
+    ///         1                        19                                 18
+    ///         6                       129                                123
+    ///        14                       305                                291
+    ///
+    /// `measureLineMetrics()` above measures the first column and is exactly right for
+    /// the result, which is a `Text`. Using it for the input made the six-line cap 129pt
+    /// tall when six editor lines are 123pt — the extra 6pt showed the top of a seventh
+    /// line, a row of clipped glyph tops sitting above the text. It also made every
+    /// scrolled position land mid-line: the top edge of the viewport fell 8pt into a row
+    /// rather than on a boundary.
+    ///
+    /// With the editor's own numbers the alignment stops being something to arrange and
+    /// becomes arithmetic. Content is `first + step × (lines − 1)`, the viewport is
+    /// `first + step × 5`, and their difference — the scroll offset when the editor sits
+    /// at the end of the text, which is where it sits after a paste — is a whole multiple
+    /// of `step`. No half line, for any text.
+    static func measureEditorLineMetrics() -> (first: CGFloat, step: CGFloat) {
+        let one = editorTextHeight("A", width: 200)
+        let two = editorTextHeight("A\nA", width: 200)
+        return (one, two - one)
+    }
+
+    /// Lays `text` out exactly as the input editor's NSTextView does and returns the
+    /// height it occupies. `width` is the text width, so the container's own fragment
+    /// padding is zeroed — `editorTextWidth` has already subtracted it.
+    static func editorTextHeight(_ text: String, width: CGFloat) -> CGFloat {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 3
+        let storage = NSTextStorage(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 15),
+            .paragraphStyle: style,
+        ])
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        return ceil(manager.usedRect(for: container).height)
+    }
+
+    /// The `Text` grid's trailing gap, the counterpart of `editorLineGap` for the result.
+    private var textLineGap: CGFloat { lineStep - firstLineHeight }
+
+    /// The line spacing that the last line does not get.
+    ///
+    /// TextKit puts `lineSpacing` *between* fragments, so a run of lines measures
+    /// 21, 21, …, 18: every line carries its 3pt of spacing except the last, whose
+    /// fragment stops at the glyph box. Sizing the editor to that measurement puts the
+    /// bottom line flush against the clip edge with nothing to spare — no descender room,
+    /// no room for the caret — which reads as the line being shaved off. Adding the gap
+    /// back means the editor is always sized to whole cells of the line grid rather than
+    /// to where the ink happens to stop.
+    private var editorLineGap: CGFloat { editorLineStep - editorFirstLineHeight }
+
     // Caps expressed as whole lines so a clamped view never cuts a line in half — the panel
     // grows to fit short content, and long content scrolls inside a whole-line viewport.
-    // The input's cap sits exactly on the 6-line boundary (no +2 fudge): the scrolling
-    // TextEditor's inset otherwise pushed the cap ~2pt into the 7th line, showing a sliver.
-    private var maxInputHeight: CGFloat { height(lines: 6) }
-    private var maxResultHeight: CGFloat { height(lines: 14) }
+    // Each cap is measured with the metrics of the view it caps: the input is a TextEditor,
+    // the result is a Text, and they lay text out differently.
+    //
+    // Six and fourteen whole grid cells, gap included — not `first + n × step`, which is
+    // the same lines with the last one's spacing shaved off.
+    private var maxInputHeight: CGFloat { 6 * editorLineStep }
+    private var maxResultHeight: CGFloat { 14 * lineStep }
 
     private var editorTextWidth: CGFloat { panelState.panelWidth - 32 - 10 }
 
-    /// Measures the input's natural height with AppKit metrics so it matches
-    /// TextEditor's actual NSTextView layout (SwiftUI Text metrics differ for CJK).
+    /// Measures the input's natural height with the editor's own layout manager, so the
+    /// frame it sets is the height the text actually occupies — see
+    /// `measureEditorLineMetrics` for why `boundingRect` is not that height.
     ///
     /// Memoized by (text, width): the body re-evaluates on every streamed chunk, but
     /// the input text does not change while the result streams — re-measuring it
@@ -123,18 +188,10 @@ struct TranslatorView: View {
         let key = InputMeasureKey(text: engine.input, width: editorTextWidth)
         if let cached = Self.inputMeasureCache[key] { return cached }
         var text = engine.input.isEmpty ? " " : engine.input
+        // A trailing newline has no line fragment of its own until something follows it;
+        // without this the editor scrolls a line the measurement does not know about.
         if text.hasSuffix("\n") { text += " " }
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3
-        let attributed = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 15),
-            .paragraphStyle: style,
-        ])
-        let rect = attributed.boundingRect(
-            with: NSSize(width: editorTextWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin]
-        )
-        let height = ceil(rect.height) + 2
+        let height = Self.editorTextHeight(text, width: editorTextWidth) + editorLineGap
         Self.inputMeasureCache[key] = height
         if Self.inputMeasureCache.count > Self.inputMeasureCacheLimit {
             Self.inputMeasureCache.removeAll()
@@ -164,25 +221,26 @@ struct TranslatorView: View {
                         resultArea
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .background(
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: ResultSectionHeightKey.self,
-                                        value: geometry.size.height
-                                    )
-                                }
-                            )
                             .transition(.opacity)
                     }
                 }
-                .frame(height: visibleSectionHeight, alignment: .top)
+                // History gets an explicit viewport; the result deliberately gets none.
+                //
+                // The result section used to measure itself into a `@State` that then
+                // set this frame — one more `preference → @State → frame → preference`
+                // hop on the way to the window. SwiftUI does not promise to redeliver a
+                // preference for the layout its own state write caused, and when that
+                // second delivery went missing the window stayed sized for the *previous*
+                // result: the panel kept the height it had while the text underneath it
+                // grew past the bottom edge, taking the bottom bar with it. Traced live —
+                // `result section 238.0` arrived and the `content` that should have
+                // followed never did. Letting the result's natural height reach the VStack
+                // directly puts it in the same layout pass as the measurement, so there is
+                // no second delivery left to lose.
+                .frame(height: panelState.showHistory ? historyViewportHeight : nil, alignment: .top)
                 .clipped()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                .onPreferenceChange(ResultSectionHeightKey.self) { height in
-                    guard height > 0 else { return }
-                    resultSectionHeight = height
-                }
             }
 
             // Inline target picker: expands ABOVE the bottom bar (never a popover — a
@@ -268,6 +326,23 @@ struct TranslatorView: View {
                     // On macOS it can render as an opaque gutter against this clear editor.
                     .scrollIndicators(.never)
                     .focused($inputFocused)
+                    // The trailing gap again, this time for the *scrolled* state, where a
+                    // taller frame cannot help: scrolled to the end of the text the last
+                    // pixel of the content is the last pixel of the viewport, so the
+                    // bottom line sits flush against the clip edge with nothing to spare.
+                    // A bottom safe-area inset extends the scrollable range instead, which
+                    // both keeps 3pt under the last line and — because the extra range is
+                    // exactly the gap the grid is missing — lands the top edge of the
+                    // viewport on a line boundary rather than partway into a row.
+                    // Measured against a live editor: without it, scrolled to the end, the
+                    // top line is cut by 15pt and the bottom line by all of its spacing.
+                    //
+                    // Bottom edge only. A top inset would push the first line down 3pt and
+                    // leave the placeholder, which is a sibling and has no safe area,
+                    // sitting above the text it stands in for.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        Color.clear.frame(height: editorLineGap)
+                    }
                     .frame(height: min(max(height, 24), maxInputHeight))
             }
 
@@ -403,12 +478,27 @@ struct TranslatorView: View {
                             )
                             .id("end")
                     }
-                    // Same reasoning as the input editor: a result taller than its
-                    // viewport is otherwise indistinguishable from one that ends there.
-                    .scrollIndicators(.automatic)
-                    .frame(height: min(max(resultHeight, 20), maxResultHeight))
+                    // The last holdout of the three scrollers in this panel, and the
+                    // only one still asking for an automatic indicator: macOS reserves an
+                    // opaque white gutter for it when the system is drawing legacy
+                    // scrollers (a mouse is attached), which against this transparent
+                    // panel is a white bar down the side of the translation. The input
+                    // editor and the history list already answer this the same way, for
+                    // the same reason. Trackpad, wheel and keyboard scrolling are
+                    // untouched; only the indicator goes.
+                    .scrollIndicators(.never)
+                    // Same trailing gap as the input, on the `Text` grid: a result long
+                    // enough to scroll is auto-scrolled to its tail on every chunk, which
+                    // is precisely the state that puts the last line against the clip edge.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        Color.clear.frame(height: textLineGap)
+                    }
+                    .frame(height: min(max(resultHeight + textLineGap, 20), maxResultHeight))
                     .trackBottomEdge($isAtBottom)
-                    .onPreferenceChange(ResultHeightKey.self) { resultHeight = $0 }
+                    .onPreferenceChange(ResultHeightKey.self) { height in
+                        HeightTrace.log("result text \(height)")
+                        resultHeight = height
+                    }
                     .onChange(of: engine.output) { _, _ in
                         if engine.isTranslating, isAtBottom {
                             proxy.scrollTo("end", anchor: .bottom)
@@ -562,10 +652,6 @@ struct TranslatorView: View {
     // MARK: - Bottom bar
 
     // MARK: - History
-    private var visibleSectionHeight: CGFloat {
-        panelState.showHistory ? historyViewportHeight : max(resultSectionHeight, 20)
-    }
-
     private var historyViewportHeight: CGFloat {
         guard !engine.history.isEmpty else { return 112 }
         let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows

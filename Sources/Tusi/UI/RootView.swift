@@ -89,6 +89,7 @@ struct RootView: View {
         )
         .onPreferenceChange(PanelHeightKey.self) { height in
             guard height > 0 else { return }
+            HeightTrace.log("content \(height)")
             onHeightChange(height)
         }
         // Read outside the fixed-width frame above: the preference travels up from the

@@ -3105,10 +3105,90 @@ final class TusiTests: XCTestCase {
         XCTAssertLessThan(metrics.first, metrics.step)
     }
 
+    /// `Text` and `TextEditor` lay text out differently, and the panel caps one of each.
+    /// Measuring both with the same machinery is what put a clipped sliver of a seventh
+    /// line above the input: the six-line cap was computed from `Text`'s metrics (129pt)
+    /// while six editor lines are 123pt. Each measurement has to come from the view it
+    /// describes, so this pins them apart rather than trusting a comment to.
+    func testInputAndResultAreMeasuredWithTheirOwnMetrics() {
+        let text = TranslatorView.measureLineMetrics()
+        let editor = TranslatorView.measureEditorLineMetrics()
+        XCTAssertGreaterThan(text.first, 10)
+        XCTAssertGreaterThan(editor.first, 10)
+        XCTAssertLessThan(editor.first, editor.step)
+        // The editor is the tighter of the two on every macOS this has been measured on.
+        // If a future OS makes them agree this can relax — but it must be re-measured,
+        // not assumed, because the input's whole-line arithmetic depends on it.
+        XCTAssertLessThanOrEqual(editor.step, text.step)
+
+        // The measurement used for the input's frame must agree with the metrics used for
+        // its cap, or the cap stops landing on a line boundary and the top line is clipped
+        // whenever the editor is scrolled to the end of its text.
+        for lines in 1...8 {
+            let sample = (1...lines).map { "line \($0)" }.joined(separator: "\n")
+            let measured = TranslatorView.editorTextHeight(sample, width: 400)
+            let expected = editor.first + CGFloat(lines - 1) * editor.step
+            XCTAssertEqual(measured, expected, accuracy: 0.5, "editor height disagrees with editor metrics at \(lines) lines")
+        }
+
+        // TextKit puts line spacing between fragments, so the last line's measurement
+        // stops at its glyph box: N lines measure `step × N − gap`, not `step × N`. The
+        // input adds that gap back, which is what keeps the bottom line off the clip edge
+        // and the six-line cap on a whole grid cell. If this stops holding, the cap and
+        // the natural height are no longer on the same grid.
+        let gap = editor.step - editor.first
+        XCTAssertGreaterThan(gap, 0)
+        let sixLines = TranslatorView.editorTextHeight(
+            (1...6).map { "line \($0)" }.joined(separator: "\n"), width: 400
+        )
+        XCTAssertEqual(sixLines + gap, 6 * editor.step, accuracy: 0.5)
+    }
+
     func testPanelHeightClampLeavesScreenMargins() {
         XCTAssertEqual(PanelController.clampedPanelHeight(desired: 1_000, visibleHeight: 800), 788)
         XCTAssertEqual(PanelController.clampedPanelHeight(desired: 160, visibleHeight: 800), 160)
-        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 100)
+        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 40, visibleHeight: 800), 60)
+        // The floor must stay under the panel's own smallest content — an empty one-line
+        // input plus the bottom bar, measured at 86pt. A floor above that does not
+        // protect anything, it just pads the emptiest state with dead space.
+        XCTAssertLessThan(PanelController.minimumPanelHeight, 86)
+        XCTAssertEqual(PanelController.clampedPanelHeight(desired: 86, visibleHeight: 800), 86)
+    }
+
+    /// The panel used to compare a newly measured content height against the last height
+    /// it *asked* the window for. Any resize that did not land — an animation cut short
+    /// by a drag (this panel is movable by its background and is often pinned open), a
+    /// frame set while it was ordered out — left intent and reality apart, and then this
+    /// comparison swallowed the one report that could have repaired them: the panel
+    /// stayed at the wrong height until the content height happened to change again.
+    /// Because `NSHostingView` centres content shorter than its bounds, the error showed
+    /// up split across the top and bottom edges — a panel that looks stretched, or one
+    /// crushing its own padding.
+    func testPanelHeightReconcilesAgainstTheWindowNotTheLastIntent() {
+        // A window parked where an interrupted animation left it must still be repaired,
+        // even though the target equals what was last asked for.
+        XCTAssertTrue(PanelController.heightNeedsApply(actual: 305, target: 220))
+        XCTAssertTrue(PanelController.heightNeedsApply(actual: 193, target: 205))
+        // Sub-half-point noise is not a resize: measurement jitter must not start a
+        // window animation on every layout pass.
+        XCTAssertFalse(PanelController.heightNeedsApply(actual: 220.2, target: 220))
+        XCTAssertFalse(PanelController.heightNeedsApply(actual: 220, target: 220))
+    }
+
+    /// Guards the shape of the fix, not just its arithmetic: `applyHeight` has to read
+    /// the window's real height. A future edit that reintroduces the `desiredHeight`
+    /// early-out would keep `heightNeedsApply` green while restoring the bug.
+    func testPanelHeightGuardReadsTheWindowsActualHeight() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Tusi/PanelController.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        XCTAssertTrue(
+            text.contains("Self.heightNeedsApply(actual: panel.frame.height, target: target)"),
+            "applyHeight must gate on the window's own height; gating on desiredHeight is the defect this replaced."
+        )
     }
 
     /// The window no longer decides whether to animate a height change — it mirrors what

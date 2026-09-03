@@ -2,6 +2,24 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] - 2026-09-03
+
+### Fixed
+
+- **The panel stopped sizing itself to its own content.** With a slightly longer text the window kept the height it had while the result grew past the bottom edge, taking the tone selector, the language picker and the copy button off the panel with it. Other times it settled too tall or too short, with the slack split evenly above and below the content. Three separate defects, found by tracing the measurements rather than by reading the code:
+  - The height reached the window through *three* measurement hops — the result text sized the result viewport, which sized the result section, which sized the content, which sized the window — and every hop was a preference feeding a `@State` that set the next hop's frame. SwiftUI does not promise to redeliver a preference for the layout its own state write caused, and the third hop is where the delivery went missing: `result section 238.0` arrived and the `content` that should have followed it never did, leaving the window sized for the previous result. The middle hop is gone. The result's natural height now reaches the layout in the same pass that measures it, so there is no second delivery left to lose; the history list keeps its explicit viewport, that path never had the loop
+  - A height the window failed to reach could never be repaired. The resize compared each new measurement against the last height the panel had *asked* for, so once intent and reality came apart the comparison swallowed precisely the report that would have put them back together. And they did come apart, routinely: two height reports arriving in the same layout cycle leave the second animated resize parked at the first one's starting height. The comparison is against the window's real height now, and a resize that has not landed once the animation is over is snapped
+  - The panel could not be shorter than 100pt, but its own smallest content — an empty one-line input plus the bottom bar — measures 86pt. The floor was padding the emptiest state with 14pt of nothing, which read as the bottom bar sitting too high. The floor is 60pt, under anything the panel legitimately wants, and exists only to reject a nonsense measurement
+- **Text sat on the wrong line grid, in both halves of the panel.** The panel measured its input with the metrics of a `Text`, but the input is a `TextEditor`, and the two do not lay text out the same way — on this font a `Text` line is 19pt then 22pt per line, an editor line is 18pt then 21pt. The six-line input cap was therefore computed as 129pt when six editor lines are 123pt, and the extra 6pt showed the clipped top of a seventh line above the text. Worse, every scrolled position landed mid-row: the top of the viewport fell 8pt into a line rather than on a boundary. The input is now measured with the layout manager the editor itself uses, so the cap is exactly six editor lines and the arithmetic that keeps the viewport on line boundaries follows from it rather than being arranged
+- **The bottom line of a scrolling input or result had nothing under it.** TextKit puts line spacing *between* fragments, so the last line's measurement stops at its glyph box: six lines measure 21+21+21+21+21+18. Sized to that, the bottom line sits flush against the clip edge with no room for a descender or the caret, which reads as the line being shaved — and scrolled to the end, where the content's last pixel is the viewport's last pixel, no frame height can help. Both scrollers now reserve the missing gap as a bottom safe-area inset, which keeps 3pt under the last line and, because the reserved range is exactly what the grid was short, also lands the top edge on a line boundary. Measured against live views: without it, a scrolled input showed a 15pt sliver of a line at the top and a flush line at the bottom; with it, neither
+- The result no longer draws an opaque white scroller down its right edge. macOS reserves that gutter for an automatic indicator whenever the system is drawing legacy scrollers, which against this transparent panel is a white bar beside the translation. The input editor and the history list had both already been fixed this way; the result was the last holdout
+- Content is anchored to the top of the panel. `NSHostingView` centres a root view shorter than its bounds, which is why a wrong height showed up as symmetric padding, or as the panel quietly crushing its own margins, instead of as something visibly broken
+
+### Added
+
+- **The panel checks its own size, in every build.** Once a resize has settled, the panel asks AppKit what the hosted content actually measures (`fittingSize`) — a question no missing preference can corrupt — and compares it with the window. A window too small for its content is grown on the spot, and the last 48 measurements are written to the unified log with it. The chain is recorded into a bounded in-memory ring at all times: an array append per layout pass, no output at all while the panel behaves, evidence the moment it does not. This deliberately ships everywhere rather than in local builds only — the defect above is timing-dependent, and a diagnostic missing from the build people actually run is missing exactly when it is needed
+- A verbose per-hop trace for deep dives, off by default: `defaults write com.tusi.app heightDiagnostics -bool true`. Documented in the README
+
 ## [1.12.0] - 2026-09-02
 
 ### Added
@@ -413,6 +431,10 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.12.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.1
+[1.12.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.0
+[1.11.7]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.7
+[1.11.6]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.6
 [1.11.5]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.5
 [1.11.4]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.4
 [1.11.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.11.3
