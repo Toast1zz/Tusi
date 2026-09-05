@@ -450,6 +450,7 @@ struct TranslatorView: View {
     private func performFailureAction() {
         switch engine.failureKind {
         case .notConfigured, .credentials, .configuration:
+            panelState.settingsSection = .services
             panelState.showSettings = true
         case .transient, .unknown, .none:
             engine.translate()

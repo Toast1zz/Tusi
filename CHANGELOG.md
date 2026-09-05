@@ -2,6 +2,16 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.2] - 2026-09-05
+
+### Changed
+
+- Split settings into Services, Translation and General categories, with a fixed header and category selector.
+- Bound the settings viewport to the available screen height. Advanced options start collapsed, and long content scrolls below the header without growing the panel off-screen.
+- Keep service configuration failures linked directly to Services and retain the selected category when returning from keyboard shortcuts.
+- Use native capsule category controls with macOS 27 tab semantics and the system glass connection-test button on macOS 26+. Stamp the actual build SDK separately from the macOS 14 deployment floor so AppKit does not fall back to legacy appearance.
+- Increase category navigation to the system extra-large size, use a large connection-test button, and add vertical space to model slots while preserving the compact settings height budget.
+
 ## [1.13.1] - 2026-09-05
 
 ### Fixed

@@ -18,6 +18,10 @@ fi
 # Swift-6 time bomb. Applied to EVERY arch mode — not just native — so the
 # release zips users download are gated exactly like the debug loop is.
 CONCURRENCY_FLAGS=(-Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors)
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+# Swift Build can otherwise stamp the deployment floor as the linked SDK version,
+# which makes AppKit choose legacy controls even on a new OS.
+CONCURRENCY_FLAGS+=(-Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$SDK_VERSION")
 
 # VERSION contains the short version and build number, separated by whitespace.
 # Environment variables override it for CI/nightly builds.

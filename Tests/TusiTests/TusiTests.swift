@@ -3431,23 +3431,11 @@ final class TusiTests: XCTestCase {
 
         XCTAssertGreaterThan(hosting.fittingSize.height, 160)
 
-        // The page must *reflow* at the minimum panel width, not overflow it — measured
-        // with the advanced section open, since that is where the longest caption on the
-        // page lives. "Narrower proposal ⇒ taller layout" is the claim: a row that
-        // refused to compress would keep its height and spill sideways instead.
-        //
-        // This used to assert `fittingSize.width <= 470` on the unconstrained collapsed
-        // page, which is a weaker and rather accidental claim — it says no *ideal*
-        // (unwrapped, single-line) width exceeds the minimum panel, which held only
-        // because no visible caption happened to be that long. It stopped holding when
-        // collapsed disclosures began staying mounted so they can animate their own
-        // height: a collapsed `Disclosure` contributes no height, but its content's
-        // ideal width still reaches the measurement. That width is inert — SettingsView
-        // is always laid out inside `RootView`'s fixed-width frame and never feeds
-        // `PanelContentWidthKey` — whereas a row that cannot compress is a real clipping
-        // risk, and that case is covered by
-        // `testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth`.
-        settings.profiles[0].providerOrder = "novita"  // opens the advanced fold
+        // Explicit expansion may scroll, but must not make the settings window exceed
+        // its screen budget. A configured provider no longer auto-expands advanced fields.
+        settings.profiles[0].providerOrder = "novita"
+        XCTAssertTrue(panelState.settingsAdvancedProfiles.isEmpty)
+        panelState.settingsAdvancedProfiles.insert(0)
         let expanded = SettingsView()
             .environmentObject(settings)
             .environmentObject(panelState)
@@ -3457,7 +3445,8 @@ final class TusiTests: XCTestCase {
         atMinWidth.layoutSubtreeIfNeeded()
         let atMaxWidth = NSHostingView(rootView: expanded.frame(width: Theme.panelMaxWidth))
         atMaxWidth.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(atMinWidth.fittingSize.height, atMaxWidth.fittingSize.height)
+        XCTAssertLessThanOrEqual(atMinWidth.fittingSize.height, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
+        XCTAssertLessThanOrEqual(atMaxWidth.fittingSize.height, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
     }
 
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {

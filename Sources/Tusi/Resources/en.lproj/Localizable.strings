@@ -209,6 +209,9 @@
 "撤销删除" = "Undo deletion";
 "删除" = "Delete";
 "关闭保存会删除对应的本机记录" = "Turning off saving deletes the corresponding local records.";
+"服务" = "Services";
+"通用" = "General";
+"设置分类" = "Settings category";
 "使用与翻译相同的协议策略，最多发送 2 个短测试请求" = "Uses the same protocol strategy as translation, with up to two short test requests.";
 "还没有配置可用的翻译服务，请先在设置中填写" = "No usable translation service configured yet — fill one in Settings";
 "本地和在线都失败了 · %@" = "Both the local model and the online service failed · %@";

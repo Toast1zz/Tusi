@@ -1,6 +1,18 @@
 import Foundation
 import Combine
 
+enum SettingsSection: String, CaseIterable {
+    case services, translation, general
+
+    var title: String {
+        switch self {
+        case .services: return L("服务")
+        case .translation: return L("翻译")
+        case .general: return L("通用")
+        }
+    }
+}
+
 /// Transient UI state shared between the panel controller and SwiftUI views.
 @MainActor
 final class PanelState: ObservableObject {
@@ -8,6 +20,8 @@ final class PanelState: ObservableObject {
     @Published var showSettings = false
     @Published var showShortcuts = false
     @Published var settingsProfileIndex = 0
+    @Published var settingsSection: SettingsSection = .services
+    @Published var settingsAdvancedProfiles: Set<Int> = []
     @Published var recordingShortcut: ShortcutAction?
     @Published var shortcutError: String?
     /// A recorded combo that would take a plain letter or digit away from typing. It is

@@ -1,5 +1,15 @@
 import SwiftUI
 
+private struct SettingsContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct SettingsHeaderHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -11,8 +21,13 @@ struct SettingsView: View {
     @State private var testTasks: [Int: Task<Void, Never>] = [:]
     @State private var testGenerations: [Int: Int] = [:]
     @State private var shortcutsRowHovering = false
-    @State private var advancedExpandedOverride: [Int: Bool] = [:]
     @State private var extraInstructionExpandedOverride: Bool?
+    @State private var contentHeight: CGFloat = 320
+    @State private var headerHeight: CGFloat = 76
+
+    static func maximumHeight(availableHeight: CGFloat) -> CGFloat {
+        min(560, max(180, availableHeight - 24))
+    }
 
     private enum FocusedField: Hashable {
         case baseURL
@@ -58,200 +73,226 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 12) {
                 header
-
-            slotTabs
-
-            VStack(alignment: .leading, spacing: 12) {
-                labeledField("接口地址", focused: focusedField == .baseURL) {
-                    TextField("https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL)
-                        .textFieldStyle(.plain)
-                        .font(Theme.bodyMonospaced)
-                        .focused($focusedField, equals: .baseURL)
-                        .accessibilityLabel("接口地址")
-                }
-                labeledField("模型", focused: focusedField == .model) {
-                    TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
-                        .textFieldStyle(.plain)
-                        .font(Theme.bodyMonospaced)
-                        .focused($focusedField, equals: .model)
-                        .accessibilityLabel("模型")
-                }
-                advancedSection
-                if isCurrentProfileLocal {
-                    // Local (loopback) inference servers don't take an API key — Ollama,
-                    // LM Studio, llama.cpp-server. Showing the field here would push users
-                    // to type a fake key; a quiet hint is more honest.
-                    HStack(alignment: .top, spacing: 5) {
-                        Image(systemName: "desktopcomputer")
-                            .font(Theme.caption2)
-                            .padding(.top, 1)
-                        Text("本地服务无需 API Key")
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                            .fill(Theme.fillQuiet)
-                    )
-                } else {
-                    labeledField("API Key", focused: focusedField == .apiKey) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "lock.fill")
-                                .font(Theme.caption2)
-                            Text("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务")
-                        }
-                        .font(Theme.caption)
-                        .foregroundStyle(.secondary)
-                    } content: {
-                        HStack(spacing: 6) {
-                            Group {
-                                if showKey {
-                                    TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
-                                } else {
-                                    SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
-                                }
-                            }
-                            .textFieldStyle(.plain)
-                            .font(Theme.bodyMonospaced)
-                            .focused($focusedField, equals: .apiKey)
-
-                            if settings.keychainSaved {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(Theme.footnote)
-                                    .foregroundStyle(.green)
-                                    .transition(.opacity)
-                            }
-
-                            Button {
-                                showKey.toggle()
-                            } label: {
-                                Image(systemName: showKey ? "eye.slash" : "eye")
-                                    .font(Theme.footnote)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .buttonStyle(.plain)
-                            .help(showKey ? "隐藏" : "显示")
-                            .accessibilityLabel(showKey ? "隐藏" : "显示")
-                        }
-                        // `.state`, not `.micro`: this is a confirmation appearing, not
-                        // hover feedback. It used to scale up from 0.7 over 0.12s, which
-                        // is not an element arriving — it is a flash.
-                        .motion(.state, value: settings.keychainSaved)
-                        .accessibilityLabel("API Key")
-                    }
-                }
-
-                if let error = settings.keychainError {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(error)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        // Only for failures a second attempt can actually clear (locked
-                        // device, denied prompt). A corrupt item would fail identically,
-                        // so offering retry there would just teach the button to lie.
-                        if settings.keychainErrorIsRetryable {
-                            Button("重试") { settings.retryLoadKeys() }
-                                .buttonStyle(.plain)
-                                .font(Theme.bodySmallSemibold)
-                                .foregroundStyle(Theme.accent)
-                        }
-                    }
-                    .font(Theme.caption)
-                    .foregroundStyle(.orange)
-                }
-            }
-
-            testRow
-
-            SoftDivider()
-
-            routingSection
-
-            SoftDivider()
-
-            extraInstructionSection
-
-            SoftDivider()
-
-            shortcutsNavRow
-
-            SoftDivider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                settingToggle("保存翻译历史", isOn: $settings.saveHistoryEnabled)
-                settingToggle("保留输入草稿", isOn: $settings.saveDraftEnabled)
-                Text("关闭保存会删除对应的本机记录")
-                    .font(Theme.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(L("清除输入草稿")) { engine.clearDraft() }
-                    .buttonStyle(.plain)
-                    .disabled(engine.input.isEmpty)
-                if let error = engine.persistenceError {
-                    Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .font(Theme.body)
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-
-            // Bounded on both sides. Without the second divider the rows below —
-            // auto-copy, launch at login, updates — read as part of "翻译路线", which
-            // is exactly the kind of false grouping this page is being cleaned up to
-            // stop making.
-            SoftDivider()
-
-            // One VStack, one spacing value, for every row on the page from here down
-            // (including the multi-line race unit below) — three separately-spaced
-            // blocks used to rely on the outer page spacing (14) between them and an
-            // inner spacing (10) within them, which read as uneven rhythm rather than
-            // a deliberate grouping.
-            VStack(alignment: .leading, spacing: 10) {
-                settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
-                settingToggle("登录时启动", isOn: $settings.launchAtLogin)
-                if let error = settings.launchAtLoginError {
-                    Text(error)
-                        .font(Theme.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                updateSettingRow
-                // The sound preference reads as a distinct sense channel, not a
-                // translation behavior, but shares the same row rhythm as everything
-                // else here. Switching it off is deliberately silent (muting must not
-                // announce itself); switching it on plays one quiet toggle-on cue.
-                soundToggleRow
-
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(Theme.body)
-
-                if panelState.globalHotkeyFailed {
-                    HStack(spacing: 5) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(Theme.caption2)
-                        Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(Theme.caption)
-                    .foregroundStyle(.orange)
-                }
-
+                categoryPicker
+                SoftDivider()
             }
             .background(
                 GeometryReader { proxy in
-                    Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height + 36)
+                    Color.clear.preference(key: SettingsHeaderHeightKey.self, value: proxy.size.height)
+                })
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+
+                    if panelState.settingsSection == .services {
+                        slotTabs
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            labeledField("接口地址", focused: focusedField == .baseURL) {
+                                TextField(
+                                    "https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL
+                                )
+                                .textFieldStyle(.plain)
+                                .font(Theme.bodyMonospaced)
+                                .focused($focusedField, equals: .baseURL)
+                                .accessibilityLabel("接口地址")
+                            }
+                            labeledField("模型", focused: focusedField == .model) {
+                                TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
+                                    .textFieldStyle(.plain)
+                                    .font(Theme.bodyMonospaced)
+                                    .focused($focusedField, equals: .model)
+                                    .accessibilityLabel("模型")
+                            }
+                            if isCurrentProfileLocal {
+                                // Local (loopback) inference servers don't take an API key — Ollama,
+                                // LM Studio, llama.cpp-server. Showing the field here would push users
+                                // to type a fake key; a quiet hint is more honest.
+                                HStack(alignment: .top, spacing: 5) {
+                                    Image(systemName: "desktopcomputer")
+                                        .font(Theme.caption2)
+                                        .padding(.top, 1)
+                                    Text("本地服务无需 API Key")
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .font(Theme.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                                        .fill(Theme.fillQuiet)
+                                )
+                            } else {
+                                labeledField("API Key", focused: focusedField == .apiKey) {
+                                    Image(systemName: "lock.fill")
+                                        .font(Theme.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
+                                        .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
+                                } content: {
+                                    HStack(spacing: 6) {
+                                        Group {
+                                            if showKey {
+                                                TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
+                                            } else {
+                                                SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
+                                            }
+                                        }
+                                        .textFieldStyle(.plain)
+                                        .font(Theme.bodyMonospaced)
+                                        .focused($focusedField, equals: .apiKey)
+
+                                        if settings.keychainSaved {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(Theme.footnote)
+                                                .foregroundStyle(.green)
+                                                .transition(.opacity)
+                                        }
+
+                                        Button {
+                                            showKey.toggle()
+                                        } label: {
+                                            Image(systemName: showKey ? "eye.slash" : "eye")
+                                                .font(Theme.footnote)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help(showKey ? "隐藏" : "显示")
+                                        .accessibilityLabel(showKey ? "隐藏" : "显示")
+                                    }
+                                    // `.state`, not `.micro`: this is a confirmation appearing, not
+                                    // hover feedback. It used to scale up from 0.7 over 0.12s, which
+                                    // is not an element arriving — it is a flash.
+                                    .motion(.state, value: settings.keychainSaved)
+                                    .accessibilityLabel("API Key")
+                                }
+                            }
+
+                            if let error = settings.keychainError {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(error)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    // Only for failures a second attempt can actually clear (locked
+                                    // device, denied prompt). A corrupt item would fail identically,
+                                    // so offering retry there would just teach the button to lie.
+                                    if settings.keychainErrorIsRetryable {
+                                        Button("重试") { settings.retryLoadKeys() }
+                                            .buttonStyle(.plain)
+                                            .font(Theme.bodySmallSemibold)
+                                            .foregroundStyle(Theme.accent)
+                                    }
+                                }
+                                .font(Theme.caption)
+                                .foregroundStyle(.orange)
+                            }
+                        }
+
+                        testRow
+                        advancedSection
+                    } else if panelState.settingsSection == .translation {
+                        routingSection
+                        SoftDivider()
+                        extraInstructionSection
+                        SoftDivider()
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
+                            soundToggleRow
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(Theme.body)
+                    } else {
+                        shortcutsNavRow
+
+                        SoftDivider()
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingToggle("保存翻译历史", isOn: $settings.saveHistoryEnabled)
+                            settingToggle("保留输入草稿", isOn: $settings.saveDraftEnabled)
+                            Text("关闭保存会删除对应的本机记录")
+                                .font(Theme.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L("清除输入草稿")) { engine.clearDraft() }
+                                .buttonStyle(.plain)
+                                .disabled(engine.input.isEmpty)
+                            if let error = engine.persistenceError {
+                                Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .font(Theme.body)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+
+                        // Bounded on both sides. Without the second divider the rows below —
+                        // auto-copy, launch at login, updates — read as part of "翻译路线", which
+                        // is exactly the kind of false grouping this page is being cleaned up to
+                        // stop making.
+                        SoftDivider()
+
+                        // One VStack, one spacing value, for every row on the page from here down
+                        // (including the multi-line race unit below) — three separately-spaced
+                        // blocks used to rely on the outer page spacing (14) between them and an
+                        // inner spacing (10) within them, which read as uneven rhythm rather than
+                        // a deliberate grouping.
+                        VStack(alignment: .leading, spacing: 10) {
+                            settingToggle("登录时启动", isOn: $settings.launchAtLogin)
+                            if let error = settings.launchAtLoginError {
+                                Text(error)
+                                    .font(Theme.caption)
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            updateSettingRow
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(Theme.body)
+
+                        if panelState.globalHotkeyFailed {
+                            HStack(spacing: 5) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(Theme.caption2)
+                                Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(Theme.caption)
+                            .foregroundStyle(.orange)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: SettingsContentHeightKey.self, value: proxy.size.height)
+                    }
+                )
+                .id(panelState.settingsSection)
+            }
+            .scrollIndicators(.never)
+            .frame(
+                height: min(
+                    contentHeight,
+                    max(1, Self.maximumHeight(availableHeight: panelState.availableHeight) - headerHeight - 48))
             )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
+            .onPreferenceChange(SettingsContentHeightKey.self) { if $0 > 0 { contentHeight = $0 } }
+        }
+        .padding(18)
+        .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
+            }
+        )
+        .onChange(of: panelState.settingsSection) { _, _ in
+            focusedField = nil
+            showKey = false
+            cancelTests()
         }
         .onChange(of: settings.profiles) { _, _ in
             cancelTests()
@@ -271,6 +312,19 @@ struct SettingsView: View {
     }
 
     // MARK: - Header
+
+    @ViewBuilder
+    private var categoryPicker: some View {
+        if #available(macOS 26.0, *) {
+            SettingsCategoryPicker(selection: $panelState.settingsSection)
+                .controlSize(.extraLarge)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            SettingsCategoryPicker(selection: $panelState.settingsSection)
+                .controlSize(.large)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
     private var header: some View {
         HStack(spacing: 8) {
@@ -349,7 +403,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.vertical, 9)
             .background(
                 Capsule().fill(
                     selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillQuiet)
@@ -675,18 +729,16 @@ struct SettingsView: View {
 
     // MARK: - Advanced
 
-    /// Per-profile: each slot defaults to expanded if it already holds a routing value
-    /// (so a configured setting isn't hidden on first sight), but a manual toggle always
-    /// wins after that — collapsing one slot's chevron used to be a no-op whenever that
-    /// slot had a value, which read as a fake switch.
+    /// Advanced configuration stays out of the default service form, including when
+    /// a profile already has a provider preference or compatibility override.
     private var showAdvanced: Bool {
         get {
-            advancedExpandedOverride[editingIndex] ?? (
-                !settings.profiles[safeEditingIndex].providerOrder.trimmingCharacters(in: .whitespaces).isEmpty
-                    || settings.profiles[safeEditingIndex].outputProtocolPreference != .automatic
-            )
+            panelState.settingsAdvancedProfiles.contains(editingIndex)
         }
-        nonmutating set { advancedExpandedOverride[editingIndex] = newValue }
+        nonmutating set {
+            if newValue { panelState.settingsAdvancedProfiles.insert(editingIndex) }
+            else { panelState.settingsAdvancedProfiles.remove(editingIndex) }
+        }
     }
 
     /// Provider routing only matters for a handful of gateways and is empty for almost
@@ -890,32 +942,33 @@ struct SettingsView: View {
         }
     }
 
+    private var connectionTestCommand: some View {
+        Button {
+            runTest()
+        } label: {
+            HStack(spacing: 5) {
+                if testState == .testing {
+                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                } else {
+                    Image(systemName: "bolt.fill")
+                }
+                Text("测试连接")
+            }
+            .foregroundStyle(Theme.accent)
+        }
+        .controlSize(.large)
+        .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
+        .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
+        .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
+    }
+
     private var testRow: some View {
         HStack(spacing: 10) {
-            Button {
-                runTest()
-            } label: {
-                HStack(spacing: 5) {
-                    if testState == .testing {
-                        ProgressView().controlSize(.small).scaleEffect(0.6)
-                    } else {
-                        Image(systemName: "bolt.fill")
-                            .font(Theme.caption)
-                    }
-                    Text("测试连接")
-                        .font(Theme.bodySmallSemibold)
-                }
-                .foregroundStyle(Theme.accent)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(Theme.fillQuiet))
-                .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
-                .opacity(settings.profiles[safeEditingIndex].isUsable ? 1 : 0.45)
+            if #available(macOS 26.0, *) {
+                connectionTestCommand.buttonStyle(.glass).buttonBorderShape(.capsule)
+            } else {
+                connectionTestCommand.buttonStyle(.bordered)
             }
-            .buttonStyle(.plain)
-            .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
-            .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
-            .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
 
             Spacer(minLength: 8)
 
