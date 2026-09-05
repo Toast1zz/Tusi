@@ -13,16 +13,23 @@ A menubar translator for macOS. Type Chinese and get English; type anything else
   the clipboard follows whichever one you are looking at
 - Two online services, used either primary-first or asked at the same time
 - Three tone presets (casual / standard / formal)
-- Optional auto-copy to clipboard, and a bounded local history of recent translations
+- A standing instruction carried by every request — a glossary entry, a house style, a name
+  to leave untranslated
+- Optional auto-copy to clipboard, an optional completion sound, and a local history of the
+  last 50 translations
 - Smart quotes on output, leaving code spans and blocks untouched
-- Every shortcut is rebindable
+- Talks to endpoints that only pretend to be OpenAI-compatible: it prefers structured output,
+  notices the first time a server cannot do it, and retries that request as plain text
+- Optional launch at login, and an optional check for new releases
+- Every shortcut is rebindable except ⌘, for Settings
 - The result appears complete, in one step — no token-by-token flicker, and local and remote
   models behave identically. Adapts to light/dark; Liquid Glass on macOS 26+
 
 ## Requirements
 
 - macOS 14+
-- An API key for any OpenAI-compatible service
+- An API key for any OpenAI-compatible service — or nothing but a local model
+  (Ollama, LM Studio, llama.cpp-server), which needs none
 
 ## Install
 
@@ -59,6 +66,16 @@ Each question appears only when it is a real choice, and a primary request that 
 before producing any output is always retried on the backup. API keys are stored in the
 Keychain, not on disk, and each profile has a "test connection" button.
 
+Two more fields, both collapsed by default because most setups never need them:
+
+- **附加要求** — one instruction added to every request, whichever profile answers it. This
+  is where a glossary entry ("commit 统一译作「提交」"), a house style, or a name that must
+  survive untranslated goes.
+- **输出协议** (under 高级选项, per profile) — 自动 asks for structured output and, the first
+  time a server turns out not to support it, falls back to plain text and retries that same
+  request. Pin it to 纯文本兼容 for an endpoint that advertises the capability but does not
+  honour it. The result is identical either way; only the shape of the request changes.
+
 If a freshly installed build asks you to authorize the API keys again, run
 `./build.sh keychain-unpin` once. macOS guards a Keychain item with a partition list whose
 entries are `teamid:` for an app signed by an identity carrying a Team ID and `cdhash:` for
@@ -80,7 +97,8 @@ Development certificate carries the developer's name and email. One note on laun
 | Settings | ⌘, |
 | Back / close | Esc |
 
-Every row above is rebindable under Settings → Shortcuts.
+Every row above is rebindable under Settings → Shortcuts, except ⌘, which the panel
+handles directly.
 
 ## Build
 
@@ -105,24 +123,39 @@ TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
 ```
 
+Signing with the same certificate on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds change the signature's cdhash each build and re-prompt for the API key on every install, so keep a stable identity around for local builds.
+
 ### Diagnosing panel height
 
 The panel's height is not one measurement — the result text sizes the result viewport,
-which sizes the content, which sizes the window — and a hop that stops reporting leaves
-the window sized for the previous result. When the panel looks too tall, too short, or
-lets its content run past the bottom edge, turn the trace on rather than guessing:
+which sizes the content, which sizes the window — and every hop is a preference feeding a
+`@State` that feeds the next hop's frame. SwiftUI does not promise to redeliver a
+preference for the layout its own state write caused, so a hop can go quiet, and when one
+does the window stays sized for the previous result.
+
+The panel therefore checks itself. Once a resize settles it asks AppKit what the content
+actually measures — a question no missing preference can corrupt — grows the window if it
+is too small, and writes out the last 48 measurements. That runs in every build and prints
+nothing while the panel behaves, so the first move is to look for the record, not to turn
+anything on:
+
+```bash
+/usr/bin/log show --predicate 'subsystem == "com.tusi.app"' --last 1h --style compact | grep height
+```
+
+A `height mismatch:` line followed by `height chain:` lines is the panel catching itself:
+the chain is in order, so the hop that stopped reporting is the one that is broken. Nothing
+at all means the panel and its content agreed every time.
+
+For a live per-hop stream while reproducing something by hand:
 
 ```bash
 defaults write com.tusi.app heightDiagnostics -bool true   # then relaunch Tusi
-/usr/bin/log show --predicate 'subsystem == "com.tusi.app"' --last 10m --style compact | grep "height:"
 defaults delete com.tusi.app heightDiagnostics             # off again
 ```
 
-Each line names the hop it came from, in order, so the one that stopped reporting is the
-one that is broken. Use the full path `/usr/bin/log`: a shell function named `log` is a
-common thing to have, and it will silently eat the arguments.
-
-Signing with the same certificate on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds change the signature's cdhash each build and re-prompt for the API key on every install, so keep a stable identity around for local builds.
+Use the full path `/usr/bin/log`: a shell function named `log` is a common thing to have,
+and it will silently eat the arguments.
 
 ## License
 
