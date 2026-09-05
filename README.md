@@ -112,6 +112,9 @@ handles directly.
 
 ## Build
 
+Use Xcode 26.6 or newer to compile the macOS 26 APIs and isolated deinitializers.
+The built app still supports macOS 14 and later; SDK requirements and runtime requirements differ.
+
 ```bash
 ./build.sh                        # builds build/Tusi.app for the current arch
 TUSI_ARCH=universal ./build.sh    # universal binary (arm64 + Intel)

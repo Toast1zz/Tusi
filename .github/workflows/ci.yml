@@ -7,9 +7,16 @@ on:
 
 jobs:
   test-and-build:
-    runs-on: macos-15
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+
+      - name: toolchain
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: swift test
         run: swift test
