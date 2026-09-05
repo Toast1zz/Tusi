@@ -360,7 +360,7 @@ enum TranslationService {
         config: APIConfig,
         outputProtocol: TranslationOutputProtocol? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
             // Detached: the SSE read + per-chunk JSON decode runs on the cooperative
             // pool instead of the caller's actor (the caller is the main actor), so a
             // fast or large stream never janks the panel. `continuation` is Sendable;
@@ -381,8 +381,16 @@ enum TranslationService {
             let lastChunkAt = OSAllocatedUnfairLock(initialState: Date())
             let didTimeOut = OSAllocatedUnfairLock(initialState: false)
             let task = Task.detached { [gotData, didTimeOut] in
+                var structuredAttempt = false
                 do {
                     func performAttempt(_ selectedProtocol: TranslationOutputProtocol) async throws {
+                        structuredAttempt = selectedProtocol != .plainText
+                        var receivedBytes = 0
+                        func deliver(_ piece: String) throws {
+                            if case .dropped = continuation.yield(piece) {
+                                throw TranslationError.invalidResponse
+                            }
+                        }
                         let body = requestBody(
                             text: text,
                             target: target,
@@ -411,9 +419,6 @@ enum TranslationService {
                         let decoder = JSONDecoder()
                         var sawDone = false
                         var sawFinish = false
-                        var sawDataPayload = false
-                        var sawDecodedPayload = false
-                        var malformedPayloadCount = 0
                         var structuredContent = ""
                         var toolAccumulator = TranslationToolCallAccumulator()
                         var sawRefusal = false
@@ -426,24 +431,40 @@ enum TranslationService {
                                 sawDone = true
                                 return true
                             }
-                            sawDataPayload = true
                             guard let data = payload.data(using: .utf8) else {
-                                malformedPayloadCount += 1
-                                return false
+                                throw TranslationError.invalidResponse
                             }
                             let chunk: StreamChunk
                             do {
                                 chunk = try decoder.decode(StreamChunk.self, from: data)
                             } catch {
-                                malformedPayloadCount += 1
+                                throw TranslationError.invalidResponse
+                            }
+                            if let error = chunk.error {
+                                throw TranslationError.http(0, error.message)
+                            }
+                            guard let choices = chunk.choices else {
+                                throw TranslationError.invalidResponse
+                            }
+                            // Usage trailers are valid metadata, not a completion marker.
+                            if choices.isEmpty {
+                                guard chunk.usage?.isValid == true else {
+                                    throw TranslationError.invalidResponse
+                                }
                                 return false
                             }
-                            guard let choice = chunk.choices.first else {
-                                malformedPayloadCount += 1
-                                return false
+                            guard choices.count == 1, let choice = choices.first,
+                                  choice.delta != nil || choice.finishReason != nil else {
+                                throw TranslationError.invalidResponse
                             }
-                            sawDecodedPayload = true
                             if let reason = choice.finishReason, !reason.isEmpty {
+                                switch reason {
+                                case "stop": break
+                                case "tool_calls" where selectedProtocol == .forcedToolCall: break
+                                case "length": throw TranslationError.truncatedStream
+                                case "content_filter": throw TranslationStructuredOutputError.modelRefusal
+                                default: throw TranslationError.invalidResponse
+                                }
                                 sawFinish = true
                             }
                             var madeProgress = false
@@ -452,10 +473,14 @@ enum TranslationService {
                                 madeProgress = true
                             }
                             if let piece = choice.delta?.content, !piece.isEmpty {
+                                receivedBytes += piece.utf8.count
+                                guard receivedBytes <= TranslationEnvelopeDecoder.maxRawBytes else {
+                                    throw TranslationStructuredOutputError.outputTooLarge
+                                }
                                 madeProgress = true
                                 switch selectedProtocol {
                                 case .plainText:
-                                    continuation.yield(piece)
+                                    try deliver(piece)
                                 case .strictJSONSchema, .jsonObject:
                                     structuredContent += piece
                                     guard structuredContent.utf8.count <= TranslationEnvelopeDecoder.maxRawBytes else {
@@ -504,10 +529,6 @@ enum TranslationService {
                             _ = try processLine(String(decoding: lineData, as: UTF8.self))
                         }
                         guard sawDone || sawFinish else { throw TranslationError.truncatedStream }
-                        if sawDataPayload && !sawDecodedPayload {
-                            Log.translation.error("stream contained \(malformedPayloadCount, privacy: .public) malformed data payload(s) (host \(config.displayHost, privacy: .public))")
-                            throw TranslationError.invalidResponse
-                        }
                         if sawRefusal {
                             throw TranslationStructuredOutputError.modelRefusal
                         }
@@ -515,13 +536,13 @@ enum TranslationService {
                         case .plainText:
                             break
                         case .strictJSONSchema, .jsonObject:
-                            continuation.yield(try TranslationEnvelopeDecoder.decode(structuredContent))
+                            try deliver(try TranslationEnvelopeDecoder.decode(structuredContent))
                         case .forcedToolCall:
                             let payload = try toolAccumulator.finalize()
                             if payload.discardedAssistantContent {
                                 Log.translation.notice("discarded assistant content outside translation tool call (host \(config.displayHost, privacy: .public))")
                             }
-                            continuation.yield(payload.translation)
+                            try deliver(payload.translation)
                         }
                     }
 
@@ -569,15 +590,16 @@ enum TranslationService {
                     if didTimeOut.withLock({ $0 }) {
                         let hadStarted = gotData.withLock { $0 }
                         Log.translation.error("stream timed out \(hadStarted ? "mid-stream (idle)" : "waiting for first token", privacy: .public) (host \(config.displayHost, privacy: .public))")
-                        continuation.finish(throwing: TranslationError.watchdogTimeout(
-                            stage: hadStarted ? "idle" : "first-token"
-                        ))
+                        let error = TranslationError.watchdogTimeout(stage: hadStarted ? "idle" : "first-token")
+                        continuation.finish(throwing: structuredAttempt && hadStarted ? PartialTranslationFailure(underlying: error) : error)
                     } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
                         Log.translation.debug("stream cancelled by consumer")
                         continuation.finish(throwing: error)
                     } else {
-                        Log.translation.error("stream failed: \(error.localizedDescription, privacy: .public) (host \(config.displayHost, privacy: .public))")
-                        continuation.finish(throwing: error)
+                        Log.translation.error("stream failed: \(error.localizedDescription, privacy: .private) (host \(config.displayHost, privacy: .public))")
+                        let partial = structuredAttempt && gotData.withLock({ $0 })
+                            && (error is URLError || (error as? TranslationError)?.isTransient == true)
+                        continuation.finish(throwing: partial ? PartialTranslationFailure(underlying: error) : error)
                     }
                 }
             }
@@ -627,72 +649,25 @@ enum TranslationService {
     /// User-initiated capability probe. It reuses the production streaming parser and a
     /// fixed non-private source, stopping on the first valid target-language translation.
     static func testConnection(config: APIConfig) async throws -> ConnectionTestResult {
-        let protocols: [TranslationOutputProtocol] = config.outputProtocolPreference == .plainText
-            ? [.plainText]
-            : [.strictJSONSchema, .forcedToolCall, .jsonObject, .plainText]
-        var lastCompatibilityError: Error = TranslationError.invalidResponse
-
-        for outputProtocol in protocols {
-            let start = Date()
-            do {
-                var translation = ""
-                for try await piece in stream(
-                    // Fixed protocol probe, not user-facing copy. Scalar spelling keeps
-                    // localization coverage focused on UI strings while still providing
-                    // enough script evidence for the target-language check.
-                    text: "\u{4F60}\u{597D}\u{FF0C}\u{8FD9}\u{662F}\u{4E00}\u{6B21}\u{7FFB}\u{8BD1}\u{6D4B}\u{8BD5}\u{3002}",
-                    target: .english,
-                    tone: .standard,
-                    extra: "",
-                    config: config,
-                    outputProtocol: outputProtocol
-                ) {
-                    translation += piece
-                }
-                guard !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw TranslationError.emptyResponse
-                }
-                let wrongLanguage = await LanguageDetector.looksLikeWrongLanguage(
-                    translation,
-                    target: .english
-                )
-                guard !wrongLanguage else {
-                    throw TranslationStructuredOutputError.invalidEnvelope
-                }
-                if config.outputProtocolPreference == .automatic {
-                    await protocolRegistry.record(outputProtocol, for: config)
-                }
-                let latency = Int(Date().timeIntervalSince(start) * 1000)
-                Log.translation.info("connection probe selected \(outputProtocol.rawValue, privacy: .public) for host \(config.displayHost, privacy: .public) in \(latency, privacy: .public)ms")
-                return ConnectionTestResult(
-                    latencyMilliseconds: latency,
-                    outputProtocol: outputProtocol
-                )
-            } catch {
-                if isProbeTerminalError(error) || outputProtocol == .plainText {
-                    throw error
-                }
-                lastCompatibilityError = error
-            }
+        let start = Date()
+        var translation = ""
+        for try await piece in stream(
+            text: "\u{4F60}\u{597D}\u{FF0C}\u{8FD9}\u{662F}\u{4E00}\u{6B21}\u{7FFB}\u{8BD1}\u{6D4B}\u{8BD5}\u{3002}",
+            target: .english, tone: .standard, extra: "", config: config
+        ) {
+            translation += piece
         }
-        throw lastCompatibilityError
-    }
-
-    private static func isProbeTerminalError(_ error: Error) -> Bool {
-        if let translationError = error as? TranslationError {
-            switch translationError {
-            case .http(let code, _):
-                return code == 401 || code == 402 || code == 403 || code == 429 || code >= 500
-            case .watchdogTimeout, .truncatedStream:
-                return true
-            case .emptyKey, .invalidURL, .insecureURL:
-                return true
-            case .emptyResponse, .invalidResponse:
-                return false
-            }
+        guard !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TranslationError.emptyResponse
         }
-        if error is URLError { return true }
-        return (error as? TranslationStructuredOutputError) == .modelRefusal
+        guard await !LanguageDetector.looksLikeWrongLanguage(translation, target: .english) else {
+            await protocolRegistry.invalidate(for: config)
+            throw TranslationStructuredOutputError.invalidEnvelope
+        }
+        return ConnectionTestResult(
+            latencyMilliseconds: Int(Date().timeIntervalSince(start) * 1000),
+            outputProtocol: await protocolRegistry.resolve(for: config)
+        )
     }
 
     private static func parseErrorMessage(_ body: String) -> String {
@@ -716,6 +691,18 @@ enum TranslationService {
     }
 
     private struct StreamChunk: Decodable {
+        struct Usage: Decodable {
+            let prompt_tokens: Int
+            let completion_tokens: Int
+            let total_tokens: Int
+
+            var isValid: Bool {
+                prompt_tokens >= 0 && completion_tokens >= 0 && total_tokens >= 0
+            }
+        }
+        struct ServiceError: Decodable {
+            let message: String
+        }
         struct Choice: Decodable {
             struct Delta: Decodable {
                 struct ToolCall: Decodable {
@@ -747,7 +734,9 @@ enum TranslationService {
                 case finishReason = "finish_reason"
             }
         }
-        let choices: [Choice]
+        let choices: [Choice]?
+        let usage: Usage?
+        let error: ServiceError?
     }
 
 }

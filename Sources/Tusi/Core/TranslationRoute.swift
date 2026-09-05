@@ -3,7 +3,7 @@ import Foundation
 /// How good a slot is expected to be, ordered from cheapest to best. Escalation only
 /// ever moves up this ladder, which is what makes "press ⏎ again for a better answer"
 /// a promise the app can keep rather than a re-roll of the same model.
-enum TranslationTier: String, Equatable, Sendable, Comparable {
+enum TranslationTier: String, Codable, Equatable, Sendable, Comparable {
     case local
     case online
 

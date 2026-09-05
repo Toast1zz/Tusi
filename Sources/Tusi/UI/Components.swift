@@ -3,14 +3,13 @@ import AppKit
 
 // MARK: - Window background material
 
-/// The panel's physical surface: frosted material, rounded corners, hairline border and a
-/// faint top-light. It is an AppKit view rather than a SwiftUI background because it has to
+/// The panel's reading surface uses popover material to isolate text from busy windows.
+/// It is an AppKit view rather than a SwiftUI background because it has to
 /// track the *window's* bounds exactly. Sized from SwiftUI content instead, it drifts out
 /// of alignment whenever the content and the window animate on different timelines, and
 /// the corners flash square in the gap.
 final class PanelContainerView: NSView {
     private let effect = NSVisualEffectView()
-    private let topLight = CAGradientLayer()
 
     init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
@@ -26,24 +25,14 @@ final class PanelContainerView: NSView {
         effect.autoresizingMask = [.width, .height]
         addSubview(effect)
 
-        topLight.startPoint = CGPoint(x: 0.5, y: 0)
-        topLight.endPoint = CGPoint(x: 0.5, y: 0.5)
-        effect.layer?.addSublayer(topLight)
-
         applyAppearanceColors()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unused") }
 
-    override func layout() {
-        super.layout()
-        // The gradient is a raw layer, so it has no autoresizing of its own. Resizing it
-        // without disabling implicit animation would let it lag a resize by a frame.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        topLight.frame = bounds
-        CATransaction.commit()
+    func installContent(_ view: NSView) {
+        addSubview(view)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -55,12 +44,7 @@ final class PanelContainerView: NSView {
         // labelColor is dynamic; resolving it to a CGColor needs the right appearance
         // to be current, otherwise the border keeps whatever it resolved to first.
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let isDark = self.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             self.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.09).cgColor
-            self.topLight.colors = [
-                NSColor.white.withAlphaComponent(isDark ? 0.06 : 0.5).cgColor,
-                NSColor.white.withAlphaComponent(0).cgColor,
-            ]
         }
     }
 }
@@ -556,6 +540,8 @@ struct ErrorBox: View {
                 .font(Theme.bodySmall)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(4)
+                .help(message)
                 .fixedSize(horizontal: false, vertical: true)
             Button(primaryLabel, action: primaryAction)
                 .buttonStyle(.plain)

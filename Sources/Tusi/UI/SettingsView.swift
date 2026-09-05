@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
     @EnvironmentObject private var updateChecker: UpdateChecker
@@ -171,6 +172,10 @@ struct SettingsView: View {
 
             SoftDivider()
 
+            routingSection
+
+            SoftDivider()
+
             extraInstructionSection
 
             SoftDivider()
@@ -179,7 +184,22 @@ struct SettingsView: View {
 
             SoftDivider()
 
-            routingSection
+            VStack(alignment: .leading, spacing: 10) {
+                settingToggle("保存翻译历史", isOn: $settings.saveHistoryEnabled)
+                settingToggle("保留输入草稿", isOn: $settings.saveDraftEnabled)
+                Text("关闭保存会删除对应的本机记录")
+                    .font(Theme.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(L("清除输入草稿")) { engine.clearDraft() }
+                    .buttonStyle(.plain)
+                    .disabled(engine.input.isEmpty)
+                if let error = engine.persistenceError {
+                    Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(Theme.body)
+            .toggleStyle(.switch)
+            .controlSize(.mini)
 
             // Bounded on both sides. Without the second divider the rows below —
             // auto-copy, launch at login, updates — read as part of "翻译路线", which
@@ -234,23 +254,19 @@ struct SettingsView: View {
             .padding(18)
         }
         .onChange(of: settings.profiles) { _, _ in
-            testTasks.values.forEach { $0.cancel() }
-            testTasks.removeAll()
+            cancelTests()
             testStates.removeAll()
-            testGenerations.removeAll()
         }
         .onChange(of: editingIndex) { _, _ in
             showKey = false
-            testTasks.values.forEach { $0.cancel() }
-            testTasks.removeAll()
+            cancelTests()
         }
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
         .onDisappear {
             panelState.recordingShortcut = nil
             panelState.shortcutError = nil
-            testTasks.values.forEach { $0.cancel() }
-            testTasks.removeAll()
+            cancelTests()
         }
     }
 
@@ -268,7 +284,7 @@ struct SettingsView: View {
                     .background(Circle().fill(Theme.fillQuiet))
             }
             .buttonStyle(.plain)
-            .help("返回 (Esc)")
+            .help(settings.commandLabel(L("返回"), action: .close))
 
             Text("设置")
                 .font(Theme.title)
@@ -385,7 +401,7 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
 
-                Text("· 先用本地翻译，不满意按 ⏎ 换在线")
+                Text(settings.commandLabel(L("换在线重译"), action: .translate))
                     .font(Theme.caption)
                     .foregroundStyle(.quaternary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -453,11 +469,11 @@ struct SettingsView: View {
                     selection: settings.routeStart.rawValue,
                     onSelect: { settings.routeStart = RouteStart(rawValue: $0) ?? .online },
                     caption: settings.routeStart == .local
-                        ? L("先用本地模型翻译，不满意按 ⏎ 换在线重译，两个结果都留着")
+                        ? L("先用本地模型翻译，再按翻译键请求在线版本")
                         : L("每次翻译都直接走在线服务")
                 )
             } else if settings.onlineAvailable, !settings.localAvailable {
-                routingNote(L("填好本地模型后，可以让它先翻，不满意再按 ⏎ 换在线"))
+                routingNote(L("填好本地模型后，可以让它先翻，再请求在线版本"))
             } else if settings.localAvailable, !settings.onlineAvailable {
                 routingNote(L("目前只有本地模型可用，所有翻译都由它完成"))
             }
@@ -482,7 +498,7 @@ struct SettingsView: View {
                     onSelect: { settings.onlineStrategy = OnlineStrategy(rawValue: $0) ?? .failover },
                     caption: effectiveOnlineStrategy == .failover
                         ? L("先用主用，只有它失败时才换备用")
-                        : L("两套一起问，先答完的用它 · 每次翻译计费翻倍")
+                        : L("两套同时请求，采用先完成的可用结果；两套均可能计费")
                 )
             }
         }
@@ -857,6 +873,23 @@ struct SettingsView: View {
 
     // MARK: - Test connection
 
+    private func cancelTests() {
+        Self.cancelConnectionTests(tasks: &testTasks, states: &testStates, generations: &testGenerations)
+    }
+
+    static func cancelConnectionTests(
+        tasks: inout [Int: Task<Void, Never>],
+        states: inout [Int: TestState],
+        generations: inout [Int: Int]
+    ) {
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
+        for index in Array(states.keys) where states[index] == .testing {
+            states[index] = .idle
+            generations[index, default: 0] += 1
+        }
+    }
+
     private var testRow: some View {
         HStack(spacing: 10) {
             Button {
@@ -881,8 +914,8 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
-            .help("会发送最多 4 个极短测试请求来检测输出兼容性")
-            .accessibilityHint("会发送最多 4 个极短测试请求来检测输出兼容性")
+            .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
+            .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
 
             Spacer(minLength: 8)
 
@@ -913,7 +946,8 @@ struct SettingsView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.red)
                     Text(message)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
                 .font(Theme.footnote)
                 .foregroundStyle(.secondary)

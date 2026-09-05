@@ -194,6 +194,22 @@
 "复制失败" = "Copy failed";
 
 /* Routing failures */
+"本机保存失败，请检查磁盘空间或文件权限" = "Could not save locally. Check disk space and file permissions.";
+"保存翻译历史" = "Save translation history";
+"保留输入草稿" = "Keep input draft";
+"清除输入草稿" = "Clear input draft";
+"返回" = "Back";
+"换在线重译" = "Translate online";
+"先用本地模型翻译，再按翻译键请求在线版本" = "Start locally, then use the translate key for an online version.";
+"填好本地模型后，可以让它先翻，再请求在线版本" = "Configure a local model to translate locally first, then request an online version.";
+"两套同时请求，采用先完成的可用结果；两套均可能计费" = "Request both services and keep the first usable result. Both may charge.";
+"使用当前翻译路线的输出协议，最多发送 2 个短测试请求" = "Uses the same output protocol as translation, with up to two short test requests.";
+"输入中文或任意语言" = "Enter Chinese or any other language";
+"请求在线版本，两个结果都会留着" = "Request an online version and keep both results.";
+"撤销删除" = "Undo deletion";
+"删除" = "Delete";
+"关闭保存会删除对应的本机记录" = "Turning off saving deletes the corresponding local records.";
+"使用与翻译相同的协议策略，最多发送 2 个短测试请求" = "Uses the same protocol strategy as translation, with up to two short test requests.";
 "还没有配置可用的翻译服务，请先在设置中填写" = "No usable translation service configured yet — fill one in Settings";
 "本地和在线都失败了 · %@" = "Both the local model and the online service failed · %@";
 "两套在线服务都失败了 · %@" = "Both online services failed · %@";

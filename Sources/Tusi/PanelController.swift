@@ -130,7 +130,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         let hosting = NSHostingView(rootView: root)
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
-        container.addSubview(hosting)
+        container.installContent(hosting)
         panel.contentView = container
         contentHost = hosting
 
@@ -226,6 +226,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard let screen else { return }
 
         let visible = screen.visibleFrame
+        panelState.availableHeight = visible.height - 12
         // Write the clamp back: `windowWillResize` pins every non-animated resize to
         // `desiredHeight`, so a clamp that only lives in this local would be undone by
         // the delegate on the very `setFrame` below.
@@ -537,9 +538,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             )
         )
 
-        if let clash = ShortcutAction.allCases.first(where: {
-            $0 != action && (settings.shortcut($0).map { KeyCombo.sameKey($0, combo) } ?? false)
-        }) {
+        if let clash = settings.shortcutConflict(combo, for: action) {
             panelState.shortcutError = String(format: L("与「%@」重复了"), clash.label)
             return
         }
@@ -583,6 +582,13 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     // MARK: - Panel resize
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        if let screen = panel.screen {
+            panelState.availableHeight = screen.visibleFrame.height - 12
+            setContentHeight(desiredHeight)
+        }
+    }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(

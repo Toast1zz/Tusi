@@ -17,6 +17,7 @@ enum FailureKind: Equatable {
     case unknown
 
     static func classify(_ error: Error) -> FailureKind {
+        if let partial = error as? PartialTranslationFailure { return classify(partial.underlying) }
         if let translationError = error as? TranslationError {
             switch translationError {
             case .emptyKey:

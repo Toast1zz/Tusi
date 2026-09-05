@@ -58,13 +58,23 @@ page, "翻译路线", with two questions:
   only: the local answer arrives first, and one more ⏎ asks an online service for its own
   version. Both are kept, and a small label under the result switches between them.
 - **两套在线服务** — 主用优先 (the backup takes over only when the primary fails) or
-  同时请求 (both are asked at once and the first usable answer wins, which doubles what you
-  are billed per translation). The second option is offered only when both slots are remote:
+  同时请求 (both are asked at once and the first usable answer wins; both services may charge,
+  and the cost depends on their rates and cancellation timing). The second option is offered only when both slots are remote:
   a loopback slot would win on network latency alone, which says nothing about the answer.
 
 Each question appears only when it is a real choice, and a primary request that fails
 before producing any output is always retried on the backup. API keys are stored in the
 Keychain, not on disk, and each profile has a "test connection" button.
+
+Connection tests use the same protocol negotiation as real translations and send at most
+two short requests. Automatic update checks run at startup and every six hours while enabled.
+
+History retains both local and online versions, including the host and model that answered.
+Each archived text field is limited to 4,000 characters and 32 KB; truncated versions stay
+marked. Right-click a record to delete it, or clear the list; deletion can be undone for
+ten seconds. History and draft saving can be disabled independently in Settings. Turning
+off saving deletes the corresponding saved data; clearing the input draft does not delete
+history. Text is stored locally with owner-only file permissions, without encryption.
 
 Two more fields, both collapsed by default because most setups never need them:
 
@@ -123,7 +133,9 @@ TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
 ```
 
-Signing with the same certificate on every rebuild keeps the Keychain "Always Allow" authorization valid — ad-hoc builds change the signature's cdhash each build and re-prompt for the API key on every install, so keep a stable identity around for local builds.
+Local installs prefer a stable Team-ID identity. Keeping only the same self-signed certificate
+does not guarantee that Keychain authorization survives a changed binary; see the partition-ID
+explanation above. Public archives use the separate distribution identity.
 
 ### Diagnosing panel height
 

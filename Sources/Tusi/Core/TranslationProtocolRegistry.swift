@@ -29,7 +29,7 @@ actor TranslationProtocolRegistry {
         let baseURL = TranslationService.normalizedBaseURLString(config.baseURL)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let model = config.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let material = "\(baseURL)\n\(model)\n\(protocolVersion)"
+        let material = "\(baseURL)\n\(model)\n\(config.providerOrderList.joined(separator: ","))\n\(protocolVersion)"
         return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 

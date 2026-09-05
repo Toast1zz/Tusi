@@ -58,8 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A login-item launch before the first unlock of a boot reads an empty
         // Keychain. Re-read the keys once the system unlocks so they appear
-        // without a restart. Guarded inside SettingsStore (only when nothing is
-        // configured), so this is a cheap no-op after the first recovery.
+        // without a restart, even if the local model already works. The store retries
+        // only an unknown credential snapshot or a pending write.
         sessionObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.sessionDidBecomeActiveNotification,
             object: nil,
@@ -74,17 +74,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // shortcut changes flow through here too but are no-ops (same combo → deduped).
         let settingsStore = settings
         Publishers.CombineLatest(settingsStore.$shortcuts, settingsStore.$disabledShortcuts)
-            .map { _, _ in settingsStore.shortcut(.summon) }
+            .map { shortcuts, disabled in
+                SettingsStore.shortcut(.summon, shortcuts: shortcuts, disabled: disabled)
+            }
             .removeDuplicates()
             .dropFirst()
+            // Finish the property write before a rejected registration rolls it back.
+            .receive(on: RunLoop.main)
             .sink { [weak self] combo in self?.registerSummonHotkey(combo) }
             .store(in: &cancellables)
 
         // The status menu is rebuilt on every right-click, so a found update surfaces
         // there passively next time it's opened — no push needed.
-        if settings.autoCheckUpdates {
-            updateChecker.check(manual: false)
-        }
+        updateChecker.setAutomaticChecking(settings.autoCheckUpdates)
+        settings.$autoCheckUpdates.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] enabled in self?.updateChecker.setAutomaticChecking(enabled) }
+            .store(in: &cancellables)
 
         // First run without a usable profile: open the panel so setup is obvious.
         if !settings.isConfigured {

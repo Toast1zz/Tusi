@@ -187,7 +187,10 @@ struct TranslatorView: View {
     // is therefore as tall as the panel can be without taking over the screen, and exists
     // only to keep the window inside `clampedPanelHeight` — not as an editorial decision
     // about how much translation is worth showing.
-    private var maxInputHeight: CGFloat { 6 * editorLineStep }
+    private var maxInputHeight: CGFloat {
+        let lines = min(6, max(2, floor((panelState.availableHeight - 240) / (2 * editorLineStep))))
+        return lines * editorLineStep
+    }
 
     /// The empty panel's input box: two grid cells, not one.
     ///
@@ -198,7 +201,11 @@ struct TranslatorView: View {
     /// input, gives the placeholder room, and matches what is actually pasted here — text
     /// that is one line is the exception.
     private var minInputHeight: CGFloat { 2 * editorLineStep }
-    private var maxResultHeight: CGFloat { 24 * lineStep }
+    private var maxResultHeight: CGFloat {
+        let budget = panelState.availableHeight - min(inputHeight, maxInputHeight) - 240
+            - (panelState.showLanguagePicker ? 40 : 0)
+        return max(2, min(24, floor(budget / lineStep))) * lineStep
+    }
 
     private var editorTextWidth: CGFloat { panelState.panelWidth - 32 - 10 }
 
@@ -333,10 +340,6 @@ struct TranslatorView: View {
         .onChange(of: panelState.showSettings) { _, _ in panelState.showLanguagePicker = false }
         // Switching tone is a request to see the text in that tone, so re-run it —
         // but only when there's already a result the change would apply to.
-        .onChange(of: settings.tone) { _, _ in
-            guard engine.hasResultSection, !engine.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            engine.translate()
-        }
     }
 
     // MARK: - Input
@@ -346,7 +349,7 @@ struct TranslatorView: View {
         return VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topLeading) {
                 if engine.input.isEmpty {
-                    Text("输入中文或任意语言，⏎ 翻译")
+                    Text(settings.commandLabel(L("输入中文或任意语言"), action: .translate))
                         .font(Theme.contentFont)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
@@ -567,7 +570,7 @@ struct TranslatorView: View {
                                 isLocal: shown.tier == .local,
                                 afterFailover: shown.afterFailover
                             )
-                            .help(slotTooltip(shown.slot))
+                            .help([shown.model, shown.host].filter { !$0.isEmpty }.joined(separator: " · "))
                         }
 
                         Spacer(minLength: 4)
@@ -620,7 +623,7 @@ struct TranslatorView: View {
                             Button {
                                 engine.escalate()
                             } label: {
-                                Text("⏎ 换在线重译")
+                                Text(settings.commandLabel(L("换在线重译"), action: .translate))
                                     .font(Theme.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -628,7 +631,7 @@ struct TranslatorView: View {
                             .buttonStyle(.plain)
                             .help(engine.escalationTargetLabel.map {
                                 String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
-                            } ?? L("用更强的模型再翻一次，两个结果都会留着"))
+                            } ?? L("请求在线版本，两个结果都会留着"))
                             .transition(.opacity)
                         }
                     }
@@ -655,6 +658,13 @@ struct TranslatorView: View {
                 // that insists on one long line pushes the whole content block wider than
                 // the window and gets it centre-clipped on both edges — input text on the
                 // left, the copy button on the right. Longer localisations must wrap.
+                if engine.canRetryResult {
+                    Button(L("重试")) { engine.translate() }
+                        .buttonStyle(.plain)
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.accent)
+                        .padding(.leading, Self.resultNoticeInset)
+                }
                 if engine.outputLanguageMismatch {
                     // Checked first: a result in the wrong language is wrong outright,
                     // which matters more than how it ended.
@@ -697,7 +707,8 @@ struct TranslatorView: View {
     private var historyViewportHeight: CGFloat {
         guard !engine.history.isEmpty else { return 112 }
         let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows
-        return min(320, 28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing))
+        return max(100, min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140,
+            28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing)))
     }
     private var historyList: some View {
         VStack(spacing: 0) {
@@ -712,6 +723,13 @@ struct TranslatorView: View {
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Theme.fillQuiet))
                 Spacer(minLength: 4)
+                if engine.canUndoHistoryDeletion {
+                    Button { engine.undoHistoryDeletion() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.plain)
+                    .help(L("撤销删除"))
+                }
                 if !engine.history.isEmpty {
                     Button("清空历史") {
                         engine.clearHistory()
@@ -742,6 +760,11 @@ struct TranslatorView: View {
                             ) {
                                 engine.restoreHistory(record)
                                 panelState.showHistory = false
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) { engine.deleteHistory(record.id) } label: {
+                                    Label(L("删除"), systemImage: "trash")
+                                }
                             }
                         }
                     }
@@ -872,7 +895,7 @@ struct TranslatorView: View {
     /// A version's name: the tier for the local slot (its host is an IP nobody reads as
     /// a name), the provider's short brand for an online one.
     private func versionLabel(_ version: TranslationEngine.ResultVersion) -> String {
-        version.tier == .local ? L("本地") : settings.label(for: version.slot)
+        version.tier == .local ? L("本地") : (version.host.isEmpty ? L("在线") : SettingsStore.shortHostName(version.host))
     }
 
     private var bottomBar: some View {
@@ -962,7 +985,7 @@ struct TranslatorView: View {
                 Button {
                     engine.submit()
                 } label: {
-                    Text("⏎ 翻译")
+                    Text(settings.commandLabel(L("翻译"), action: .translate))
                         .font(Theme.footnoteMedium)
                         .lineLimit(1)
                         // minWidth, not a hard width: the slot stays stable at the Chinese

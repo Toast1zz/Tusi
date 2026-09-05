@@ -67,7 +67,7 @@ struct ShortcutsView: View {
                     .background(Circle().fill(Theme.fillQuiet))
             }
             .buttonStyle(.plain)
-            .help("返回 (Esc)")
+            .help(settings.commandLabel(L("返回"), action: .close))
 
             Text("快捷键")
                 .font(Theme.title)
@@ -145,7 +145,7 @@ struct ShortcutsView: View {
 
             if !isDefault && !recording {
                 Button {
-                    settings.setShortcut(action.defaultCombo, for: action)
+                    panelState.shortcutError = settings.restoreShortcut(action)
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
                         .font(Theme.caption)

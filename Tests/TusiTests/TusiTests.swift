@@ -2138,7 +2138,7 @@ final class TusiTests: XCTestCase {
                 for try await _ in TranslationService.stream(text: "hi", target: .chinese, tone: .standard, extra: "", config: config) {}
                 XCTFail("expected truncatedStream error")
             } catch {
-                XCTAssertEqual(error as? TranslationError, .truncatedStream)
+                XCTAssertEqual((error as? PartialTranslationFailure)?.underlying as? TranslationError, .truncatedStream)
             }
         }
     }
@@ -2253,7 +2253,7 @@ final class TusiTests: XCTestCase {
                 }
                 XCTFail("expected truncated stream")
             } catch {
-                XCTAssertEqual(error as? TranslationError, .truncatedStream)
+                XCTAssertEqual((error as? PartialTranslationFailure)?.underlying as? TranslationError, .truncatedStream)
                 XCTAssertTrue(pieces.isEmpty)
             }
         }
@@ -2551,7 +2551,7 @@ final class TusiTests: XCTestCase {
                 _ = try await TranslationService.testConnection(config: config)
                 XCTFail("expected incompatible response error")
             } catch {
-                XCTAssertEqual(error as? TranslationError, .emptyResponse)
+                XCTAssertEqual(error as? TranslationError, .invalidResponse)
             }
         }
     }
@@ -2584,7 +2584,7 @@ final class TusiTests: XCTestCase {
         XCTAssertNil(capability)
     }
 
-    func testConnectionProbeStopsAtForcedToolAndCachesCapability() async throws {
+    func testConnectionProbeUsesProductionPlainTextFallbackAndCachesCapability() async throws {
         let suite = "com.tusi.tests.connection-probe.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -2606,10 +2606,7 @@ final class TusiTests: XCTestCase {
                 return (response, Data(#"{"error":{"message":"unsupported response_format"}}"#.utf8))
             }
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let toolSSE = """
-            data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"submit_translation","arguments":"{\\\"translation\\\":\\\"Hello\\\"}"}}]},"finish_reason":"tool_calls"}]}
-
-            """
+            let toolSSE = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]}\n\n"
             return (response, Data(toolSSE.utf8))
         }
         let sessionConfig = URLSessionConfiguration.ephemeral
@@ -2626,11 +2623,11 @@ final class TusiTests: XCTestCase {
 
         XCTAssertEqual(requestCount, 2)
         XCTAssertEqual(probeSources, ["你好，这是一次翻译测试。", "你好，这是一次翻译测试。"])
-        XCTAssertEqual(result.outputProtocol, .forcedToolCall)
-        XCTAssertEqual(capability?.outputProtocol, .forcedToolCall)
+        XCTAssertEqual(result.outputProtocol, .plainText)
+        XCTAssertEqual(capability?.outputProtocol, .plainText)
     }
 
-    func testConnectionProbeNeverExceedsFourAttempts() async throws {
+    func testConnectionProbeNeverExceedsTwoAttempts() async throws {
         let suite = "com.tusi.tests.connection-probe-limit.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -2663,7 +2660,7 @@ final class TusiTests: XCTestCase {
             XCTFail("expected probe failure")
         } catch {
             XCTAssertEqual(error as? TranslationError, .http(400, "unsupported protocol"))
-            XCTAssertEqual(requestCount, 4)
+            XCTAssertEqual(requestCount, 2)
         }
     }
 

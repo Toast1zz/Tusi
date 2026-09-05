@@ -25,6 +25,7 @@ final class TranslationEngine: ObservableObject {
         let target: TranslationLanguage
         let tone: Tone
         let timestamp: Date
+        var versions: [ResultVersion] = []
 
         init(
             id: UUID,
@@ -36,7 +37,8 @@ final class TranslationEngine: ObservableObject {
             source: TranslationLanguage,
             target: TranslationLanguage,
             tone: Tone,
-            timestamp: Date
+            timestamp: Date,
+            versions: [ResultVersion] = []
         ) {
             self.id = id
             self.input = input
@@ -48,12 +50,13 @@ final class TranslationEngine: ObservableObject {
             self.target = target
             self.tone = tone
             self.timestamp = timestamp
+            self.versions = versions
         }
 
         var isTruncated: Bool { inputTruncated || outputTruncated }
 
         private enum CodingKeys: String, CodingKey {
-            case id, input, output, inputTruncated, outputTruncated, sourceLabel, source, target, tone, timestamp
+            case id, input, output, inputTruncated, outputTruncated, sourceLabel, source, target, tone, timestamp, versions
         }
 
         init(from decoder: Decoder) throws {
@@ -68,6 +71,7 @@ final class TranslationEngine: ObservableObject {
             target = try container.decode(TranslationLanguage.self, forKey: .target)
             tone = try container.decode(Tone.self, forKey: .tone)
             timestamp = try container.decode(Date.self, forKey: .timestamp)
+            versions = try container.decodeIfPresent([ResultVersion].self, forKey: .versions) ?? []
         }
     }
 
@@ -82,12 +86,12 @@ final class TranslationEngine: ObservableObject {
     @Published var input = "" {
         didSet {
             guard input != oldValue else { return }
-            if input.count > Self.maxInputCharacters {
+            if input.count > Self.maxInputCharacters || input.utf8.count > Self.maxInputBytes {
                 inputWasTruncated = true
                 // The re-entrant didSet (truncated value) does the real work below while
                 // this guard keeps the persistent notice from being cleared immediately.
                 isApplyingInputCap = true
-                input = String(input.prefix(Self.maxInputCharacters))
+                input = TextBudget.prefix(input, characters: Self.maxInputCharacters, bytes: Self.maxInputBytes)
                 isApplyingInputCap = false
                 return
             }
@@ -159,7 +163,7 @@ final class TranslationEngine: ObservableObject {
     /// it is a property of the result, it stays true for as long as the result is on
     /// screen, and it is what makes two versions of the same translation tellable
     /// apart. So it lives on the result instead.
-    struct ResultVersion: Equatable {
+    struct ResultVersion: Equatable, Codable {
         var text: String
         var slot: Int
         var tier: TranslationTier
@@ -169,6 +173,8 @@ final class TranslationEngine: ObservableObject {
         /// same stage failed — the one thing the old "已用备用翻译" toast said that the
         /// slot name alone does not.
         var afterFailover: Bool
+        var host: String = ""
+        var model: String = ""
     }
 
     /// Every finished answer to the current input, oldest tier first. At most one per
@@ -194,6 +200,14 @@ final class TranslationEngine: ObservableObject {
 
     private let settings: SettingsStore
     private let stream: Streamer
+    private let storage: TranslationStorage
+    private let clipboard: TranslationClipboard
+    private var preferences = Set<AnyCancellable>()
+    private var restoringHistory = false
+    @Published private(set) var persistenceError: String?
+    @Published private(set) var canUndoHistoryDeletion = false
+    private var deletedRecords: [Record] = []
+    private var deletedRecordExpiry: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var inputRevision: UInt = 0
     private var copyResetTask: Task<Void, Never>?
@@ -230,12 +244,14 @@ final class TranslationEngine: ObservableObject {
     /// truncated at the boundary. This bounds the request body and the stored
     /// history records (each record holds the full input).
     static let maxInputCharacters = 32_000
+    static let maxInputBytes = 256 * 1024
 
     /// Hard ceiling for a completed result (applied after the stream ends). A model
     /// that rambles far past the input size is cut here — the panel and the history
     /// file never hold an unbounded string, and the synchronous main-thread history
     /// write stays small. Cutting is honest: the result is flagged `outputCapped`.
     static let maxOutputCharacters = 64_000
+    static let maxOutputBytes = 512 * 1024
 
     // MARK: - History persistence
 
@@ -266,6 +282,8 @@ final class TranslationEngine: ObservableObject {
     init(
         settings: SettingsStore,
         draftPersistenceEnabled: Bool? = nil,
+        storage: TranslationStorage = .disk,
+        clipboard: TranslationClipboard = .system,
         stream: @escaping Streamer = { text, target, tone, extra, config in
             TranslationService.stream(
                 text: text,
@@ -278,18 +296,34 @@ final class TranslationEngine: ObservableObject {
     ) {
         self.settings = settings
         self.stream = stream
+        self.storage = storage
+        self.clipboard = clipboard
         self.historyURL = Self.historyURL(preview: settings.isPreview)
         self.draftURL = Self.draftURL(preview: settings.isPreview)
         self.draftPersistenceEnabled = draftPersistenceEnabled ?? !settings.isPreview
         loadHistory()
         loadDraft()
+        Publishers.CombineLatest(settings.$tone, settings.$extraInstruction)
+            .dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in
+                guard let self, !self.restoringHistory, let request = self.request,
+                      request.tone != self.settings.tone || request.extra != self.settings.extraInstruction else { return }
+                self.translate()
+            }.store(in: &preferences)
+        settings.$saveHistoryEnabled.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.historyPreferenceChanged() }.store(in: &preferences)
+        settings.$saveDraftEnabled.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.draftPreferenceChanged() }.store(in: &preferences)
     }
 
     var isTranslating: Bool { state == .translating }
 
     /// Model shown in the bottom bar: always the primary slot's model.
     var activeModel: String {
-        let idx = settings.primaryIndex
+        if versions.indices.contains(shownVersion), !versions[shownVersion].model.isEmpty {
+            return versions[shownVersion].model
+        }
+        let idx = settings.route.stages.first?.slots.first ?? settings.primaryIndex
         guard settings.profiles.indices.contains(idx) else { return L("未配置模型") }
         let model = settings.profiles[idx].model.trimmingCharacters(in: .whitespaces)
         return model.isEmpty ? L("未配置模型") : model
@@ -348,13 +382,13 @@ final class TranslationEngine: ObservableObject {
         guard !input.isEmpty, !settings.multiLanguageMode, !isTranslating else { return }
         flipped.toggle()
         updateDirection()
+        if hasResultSection || escalating { translate() }
     }
 
     /// Explicit target selection for multi-language mode. The auto-detected source is
     /// left alone; if the chosen target equals the source, `updateDirection` re-picks
-    /// (translating into the same language makes no sense). If a translation is in
-    /// flight, `translate()` cancels that request and starts the same input again with
-    /// the newly selected target.
+    /// (translating into the same language makes no sense). Existing results and live
+    /// requests are replaced by a fresh request for the newly selected target.
     ///
     /// The target may be chosen with an empty input: the language grid in Settings is
     /// visible before anything is typed, so a click must register even with no text —
@@ -369,7 +403,7 @@ final class TranslationEngine: ObservableObject {
         // let them select 中文 even before typing anything.
         if target == source, !input.isEmpty { updateDirection() }
         guard target != previousTarget else { return }
-        if isTranslating { translate() }
+        if hasResultSection || escalating { translate() }
     }
 
     /// Applies a change made to the mode flag. The setting is already updated by the
@@ -377,8 +411,10 @@ final class TranslationEngine: ObservableObject {
     /// live request is important here: otherwise the request's captured target and the
     /// picker UI can disagree until the next translation.
     func multiLanguageModeDidChange() {
+        let previousTarget = target
+        flipped = false
         updateDirection()
-        if isTranslating { translate() }
+        if isTranslating || escalating || (target != previousTarget && hasResultSection) { translate() }
     }
 
     // MARK: - Panel language picker
@@ -396,6 +432,12 @@ final class TranslationEngine: ObservableObject {
     /// multi-language mode implicitly — picking a concrete target IS the mode,
     /// there is no separate switch anymore.
     func selectExplicitTarget(_ language: TranslationLanguage) {
+        if flipped {
+            flipped = false
+            let detected = LanguageDetector.detect(input)
+            source = detected.source
+            sourceLabel = detected.sourceLabel
+        }
         if !settings.multiLanguageMode {
             settings.multiLanguageMode = true
             // No multiLanguageModeDidChange() here: setTarget below re-derives the
@@ -439,6 +481,7 @@ final class TranslationEngine: ObservableObject {
     /// preference the user changed in between must not silently apply to half of one
     /// result pair.
     private struct RequestContext {
+        var id = UUID()
         var text: String
         var source: TranslationLanguage
         var sourceLabel: String
@@ -447,6 +490,7 @@ final class TranslationEngine: ObservableObject {
         var extra: String
         var revision: UInt
         var route: TranslationRoute
+        var configs: [Int: APIConfig] = [:]
     }
 
     private var request: RequestContext?
@@ -464,7 +508,12 @@ final class TranslationEngine: ObservableObject {
     /// offering "try a better one" that re-rolls the same model would be a lie.
     var canEscalate: Bool {
         guard state == .done, !escalating, !versions.isEmpty, let request else { return false }
+        guard request.target == target else { return false }
         return request.route.hasHigherTier(after: currentStageIndex)
+    }
+
+    var canRetryResult: Bool {
+        state == .done && !escalating && (outputLanguageMismatch || outputCapped || interrupted)
     }
 
     /// The label of the tier escalation would reach, for the hint that offers it.
@@ -484,6 +533,10 @@ final class TranslationEngine: ObservableObject {
     /// anyone can tell whether they need it. So a fast double-tap on a typo costs
     /// nothing, and there is no 300ms window every ordinary ⏎ has to wait out.
     func submit() {
+        if let request, request.tone != settings.tone || request.extra != settings.extraInstruction {
+            translate()
+            return
+        }
         if canEscalate {
             escalate()
             return
@@ -493,7 +546,7 @@ final class TranslationEngine: ObservableObject {
         // careful online answer back for the local one the user escalated away from —
         // and bill for the privilege. An edit, a tone change, or the retry button in a
         // failed state are the ways forward from here.
-        guard !(state == .done && !versions.isEmpty), !escalating else { return }
+        guard !(state == .done && !versions.isEmpty && !canRetryResult), !escalating else { return }
         translate()
     }
 
@@ -519,7 +572,8 @@ final class TranslationEngine: ObservableObject {
             tone: settings.tone,
             extra: settings.extraInstruction,
             revision: inputRevision,
-            route: route
+            route: route,
+            configs: Dictionary(uniqueKeysWithValues: settings.profiles.indices.map { ($0, settings.config(for: $0)) })
         )
         request = context
         currentStageIndex = 0
@@ -557,16 +611,17 @@ final class TranslationEngine: ObservableObject {
         var lastError: Error?
         var sawEmptyResponse = false
         var attemptedTiers: Set<TranslationTier> = []
-        var attemptedSlotCount = 0
+        var attemptedSlots: Set<Int> = []
         var index = startIndex
 
         while let stage = context.route.stage(at: index) {
+            guard !Task.isCancelled, request?.id == context.id else { return }
             attemptedTiers.insert(stage.tier)
-            attemptedSlotCount += stage.slots.count
-            let outcome = await runStage(stage, context: context)
+            let outcome = await runStage(stage, context: context, attemptedSlots: &attemptedSlots)
             switch outcome {
             case .cancelled:
-                escalating = false
+                // The caller already reset the state; an old task must not clear a
+                // newer request's escalation flag while unwinding cancellation.
                 return
             case .succeeded:
                 currentStageIndex = index
@@ -588,12 +643,15 @@ final class TranslationEngine: ObservableObject {
                 lastError = lastError ?? TranslationError.emptyResponse
             case .failed(let error):
                 lastError = lastError ?? error
+                if error is PartialTranslationFailure || !pendingOutput.isEmpty {
+                    index = context.route.stages.count
+                    continue
+                }
             }
             index += 1
         }
 
         guard !Task.isCancelled, self.inputRevision == context.revision else {
-            escalating = false
             return
         }
         escalating = false
@@ -616,7 +674,7 @@ final class TranslationEngine: ObservableObject {
         self.state = .failed(Self.failureMessage(
             message,
             tiers: attemptedTiers,
-            slotCount: attemptedSlotCount
+            slotCount: attemptedSlots.count
         ))
     }
 
@@ -634,10 +692,11 @@ final class TranslationEngine: ObservableObject {
     }
 
     /// Runs one stage under its own strategy and commits on success.
-    private func runStage(_ stage: RouteStage, context: RequestContext) async -> StreamOutcome {
+    private func runStage(_ stage: RouteStage, context: RequestContext, attemptedSlots: inout Set<Int>) async -> StreamOutcome {
         switch stage.strategy {
         case .single:
             guard let slot = stage.slots.first else { return .emptyResponse }
+            attemptedSlots.insert(slot)
             return await consumeWithRetry(
                 slot: slot, stage: stage, afterFailover: false, context: context
             )
@@ -646,6 +705,7 @@ final class TranslationEngine: ObservableObject {
             var lastError: Error?
             var sawEmptyResponse = false
             for (position, slot) in stage.slots.enumerated() {
+                attemptedSlots.insert(slot)
                 let isLast = position == stage.slots.count - 1
                 let outcome = await consumeWithRetry(
                     slot: slot, stage: stage, afterFailover: position > 0, context: context
@@ -666,13 +726,15 @@ final class TranslationEngine: ObservableObject {
                     // this stage; the buffer is discarded.
                     let clean = pendingOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     resetPendingOutput()
-                    if !clean || isLast { return .failed(error) }
+                    if !clean { return .failed(PartialTranslationFailure(underlying: error)) }
+                    if error is PartialTranslationFailure || isLast { return .failed(error) }
                 }
             }
             if let lastError, !sawEmptyResponse { return .failed(lastError) }
             return sawEmptyResponse ? .emptyResponse : .failed(lastError ?? TranslationError.emptyResponse)
 
         case .concurrent:
+            attemptedSlots.formUnion(stage.slots)
             return await raceStage(stage, context: context)
         }
     }
@@ -707,6 +769,7 @@ final class TranslationEngine: ObservableObject {
         tier: TranslationTier,
         afterFailover: Bool
     ) -> Bool {
+        guard !Task.isCancelled, request?.id == context.id else { return false }
         let raw = pendingOutput
         let bufferWasCapped = pendingOutputCapped
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -738,20 +801,19 @@ final class TranslationEngine: ObservableObject {
             tier: tier,
             languageMismatch: wrongLanguage,
             capped: wasCapped,
-            afterFailover: afterFailover
+            afterFailover: afterFailover,
+            host: context.configs[slot]?.displayHost ?? "",
+            model: context.configs[slot]?.model ?? ""
         )
         // At most one version per tier: escalating twice to the same tier replaces that
         // tier's answer rather than growing a stack the provenance switch cannot show.
-        let supersedes: Bool
         if let existing = versions.firstIndex(where: { $0.tier == tier }) {
             versions[existing] = version
             shownVersion = existing
-            supersedes = versions.count > 1
         } else {
             versions.append(version)
             versions.sort { $0.tier < $1.tier }
             shownVersion = versions.firstIndex(where: { $0.tier == tier }) ?? 0
-            supersedes = versions.count > 1
         }
 
         escalationFailure = nil
@@ -769,8 +831,7 @@ final class TranslationEngine: ObservableObject {
             source: context.source,
             sourceLabel: context.sourceLabel,
             target: context.target,
-            tone: context.tone,
-            replacingNewest: supersedes
+            tone: context.tone
         )
         return true
     }
@@ -786,7 +847,7 @@ final class TranslationEngine: ObservableObject {
         afterFailover: Bool,
         context: RequestContext
     ) async -> StreamOutcome {
-        let config = settings.config(for: slot)
+        let config = context.configs[slot] ?? settings.config(for: slot)
         // Each distinct attempt (and retry) starts with an empty buffer so a backup (or
         // a retry) commits only its own tokens — two models' output is never spliced.
         resetPendingOutput()
@@ -897,6 +958,12 @@ final class TranslationEngine: ObservableObject {
     @discardableResult
     private func appendPendingOutput(_ piece: String) -> Bool {
         guard !piece.isEmpty, !pendingOutputCapped else { return pendingOutputCapped }
+        let bytesLeft = Self.maxOutputBytes - pendingOutput.utf8.count
+        if piece.utf8.count > bytesLeft {
+            pendingOutput += TextBudget.prefix(piece, characters: max(0, Self.maxOutputCharacters - pendingOutput.count), bytes: max(0, bytesLeft))
+            pendingOutputCapped = true
+            return true
+        }
         let remaining = Self.maxOutputCharacters - pendingOutput.count
         guard remaining > 0 else {
             pendingOutputCapped = true
@@ -956,6 +1023,11 @@ final class TranslationEngine: ObservableObject {
         do {
             for try await piece in stream {
                 guard !Task.isCancelled, self.inputRevision == requestRevision else { return .cancelled }
+                let bytesLeft = Self.maxOutputBytes - buffer.utf8.count
+                if piece.utf8.count > bytesLeft {
+                    buffer += TextBudget.prefix(piece, characters: max(0, Self.maxOutputCharacters - buffer.count), bytes: max(0, bytesLeft))
+                    return .completed(buffer, capped: true)
+                }
                 let remaining = Self.maxOutputCharacters - buffer.count
                 if remaining <= 0 {
                     return .completed(buffer, capped: true)
@@ -995,7 +1067,7 @@ final class TranslationEngine: ObservableObject {
         // from inside `addTask` would need to hop back to the main actor anyway —
         // starting the streams up front makes that hop happen once, up front.
         let legs = stage.slots.map { slot in
-            (slot, self.stream(context.text, context.target, context.tone, context.extra, settings.config(for: slot)))
+            (slot, self.stream(context.text, context.target, context.tone, context.extra, context.configs[slot] ?? settings.config(for: slot)))
         }
         return await withTaskGroup(of: (Int, LegOutcome).self) { group -> StreamOutcome in
             for (slot, stream) in legs {
@@ -1189,16 +1261,7 @@ final class TranslationEngine: ObservableObject {
 
     private func copyToPasteboard() -> Bool {
         guard !output.isEmpty else { return false }
-        let pasteboard = NSPasteboard.general
-        let previousString = pasteboard.string(forType: .string)
-        pasteboard.clearContents()
-        let didWrite = pasteboard.setString(output, forType: .string)
-        if !didWrite, let previousString {
-            // Restore the prior text when AppKit rejects the new write, so a failed
-            // copy never destroys the user's existing string clipboard.
-            pasteboard.setString(previousString, forType: .string)
-        }
-        return didWrite
+        return clipboard.write(output)
     }
 
     func copyOutput() {
@@ -1278,47 +1341,50 @@ final class TranslationEngine: ObservableObject {
 
     /// Appends one completed request to the bounded, newest-first history.
     ///
-    /// `replacingNewest` is set by an escalation: it answered the question the newest
-    /// record already answers, so it updates that record instead of filing a second
-    /// entry beside it. Without this, every second opinion would leave history holding
-    /// the same input twice.
-    private func pushHistory(input: String, output: String, source: TranslationLanguage, sourceLabel: String, target: TranslationLanguage, tone: Tone, replacingNewest: Bool = false) {
-        let inputTruncated = input.count > Self.historyFieldCharacterLimit
-        let outputTruncated = output.count > Self.historyFieldCharacterLimit
+    /// The request ID replaces only that request's record when an online version arrives.
+    private func pushHistory(input: String, output: String, source: TranslationLanguage, sourceLabel: String, target: TranslationLanguage, tone: Tone) {
+        guard settings.saveHistoryEnabled else { return }
+        let savedInput = TextBudget.prefix(input, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
+        let savedOutput = TextBudget.prefix(output, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
+        let inputTruncated = savedInput != input
+        let outputTruncated = savedOutput != output
         let record = Record(
-            id: UUID(),
-            input: String(input.prefix(Self.historyFieldCharacterLimit)),
-            output: String(output.prefix(Self.historyFieldCharacterLimit)),
+            id: request?.id ?? UUID(),
+            input: savedInput,
+            output: savedOutput,
             inputTruncated: inputTruncated,
             outputTruncated: outputTruncated,
             sourceLabel: sourceLabel,
             source: source,
             target: target,
             tone: tone,
-            timestamp: Date()
+            timestamp: Date(),
+            versions: versions.map(Self.archivedVersion)
         )
         // Publish the bounded snapshot as one atomic observable change.
-        if replacingNewest, !history.isEmpty {
-            history = Array(([record] + history.dropFirst()).prefix(historyCapacity))
-        } else {
-            history = Array(([record] + history).prefix(historyCapacity))
-        }
+        history = Array(([record] + history.filter { $0.id != record.id }).prefix(historyCapacity))
         saveHistory()
     }
 
     /// Restores a history record into the input/output area. The user is going back
     /// to an earlier point and should start a fresh conversation turn.
     func restoreHistory(_ record: Record) {
+        clearResult()
+        restoringHistory = true
+        defer { restoringHistory = false }
         input = record.input
         output = record.output
         sourceLabel = record.sourceLabel
         source = record.source
         target = record.target
+        settings.tone = record.tone
+        versions = record.versions
+        shownVersion = versions.firstIndex { $0.text == record.output } ?? max(0, versions.count - 1)
         interrupted = false
-        outputCapped = false
+        outputCapped = versions.indices.contains(shownVersion) && versions[shownVersion].capped
         // A restored snapshot is archived text, not a fresh model response: judging it
         // again would only re-litigate a translation the user already accepted.
-        outputLanguageMismatch = false
+        outputLanguageMismatch = versions.indices.contains(shownVersion) && versions[shownVersion].languageMismatch
         restoredFromTruncatedHistory = record.isTruncated
         failureKind = nil
         state = .done
@@ -1326,14 +1392,67 @@ final class TranslationEngine: ObservableObject {
 
     /// Clears all translation history.
     func clearHistory() {
+        rememberDeletion(history)
         history = []
         saveHistory()
+    }
+
+    func deleteHistory(_ id: UUID) {
+        rememberDeletion(history.filter { $0.id == id })
+        history.removeAll { $0.id == id }
+        saveHistory()
+    }
+
+    private func rememberDeletion(_ records: [Record]) {
+        deletedRecordExpiry?.cancel()
+        deletedRecords = records
+        canUndoHistoryDeletion = !records.isEmpty
+        deletedRecordExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.deletedRecords = []
+            self?.canUndoHistoryDeletion = false
+        }
+    }
+
+    func undoHistoryDeletion() {
+        guard settings.saveHistoryEnabled, canUndoHistoryDeletion else { return }
+        let existing = Set(history.map(\.id))
+        history = Array((history + deletedRecords.filter { !existing.contains($0.id) })
+            .sorted { $0.timestamp > $1.timestamp }.prefix(historyCapacity))
+        rememberDeletion([])
+        saveHistory()
+    }
+
+    func historyPreferenceChanged() {
+        guard !settings.saveHistoryEnabled else { return }
+        history = []
+        rememberDeletion([])
+        saveHistory()
+    }
+
+    func draftPreferenceChanged() {
+        draftSaveTask?.cancel()
+        pendingDraftInput = nil
+        saveDraft(settings.saveDraftEnabled ? input : "")
+    }
+
+    func clearDraft() {
+        input = ""
+        flushPendingDraftSave()
+    }
+
+    private static func archivedVersion(_ version: ResultVersion) -> ResultVersion {
+        var result = version
+        result.text = TextBudget.prefix(version.text, characters: historyFieldCharacterLimit, bytes: 32_000)
+        result.capped = version.capped || result.text != version.text
+        return result
     }
 
     // MARK: - File persistence
 
     private func scheduleDraftSave() {
-        guard draftPersistenceEnabled, !isRestoringDraft else { return }
+        guard draftPersistenceEnabled, settings.saveDraftEnabled, !isRestoringDraft else { return }
         pendingDraftInput = input
         draftSaveTask?.cancel()
         let draft = input
@@ -1350,31 +1469,27 @@ final class TranslationEngine: ObservableObject {
 
     private func saveDraft(_ draft: String) {
         do {
-            if draft.isEmpty {
-                if FileManager.default.fileExists(atPath: draftURL.path) {
-                    try FileManager.default.removeItem(at: draftURL)
-                }
-            } else {
-                try FileManager.default.createDirectory(
-                    at: draftURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try Data(draft.utf8).write(to: draftURL, options: .atomic)
-            }
+            try storage.write(draft.isEmpty ? nil : Data(draft.utf8), draftURL)
+            if draft.isEmpty { Log.app.notice("draft cleared") }
             pendingDraftInput = nil
+            persistenceError = nil
         } catch {
+            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("draft write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func loadDraft() {
-        guard draftPersistenceEnabled,
-              let data = try? Data(contentsOf: draftURL),
+        guard draftPersistenceEnabled else { return }
+        Log.app.notice("draft restore enabled=\(self.settings.saveDraftEnabled, privacy: .public)")
+        guard settings.saveDraftEnabled else { saveDraft(""); return }
+        guard let data = loadData(draftURL),
               let draft = String(data: data, encoding: .utf8),
               !draft.isEmpty else { return }
         isRestoringDraft = true
-        input = String(draft.prefix(Self.maxInputCharacters))
+        input = TextBudget.prefix(draft, characters: Self.maxInputCharacters, bytes: Self.maxInputBytes)
         isRestoringDraft = false
+        Log.app.notice("draft restored (bytes=\(self.input.utf8.count, privacy: .public))")
     }
 
     /// Guarantees the latest editor contents land before a normal app termination.
@@ -1403,16 +1518,18 @@ final class TranslationEngine: ObservableObject {
             return
         }
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
+            try storage.write(settings.saveHistoryEnabled ? data : nil, url)
+            persistenceError = nil
         } catch {
+            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("history write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func loadHistory() {
         let url = historyURL
-        guard let data = try? Data(contentsOf: url) else { return }
+        guard settings.saveHistoryEnabled else { saveHistory(); return }
+        guard let data = loadData(url) else { return }
         if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
             history = normalizeLoadedHistory(decoded)
             return
@@ -1428,24 +1545,35 @@ final class TranslationEngine: ObservableObject {
     /// history file cannot make the next synchronous save unbounded again.
     private func normalizeLoadedHistory(_ records: [Record]) -> [Record] {
         records.prefix(historyCapacity).map { record in
-            let inputTruncated = record.input.count > Self.historyFieldCharacterLimit
-            let outputTruncated = record.output.count > Self.historyFieldCharacterLimit
+            let savedInput = TextBudget.prefix(record.input, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
+            let savedOutput = TextBudget.prefix(record.output, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
+            let inputTruncated = savedInput != record.input
+            let outputTruncated = savedOutput != record.output
             return Record(
                 id: record.id,
-                input: String(record.input.prefix(Self.historyFieldCharacterLimit)),
-                output: String(record.output.prefix(Self.historyFieldCharacterLimit)),
+                input: savedInput,
+                output: savedOutput,
                 inputTruncated: record.inputTruncated || inputTruncated,
                 outputTruncated: record.outputTruncated || outputTruncated,
                 sourceLabel: record.sourceLabel,
                 source: record.source,
                 target: record.target,
                 tone: record.tone,
-                timestamp: record.timestamp
+                timestamp: record.timestamp,
+                versions: Array(record.versions.prefix(2)).map(Self.archivedVersion)
             )
         }
     }
 
     /// Wrapper that tolerates individual corrupt entries during history load.
+    private func loadData(_ url: URL) -> Data? {
+        do { return try storage.read(url) }
+        catch {
+            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
+            return nil
+        }
+    }
+
     private struct LossyRecord: Decodable {
         let record: Record?
         init(from decoder: Decoder) throws {

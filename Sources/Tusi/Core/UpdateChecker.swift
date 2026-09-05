@@ -43,6 +43,21 @@ final class UpdateChecker: ObservableObject {
 
     private var checkTask: Task<Void, Never>?
     private var activeCheckID = UUID()
+    private var automaticTask: Task<Void, Never>?
+
+    func setAutomaticChecking(_ enabled: Bool) {
+        automaticTask?.cancel()
+        automaticTask = nil
+        guard enabled, !isPreview else { return }
+        check(manual: false)
+        automaticTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(6 * 3600)) }
+                catch { return }
+                self?.check(manual: false)
+            }
+        }
+    }
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -128,6 +143,7 @@ final class UpdateChecker: ObservableObject {
 
     deinit {
         checkTask?.cancel()
+        automaticTask?.cancel()
     }
 
     /// True when `candidate` is a strictly higher semantic version than `current`.

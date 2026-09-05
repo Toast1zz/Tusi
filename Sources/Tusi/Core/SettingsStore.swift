@@ -66,9 +66,24 @@ struct APIProfile: Equatable, Sendable {
     var isUsable: Bool { config.isUsable }
 }
 
+struct CredentialStorage {
+    var load: () throws -> [Int: String]
+    var save: ([Int: String]) throws -> Void
+
+    static var live: CredentialStorage {
+        CredentialStorage(
+            load: { try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys() },
+            save: { try Keychain.saveKeys($0) }
+        )
+    }
+}
+
 @MainActor
 final class SettingsStore: ObservableObject {
     private let defaults: UserDefaults
+    private let credentialStorage: CredentialStorage?
+    private var loadedKeys: [Int: String]?
+    private var applyingLoadedKeys = false
     /// TUSI_PREVIEW runs against a throwaway suite and never touches the Keychain,
     /// so screenshot runs can't clobber real credentials. Read by TranslationEngine
     /// too, so preview runs keep their history in a scratch location as well.
@@ -142,6 +157,12 @@ final class SettingsStore: ObservableObject {
     @Published var autoCopy: Bool {
         didSet { defaults.set(autoCopy, forKey: "autoCopy") }
     }
+    @Published var saveHistoryEnabled: Bool {
+        didSet { defaults.set(saveHistoryEnabled, forKey: "saveHistoryEnabled") }
+    }
+    @Published var saveDraftEnabled: Bool {
+        didSet { defaults.set(saveDraftEnabled, forKey: "saveDraftEnabled") }
+    }
     @Published var autoCheckUpdates: Bool {
         didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") }
     }
@@ -173,13 +194,35 @@ final class SettingsStore: ObservableObject {
     }
 
     func shortcut(_ action: ShortcutAction) -> KeyCombo? {
-        if disabledShortcuts.contains(action) { return nil }
-        return shortcuts[action] ?? action.defaultCombo
+        Self.shortcut(action, shortcuts: shortcuts, disabled: disabledShortcuts)
+    }
+
+    static func shortcut(_ action: ShortcutAction, shortcuts: [ShortcutAction: KeyCombo], disabled: Set<ShortcutAction>) -> KeyCombo? {
+        disabled.contains(action) ? nil : (shortcuts[action] ?? action.defaultCombo)
     }
 
     func setShortcut(_ combo: KeyCombo, for action: ShortcutAction) {
         disabledShortcuts.remove(action)
         shortcuts[action] = combo
+    }
+
+    func shortcutConflict(_ combo: KeyCombo, for action: ShortcutAction) -> ShortcutAction? {
+        ShortcutAction.allCases.first {
+            $0 != action && shortcut($0).map { KeyCombo.sameKey($0, combo) } == true
+        }
+    }
+
+    func restoreShortcut(_ action: ShortcutAction) -> String? {
+        if let conflict = shortcutConflict(action.defaultCombo, for: action) {
+            return String(format: L("与「%@」重复了"), conflict.label)
+        }
+        setShortcut(action.defaultCombo, for: action)
+        return nil
+    }
+
+    func commandLabel(_ title: String, action: ShortcutAction) -> String {
+        guard let combo = shortcut(action) else { return title }
+        return "\(title) (\(combo.display))"
     }
 
     /// Unbinds a shortcut entirely (empty state). The previous combo is kept in
@@ -210,8 +253,9 @@ final class SettingsStore: ObservableObject {
         }
     }
     @Published private(set) var launchAtLoginError: String?
-    init(preview: Bool? = nil) {
+    init(preview: Bool? = nil, credentialStorage: CredentialStorage? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
+        self.credentialStorage = credentialStorage ?? (isPreview ? nil : .live)
         if isPreview {
             let suite = "com.tusi.preview.scratch"
             UserDefaults.standard.removePersistentDomain(forName: suite)
@@ -225,6 +269,8 @@ final class SettingsStore: ObservableObject {
         routeStart = routing.start
         onlineStrategy = routing.strategy
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
+        saveHistoryEnabled = defaults.object(forKey: "saveHistoryEnabled") as? Bool ?? true
+        saveDraftEnabled = defaults.object(forKey: "saveDraftEnabled") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
         multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
@@ -238,13 +284,14 @@ final class SettingsStore: ObservableObject {
         shortcuts = Self.loadShortcuts(defaults: defaults)
         disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if isPreview {
-            profiles = [APIProfile(), APIProfile(), APIProfile()]
-        } else {
-            let loaded = Self.loadProfiles(defaults: defaults)
+        if let storage = self.credentialStorage {
+            let loaded = Self.loadProfiles(defaults: defaults, storage: storage)
             profiles = loaded.profiles
             keychainError = loaded.keychainError
             keychainErrorIsRetryable = loaded.retryable
+            loadedKeys = loaded.keys
+        } else {
+            profiles = [APIProfile(), APIProfile(), APIProfile()]
         }
 
         // Sync the persisted sound preference into the shared player after every stored
@@ -342,7 +389,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private static func loadProfiles(defaults: UserDefaults) -> (profiles: [APIProfile], keychainError: String?, retryable: Bool) {
+    private static func loadProfiles(defaults: UserDefaults, storage: CredentialStorage) -> (profiles: [APIProfile], keychainError: String?, retryable: Bool, keys: [Int: String]?) {
         // Pre-slot installs kept the primary's URL and model under unsuffixed keys.
         if !defaults.bool(forKey: "didMigrateProfiles") {
             defaults.set(true, forKey: "didMigrateProfiles")
@@ -356,15 +403,20 @@ final class SettingsStore: ObservableObject {
 
         // One read for both slots — see Keychain for why that matters.
         let keys: [Int: String]
+        let snapshot: [Int: String]?
         let keychainError: String?
         let retryable: Bool
         do {
-            keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+            keys = try storage.load()
+            snapshot = keys
             keychainError = nil
             retryable = false
         } catch {
             Log.keychain.error("keychain load failed: \(error.localizedDescription, privacy: .public)")
             keys = [:]
+            // Corrupt data was read, but cannot be decoded. Preserve the existing
+            // recovery contract: an explicit new key may replace that broken blob.
+            snapshot = (error as? KeychainError) == .invalidData ? [:] : nil
             keychainError = error.localizedDescription
             retryable = Self.isRetryableKeychainFailure(error)
         }
@@ -378,7 +430,7 @@ final class SettingsStore: ObservableObject {
                 outputProtocolPreference: loadOutputProtocolPreference(defaults: defaults, index: index)
             )
         }
-        return (profiles, keychainError, retryable)
+        return (profiles, keychainError, retryable, snapshot)
     }
 
     /// A locked Keychain resolves itself on unlock, and a denied prompt can be granted on
@@ -398,7 +450,7 @@ final class SettingsStore: ObservableObject {
     }
 
     private func persistProfiles(previous: [APIProfile]) {
-        guard !isPreview else { return }
+        guard !applyingLoadedKeys else { return }
 
         let preferencesChanged = profiles.count != previous.count
             || zip(profiles, previous).contains {
@@ -407,19 +459,20 @@ final class SettingsStore: ObservableObject {
                     || $0.providerOrder != $1.providerOrder
                     || $0.outputProtocolPreference != $1.outputProtocolPreference
             }
-        if preferencesChanged {
+        if preferencesChanged, !isPreview {
             pendingProfiles = profiles
             scheduleProfileSave()
         }
 
         let keysChanged = profiles.count != previous.count
             || zip(profiles, previous).contains { $0.apiKey != $1.apiKey }
-        if keysChanged {
-            // Merge into existing pending dict instead of replacing: rapid edits to both
-            // slots (within the debounce window) would otherwise lose the first slot's key.
+        if keysChanged, credentialStorage != nil {
+            // Empty means deletion only for a slot the user actually changed.
             if pendingKeychainKeys == nil { pendingKeychainKeys = [:] }
             for (offset, profile) in profiles.enumerated() {
-                pendingKeychainKeys?[offset] = profile.apiKey
+                if !previous.indices.contains(offset) || previous[offset].apiKey != profile.apiKey {
+                    pendingKeychainKeys?[offset] = profile.apiKey
+                }
             }
             scheduleKeychainSave()
         }
@@ -476,9 +529,19 @@ final class SettingsStore: ObservableObject {
     }
 
     private func saveKeychain(_ keys: [Int: String]) {
+        guard let credentialStorage else { return }
         do {
-            try Keychain.saveKeys(keys)
+            // A failed initial read leaves the snapshot unknown. Recover it before
+            // merging edits, never replace unknown slots with empty UI fields.
+            var merged = try loadedKeys ?? credentialStorage.load()
+            for (slot, key) in keys {
+                if key.isEmpty { merged.removeValue(forKey: slot) }
+                else { merged[slot] = key }
+            }
+            try credentialStorage.save(merged)
+            loadedKeys = merged
             pendingKeychainKeys = nil
+            applyLoadedKeys(merged)
             keychainError = nil
             keychainErrorIsRetryable = false
             flashKeychainSaved()
@@ -500,25 +563,25 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Re-reads API keys from the Keychain when every profile is currently missing one.
-    /// A login-item launch before the first unlock of a boot reads an empty Keychain;
-    /// once the system unlocks, the session observer calls this so the keys appear
-    /// without a restart. Existing (typed-but-unsaved) keys win; preview mode never
-    /// touches the Keychain.
+    /// Recover an unknown snapshot or pending write on unlock, even when local
+    /// translation already works. Normal previews have no credential storage.
     func reloadKeysIfMissing() {
-        guard !isPreview, !isConfigured else { return }
+        guard credentialStorage != nil, loadedKeys == nil || pendingKeychainKeys != nil else { return }
         retryLoadKeys()
     }
 
-    /// Reads the Keychain again and backfills any missing keys. Separate from
-    /// `reloadKeysIfMissing` so the settings page can offer an explicit retry after a
-    /// locked or denied read — that button has to work even once one slot happens to be
-    /// filled in, which is exactly the case `reloadKeysIfMissing` skips.
+    /// Pending user edits must be saved before a successful read can clear the error.
     func retryLoadKeys() {
-        guard !isPreview else { return }
+        guard let credentialStorage else { return }
+        if let pendingKeychainKeys {
+            keychainSaveTask?.cancel()
+            keychainSaveTask = nil
+            saveKeychain(pendingKeychainKeys)
+            return
+        }
         let keys: [Int: String]
         do {
-            keys = try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys()
+            keys = try credentialStorage.load()
         } catch {
             keychainError = error.localizedDescription
             keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
@@ -530,7 +593,13 @@ final class SettingsStore: ObservableObject {
         // to a user who has since unlocked it.
         keychainError = nil
         keychainErrorIsRetryable = false
-        guard !keys.isEmpty else { return }
+        loadedKeys = keys
+        applyLoadedKeys(keys)
+    }
+
+    private func applyLoadedKeys(_ keys: [Int: String]) {
+        applyingLoadedKeys = true
+        defer { applyingLoadedKeys = false }
         for (index, profile) in profiles.enumerated() {
             // Only backfill remote profiles: a loopback (local) profile has no key by
             // design, and a stale key from an earlier remote configuration of the same
@@ -617,7 +686,7 @@ final class SettingsStore: ObservableObject {
     /// route simply begins online, exactly as it would if the preference were unset.
     var route: TranslationRoute {
         var stages: [RouteStage] = []
-        if routeStart == .local, localAvailable {
+        if localAvailable, routeStart == .local || !onlineAvailable {
             stages.append(RouteStage(tier: .local, slots: [Self.localProfileIndex], strategy: .single))
         }
         if let onlineStage {
@@ -647,7 +716,7 @@ final class SettingsStore: ObservableObject {
     /// leaving just the brand: "api.deepseek.com" → "deepseek",
     /// "openrouter.ai" → "openrouter". IPs and single-label hosts (localhost, a bare
     /// LAN address) have no such structure and are returned unchanged.
-    private static func shortHostName(_ host: String) -> String {
+    static func shortHostName(_ host: String) -> String {
         var parts = host.split(separator: ".").map(String.init)
         guard parts.count > 1, !parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) else {
             return host

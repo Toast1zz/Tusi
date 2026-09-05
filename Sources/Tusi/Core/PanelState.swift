@@ -24,6 +24,7 @@ final class PanelState: ObservableObject {
     @Published var showLanguagePicker = false
     /// Current panel content width. Starts at 470 and persists across launches.
     @Published var panelWidth: CGFloat = 470
+    @Published var availableHeight: CGFloat = 760
 
     struct PendingShortcut: Equatable {
         let action: ShortcutAction

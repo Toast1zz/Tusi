@@ -2,6 +2,27 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-09-05
+
+### Fixed
+
+- Reject incomplete and malformed translation streams while accepting valid usage trailers. Structured mid-stream failures cannot silently retry or switch providers.
+- Preserve unread credentials during key edits and retry failed saves correctly, including unlock recovery when a local model is available.
+- Keep target changes, retries, history restoration, global shortcuts and connection-test cancellation consistent with the active request.
+- Snapshot result providers and models, count only attempted services in failures, bound stream buffers and storage reads, and keep upstream error details private in logs.
+
+### Added
+
+- Both local and online versions in history, with provider/model snapshots, single-record deletion and a short undo window.
+- Independent history and draft retention controls, draft clearing, and visible local-save failures.
+
+### Changed
+
+- Connection tests use the same protocol negotiation as translations, with at most two requests. Provider order is part of the capability cache identity.
+- Settings place routes beside service configuration. Shortcut labels follow bindings and restoring defaults checks conflicts.
+- Input and result viewports adapt to the screen height. The panel uses native popover material for readable text over busy backgrounds, without a custom highlight gradient.
+- Automatic update checks run at startup and every six hours while enabled.
+
 ## [1.12.3] - 2026-09-05
 
 ### Changed
