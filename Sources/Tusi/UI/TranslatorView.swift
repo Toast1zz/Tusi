@@ -188,6 +188,16 @@ struct TranslatorView: View {
     // only to keep the window inside `clampedPanelHeight` — not as an editorial decision
     // about how much translation is worth showing.
     private var maxInputHeight: CGFloat { 6 * editorLineStep }
+
+    /// The empty panel's input box: two grid cells, not one.
+    ///
+    /// This used to be a bare `24` — more than one editor line (21) and less than the
+    /// control row beneath it (26), which made the thing the panel exists to be typed into
+    /// the smallest element on screen. The panel read as a toolbar with a slot attached,
+    /// and at 485 × 86 it was a 5.6:1 letterbox. Two cells puts the weight back on the
+    /// input, gives the placeholder room, and matches what is actually pasted here — text
+    /// that is one line is the exception.
+    private var minInputHeight: CGFloat { 2 * editorLineStep }
     private var maxResultHeight: CGFloat { 24 * lineStep }
 
     private var editorTextWidth: CGFloat { panelState.panelWidth - 32 - 10 }
@@ -375,7 +385,7 @@ struct TranslatorView: View {
                     // and bottom rows were cut through the glyphs at some scroll positions
                     // and not others.
                     .snapsScrollToLines(step: editorLineStep)
-                    .frame(height: min(max(height, 24), maxInputHeight))
+                    .frame(height: min(max(height, minInputHeight), maxInputHeight))
             }
 
             if engine.inputWasTruncated {
@@ -488,64 +498,54 @@ struct TranslatorView: View {
                 .transition(.opacity)
         default:
             VStack(alignment: .leading, spacing: 8) {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        // The scroll anchor rides on the text itself — a separate spacer
-                        // child would add implicit VStack spacing and clip the top.
-                        Text(engine.output)
-                            .font(Theme.contentFont)
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                            // Matches TextEditor's default 5pt NSTextView line-fragment
-                            // inset (see the input placeholder's identical padding and
-                            // editorTextWidth's -10 above) so the result text's left
-                            // edge lines up with the input's, instead of sitting 5pt
-                            // further left.
-                            .padding(.leading, 5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                GeometryReader { geometry in
-                                    Color.clear.preference(key: ResultHeightKey.self, value: geometry.size.height)
-                                }
-                            )
-                            .id("end")
-                    }
-                    // The last holdout of the three scrollers in this panel, and the
-                    // only one still asking for an automatic indicator: macOS reserves an
-                    // opaque white gutter for it when the system is drawing legacy
-                    // scrollers (a mouse is attached), which against this transparent
-                    // panel is a white bar down the side of the translation. The input
-                    // editor and the history list already answer this the same way, for
-                    // the same reason. Trackpad, wheel and keyboard scrolling are
-                    // untouched; only the indicator goes.
-                    .scrollIndicators(.never)
-                    // Same trailing gap as the input, on the `Text` grid: a result long
-                    // enough to scroll is auto-scrolled to its tail on every chunk, which
-                    // is precisely the state that puts the last line against the clip edge.
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        Color.clear.frame(height: textLineGap)
-                    }
-                    // Same treatment on the `Text` grid: a result long enough to scroll is
-                    // read by scrolling, and a hand-scrolled result has the same problem.
-                    .snapsScrollToLines(step: lineStep)
-                    .frame(height: min(max(resultHeight + textLineGap, 20), maxResultHeight))
-                    // A translation longer than the panel can be has to say so, or it
-                    // reads as one that simply stops mid-sentence — which is exactly how
-                    // it read once the system scroller (an opaque white gutter against
-                    // this panel) was taken away. The last line fades instead: it says
-                    // "there is more" in the panel's own vocabulary, costs no width, and
-                    // goes away the moment the text is fully scrolled.
-                    .mask(resultOverflows && !isAtBottom ? AnyView(fadeOutBottom) : AnyView(Rectangle()))
-                    .trackBottomEdge($isAtBottom)
-                    .onPreferenceChange(ResultHeightKey.self) { height in
-                        HeightTrace.log("result text \(height)")
-                        resultHeight = height
-                    }
-                    .onChange(of: engine.output) { _, _ in
-                        if engine.isTranslating, isAtBottom {
-                            proxy.scrollTo("end", anchor: .bottom)
-                        }
-                    }
+                ScrollView(.vertical) {
+                    Text(engine.output)
+                        .font(Theme.contentFont)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                        // Matches TextEditor's default 5pt NSTextView line-fragment
+                        // inset (see the input placeholder's identical padding and
+                        // editorTextWidth's -10 above) so the result text's left
+                        // edge lines up with the input's, instead of sitting 5pt
+                        // further left.
+                        .padding(.leading, 5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: ResultHeightKey.self, value: geometry.size.height)
+                            }
+                        )
+                }
+                // The last holdout of the three scrollers in this panel, and the
+                // only one still asking for an automatic indicator: macOS reserves an
+                // opaque white gutter for it when the system is drawing legacy
+                // scrollers (a mouse is attached), which against this transparent
+                // panel is a white bar down the side of the translation. The input
+                // editor and the history list already answer this the same way, for
+                // the same reason. Trackpad, wheel and keyboard scrolling are
+                // untouched; only the indicator goes.
+                .scrollIndicators(.never)
+                // Same trailing gap as the input, on the `Text` grid: a result long
+                // enough to scroll is read by scrolling to its end, which is precisely
+                // the state that puts the last line against the clip edge.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: textLineGap)
+                }
+                // Same treatment on the `Text` grid: a result long enough to scroll is
+                // read by scrolling, and a hand-scrolled result has the same problem.
+                .snapsScrollToLines(step: lineStep)
+                .frame(height: min(max(resultHeight + textLineGap, 20), maxResultHeight))
+                // A translation longer than the panel can be has to say so, or it
+                // reads as one that simply stops mid-sentence — which is exactly how
+                // it read once the system scroller (an opaque white gutter against
+                // this panel) was taken away. The last line fades instead: it says
+                // "there is more" in the panel's own vocabulary, costs no width, and
+                // goes away the moment the text is fully scrolled.
+                .mask(resultOverflows && !isAtBottom ? AnyView(fadeOutBottom) : AnyView(Rectangle()))
+                .trackBottomEdge($isAtBottom)
+                .onPreferenceChange(ResultHeightKey.self) { height in
+                    HeightTrace.log("result text \(height)")
+                    resultHeight = height
                 }
 
                 // Where this came from, and the offer of a better one — under the

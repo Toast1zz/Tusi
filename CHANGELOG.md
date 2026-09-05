@@ -2,6 +2,26 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.3] - 2026-09-05
+
+### Changed
+
+- **The empty panel is no longer a letterbox.** At 485 × 86 it was 5.6:1, and the reason was
+  the input box: its floor was a bare `24`, more than one editor line (21) and less than the
+  control row beneath it (26), so the thing the panel exists to be typed into was the
+  smallest element on screen and the whole panel read as a toolbar with a slot attached. The
+  floor is two line-grid cells now — the same vocabulary the caps have used since 1.12.1 —
+  which makes the panel 485 × 104, and the input the element it should have been all along.
+  The width is untouched: 470 is what the bottom bar's own controls measure, and a panel
+  that changed width on summon would be worse than a flat one
+
+### Removed
+
+- The result's auto-scroll-to-tail, left over from a panel that revealed the translation
+  token by token. Output has been published in one step for several versions — it is only
+  ever assigned as the state becomes `.done` — so the condition it waited for could not
+  happen, and the comment beside it described behaviour that no longer existed
+
 ## [1.12.2] - 2026-09-03
 
 ### Fixed
@@ -438,6 +458,7 @@ First tagged release.
 - Customizable shortcuts and English localization
 - In-app update check against GitHub Releases (prompts, never auto-installs)
 
+[1.12.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.3
 [1.12.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.2
 [1.12.1]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.1
 [1.12.0]: https://github.com/Toast1zz/Tusi/releases/tag/v1.12.0
