@@ -127,6 +127,7 @@ final class SoundPlayer {
 
     /// Retained handle for the playing cue. Holds the AVAudioPlayer and its delegate;
     /// `stop()` silences it immediately.
+    @MainActor
     final class Handle: NSObject, AVAudioPlayerDelegate {
         fileprivate let player: AVAudioPlayer
         fileprivate var onCompletion: (() -> Void)?
@@ -141,7 +142,7 @@ final class SoundPlayer {
             player.stop()
         }
 
-        func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
             DispatchQueue.main.async { [weak self] in
                 self?.onCompletion?()
             }

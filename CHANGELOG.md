@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-09-05
+
+### Fixed
+
+- Explicitly isolate the sound playback handle on the main actor and hop audio completion callbacks back to it. This passes strict concurrency checks on Xcode 26.6 as well as the newer local toolchain.
+- CI now uses macOS 26 with Xcode 26.6 to match the SDK required by the existing native controls. The app runtime requirement remains macOS 14+.
+
 ## [1.13.0] - 2026-09-05
 
 ### Fixed
