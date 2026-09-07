@@ -2,6 +2,20 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-09-07
+
+### Added
+
+- Discover local GGUF models from the existing Tusi llama-server model directory and select them from a native dropdown, with refresh and actual loaded-model status.
+- Switch managed local models serially: unload the previous LaunchAgent, wait for its process to exit, then load and verify the selected model. Failed loads attempt to restore the previous model after stopping the failed service.
+- Guard model switching with a process lock and disable overlapping translation, connection testing and model selection during a switch.
+
+### Changed
+
+- Move manual local endpoint and model fields into Advanced options. Automatic management uses the existing com.tusi.llamaserver LaunchAgent on 127.0.0.1:8080; other local services remain manually configurable.
+- Apply the MiLMMT translation template when present and remove its overrides when switching to other models. Model files and inference runtimes are not bundled.
+- Add model discovery and argument regression tests, an opt-in real-service switching test, and local settings layout coverage.
+
 ## [1.13.2] - 2026-09-05
 
 ### Changed

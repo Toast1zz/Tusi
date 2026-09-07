@@ -37,7 +37,7 @@ final class NativeLayoutTests: XCTestCase {
     func testCompactNativeSurfacesRenderWithinHeightBudget() async throws {
         for width: CGFloat in [470, 700] {
             for dark in [false, true] {
-                for page in ["translator", "settings", "advanced", "translation", "general", "shortcuts"] {
+                for page in ["translator", "settings", "local", "advanced", "translation", "general", "shortcuts"] {
                     let settings = SettingsStore(preview: true)
                     settings.autoCopy = false
                     settings.soundEnabled = false
@@ -51,6 +51,7 @@ final class NativeLayoutTests: XCTestCase {
                     state.availableHeight = 520
                     state.showSettings = page != "translator"
                     state.showShortcuts = page == "shortcuts"
+                    if page == "local" { state.settingsProfileIndex = SettingsStore.localProfileIndex }
                     if page == "translation" { state.settingsSection = .translation }
                     if page == "general" { state.settingsSection = .general }
                     if page == "advanced" { state.settingsAdvancedProfiles = [0] }
@@ -75,7 +76,7 @@ final class NativeLayoutTests: XCTestCase {
                     }
                     XCTAssertGreaterThan(measured, 0)
                     if page == "translator" { XCTAssertLessThanOrEqual(measured, 520) }
-                    if ["settings", "advanced", "translation", "general"].contains(page) {
+                    if ["settings", "local", "advanced", "translation", "general"].contains(page) {
                         XCTAssertGreaterThan(measured, 240)
                         XCTAssertLessThanOrEqual(measured, SettingsView.maximumHeight(availableHeight: 520) + 1)
                         print("SETTINGS_LAYOUT \(page) width=\(width) height=\(measured)")

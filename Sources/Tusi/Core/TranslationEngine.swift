@@ -551,6 +551,7 @@ final class TranslationEngine: ObservableObject {
     }
 
     func translate() {
+        guard !LocalModelManager.shared.isSwitching else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -591,6 +592,7 @@ final class TranslationEngine: ObservableObject {
     /// rather than discarded, because it is not a failure, it is just the one the user
     /// wants a second opinion on.
     func escalate() {
+        guard !LocalModelManager.shared.isSwitching else { return }
         guard canEscalate,
               let context = request,
               let next = context.route.nextHigherStage(after: currentStageIndex)

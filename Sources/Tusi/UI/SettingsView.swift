@@ -11,6 +11,7 @@ private struct SettingsHeaderHeightKey: PreferenceKey {
 }
 
 struct SettingsView: View {
+    @ObservedObject private var localModels = LocalModelManager.shared
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
@@ -90,6 +91,9 @@ struct SettingsView: View {
                         slotTabs
 
                         VStack(alignment: .leading, spacing: 12) {
+                            if isEditingLocalSlot {
+                                localModelPicker
+                            } else {
                             labeledField("接口地址", focused: focusedField == .baseURL) {
                                 TextField(
                                     "https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL
@@ -105,6 +109,7 @@ struct SettingsView: View {
                                     .font(Theme.bodyMonospaced)
                                     .focused($focusedField, equals: .model)
                                     .accessibilityLabel("模型")
+                            }
                             }
                             if isCurrentProfileLocal {
                                 // Local (loopback) inference servers don't take an API key — Ollama,
@@ -283,6 +288,9 @@ struct SettingsView: View {
             .onPreferenceChange(SettingsContentHeightKey.self) { if $0 > 0 { contentHeight = $0 } }
         }
         .padding(18)
+        .task {
+            if !settings.isPreview { await localModels.refresh(settings: settings) }
+        }
         .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
         .background(
             GeometryReader { proxy in
@@ -312,6 +320,44 @@ struct SettingsView: View {
     }
 
     // MARK: - Header
+
+    private var localModelPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("本地模型").font(Theme.footnoteMedium).foregroundStyle(.secondary)
+                Spacer()
+                Button { Task { await localModels.refresh(settings: settings) } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .help("刷新模型列表")
+                .disabled(localModels.isSwitching)
+            }
+            Picker("本地模型", selection: Binding(
+                get: { localModels.activeID },
+                set: { localModels.select($0, settings: settings) }
+            )) {
+                Text("选择模型").tag("")
+                ForEach(localModels.models) { model in
+                    Text(model.label).tag(model.id)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
+            HStack(spacing: 6) {
+                if localModels.isSwitching { ProgressView().controlSize(.small) }
+                Text(localModels.status).font(Theme.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error = localModels.error {
+                Text(error).font(Theme.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     @ViewBuilder
     private var categoryPicker: some View {
@@ -764,6 +810,18 @@ struct SettingsView: View {
 
             Disclosure(isExpanded: showAdvanced) {
                 VStack(alignment: .leading, spacing: 8) {
+                    if isEditingLocalSlot {
+                        labeledField("接口地址", focused: focusedField == .baseURL) {
+                            TextField("http://127.0.0.1:8080/v1", text: $settings.profiles[safeEditingIndex].baseURL)
+                                .textFieldStyle(.plain).font(Theme.bodyMonospaced)
+                                .focused($focusedField, equals: .baseURL)
+                        }
+                        labeledField("模型", focused: focusedField == .model) {
+                            TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
+                                .textFieldStyle(.plain).font(Theme.bodyMonospaced)
+                                .focused($focusedField, equals: .model)
+                        }
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("输出协议")
@@ -806,6 +864,7 @@ struct SettingsView: View {
                 // fold — a collapsed `Disclosure` is zero-height, but a sibling gap is
                 // not, and it would leave a hole under a closed section.
                 .padding(.top, 8)
+                .disabled(isEditingLocalSlot && localModels.isSwitching)
             }
         }
         // The chevron, the fields and the panel's own height all move on this one
@@ -957,7 +1016,7 @@ struct SettingsView: View {
             .foregroundStyle(Theme.accent)
         }
         .controlSize(.large)
-        .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable)
+        .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable || localModels.isSwitching)
         .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
         .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
     }

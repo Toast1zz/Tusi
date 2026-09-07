@@ -50,6 +50,13 @@ Open Settings (⌘,) and fill in a profile:
 - Provider preference order (optional) — OpenRouter's `provider.order`, e.g. `novita`. It is a
   preference, not a restriction: OpenRouter may still fall back to a provider you did not list.
 
+The local slot can discover GGUF files and switch models through an existing
+`~/Library/LaunchAgents/com.tusi.llamaserver.plist` service bound to
+`127.0.0.1:8080`. Switching unloads the previous process before loading the next;
+the dropdown reports the model actually served by the endpoint. The runtime and
+model files must already be installed. Other local servers can still be configured
+manually under Advanced options.
+
 There are two remote profiles, primary and backup, plus a third slot for a local model
 (Ollama, LM Studio, llama.cpp-server). How they are used is one section on the Settings
 page, "翻译路线", with two questions:
