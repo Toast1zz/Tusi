@@ -192,15 +192,9 @@ struct TranslatorView: View {
         return lines * editorLineStep
     }
 
-    /// The empty panel's input box: two grid cells, not one.
-    ///
-    /// This used to be a bare `24` — more than one editor line (21) and less than the
-    /// control row beneath it (26), which made the thing the panel exists to be typed into
-    /// the smallest element on screen. The panel read as a toolbar with a slot attached,
-    /// and at 485 × 86 it was a 5.6:1 letterbox. Two cells puts the weight back on the
-    /// input, gives the placeholder room, and matches what is actually pasted here — text
-    /// that is one line is the exception.
-    private var minInputHeight: CGFloat { 2 * editorLineStep }
+    /// One grid cell for empty or single-line input; measurement adds rows only
+    /// when text wraps or the user inserts a newline.
+    private var minInputHeight: CGFloat { editorLineStep }
     private var maxResultHeight: CGFloat {
         let budget = panelState.availableHeight - min(inputHeight, maxInputHeight) - 240
             - (panelState.showLanguagePicker ? 40 : 0)

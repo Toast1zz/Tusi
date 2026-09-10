@@ -2,6 +2,12 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.3] - 2026-09-10
+
+### Fixed
+
+- Use a single-line minimum input height. Empty and one-line input no longer reserve a blank second row; wrapping and explicit newlines still grow the editor naturally.
+
 ## [1.14.2] - 2026-09-10
 
 ### Added
@@ -550,3 +556,4 @@ First tagged release.
 [1.4.3]: https://github.com/Toast1zz/Tusi/releases/tag/1.4.3
 
 [1.14.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.2
+[1.14.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.3
