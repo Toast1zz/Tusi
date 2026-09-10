@@ -9,13 +9,8 @@ final class FloatingPanel: NSPanel {
 
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
-    // On `Theme.panelMinWidth` (470): that number covers Chinese, whose bottom bar needs
-    // 461.5pt including margins — but NOT English, which measures 523.5pt (the tone labels
-    // Casual/Standard/Formal and "Copy" are all wider than 口语/标准/正式 and 复制). An
-    // earlier note here credited 428.5pt to English; that was the Chinese figure, and it
-    // is why 470 still clipped. Rather than raise the constant for every user to suit the
-    // widest localisation, the content now reports what it needs (`PanelContentWidthKey`)
-    // and `contentMinWidth` widens the window to match, so 470 is a floor, not a promise.
+    // Compact draft widths come from measured controls. Reading/settings widths
+    // retain the user's saved preference and the established readable minimum.
 
     private let panel: FloatingPanel
     private let engine: TranslationEngine
@@ -40,12 +35,19 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// `PanelContentWidthKey`. Distinct from `settings.panelWidth`, which is the width the
     /// *user* chose: the effective width is the larger of the two, so a wider localisation
     /// widens the window instead of squeezing the controls against a fixed frame.
-    private var contentMinWidth: CGFloat = Theme.panelMinWidth
+    private var contentMinWidth: CGFloat = Theme.compactPanelMinWidth
+    private var emptyResizeTask: Task<Void, Never>?
 
     /// The width the panel should actually use: the user's preference, never narrower than
     /// the content needs, never outside the design bounds.
     private var effectiveWidth: CGFloat {
-        min(max(settings.panelWidth, contentMinWidth), Theme.panelMaxWidth)
+        Self.resolvedWidth(saved: settings.panelWidth, controls: contentMinWidth,
+                           compact: panelState.usesCompactWidth, manual: panelState.manualDraftWidth)
+    }
+
+    static func resolvedWidth(saved: CGFloat, controls: CGFloat, compact: Bool, manual: CGFloat? = nil) -> CGFloat {
+        let preferred = compact ? (manual ?? Theme.compactPanelMinWidth) : max(Theme.panelMinWidth, saved)
+        return min(max(preferred, controls), Theme.panelMaxWidth)
     }
     private var hasShownOnce = false
 
@@ -83,7 +85,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         self.updateChecker = updateChecker
         self.statusItem = statusItem
 
-        let width = min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
+        let width = panelState.usesCompactWidth ? Theme.compactPanelMinWidth : min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
         panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView, .resizable],
@@ -93,10 +95,9 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         super.init()
 
-        settings.panelWidth = width
         panelState.panelWidth = width
         panel.delegate = self
-        panel.minSize = NSSize(width: Theme.panelMinWidth, height: Self.minimumPanelHeight)
+        panel.minSize = NSSize(width: Theme.compactPanelMinWidth, height: Self.minimumPanelHeight)
         panel.maxSize = NSSize(width: Theme.panelMaxWidth, height: 2000)
         panel.isFloatingPanel = true
         panel.level = .floating
@@ -147,6 +148,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// here because the panel's monitors must be torn down with it.
     @MainActor
     deinit {
+        emptyResizeTask?.cancel()
         returnHoldTask?.cancel()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
@@ -210,6 +212,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        emptyResizeTask?.cancel()
         cancelReturnHold()
         guard panel.isVisible else { return }
         // Deliberately NOT NSApp.hide(nil): that call hands activation back to whichever
@@ -250,12 +253,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
     }
 
-    /// Called by SwiftUI whenever the content reports a new natural width. Widens the
-    /// panel (and raises the drag minimum) so no localisation can be clipped; never
-    /// narrows below what the user picked, and never past the design maximum.
+    /// Uses measured controls as the drag floor, then chooses compact or reading
+    /// width without overwriting the saved reading-width preference.
     private func setContentMinWidth(_ width: CGFloat) {
-        let needed = min(max(width, Theme.panelMinWidth), Theme.panelMaxWidth)
-        guard abs(needed - contentMinWidth) > 0.5 else { return }
+        let floor = panelState.usesCompactWidth ? Theme.compactPanelMinWidth : Theme.panelMinWidth
+        let needed = min(max(width, floor), Theme.panelMaxWidth)
         contentMinWidth = needed
         // AppKit enforces this during a live drag, so the user cannot pull the panel
         // narrower than its own controls.
@@ -265,6 +267,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard abs(target - panelState.panelWidth) > 0.5 else { return }
         panelState.panelWidth = target
         guard panel.isVisible else { return }
+        if isEmptyTranslator {
+            scheduleEmptyResize()
+            return
+        }
+        emptyResizeTask?.cancel()
         // Keep the top edge and re-clamp horizontally: growing a panel that sits near a
         // screen edge must not push it off the visible area.
         var frame = panel.frame
@@ -273,7 +280,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         // height the window drifted into (see `applyHeight`) into the new frame.
         frame.size.height = desiredHeight
         frame.origin.y = top - desiredHeight
+        let centerX = frame.midX
         frame.size.width = target
+        frame.origin.x = centerX - target / 2
         if let visible = panel.screen?.visibleFrame {
             frame.origin.x = min(max(frame.origin.x, visible.minX + 8), visible.maxX - target - 8)
         }
@@ -293,12 +302,49 @@ final class PanelController: NSObject, NSWindowDelegate {
         clamped = ceil(clamped)
         let destinationChanged = Self.heightNeedsApply(actual: desiredHeight, target: clamped)
         desiredHeight = clamped
+        if isEmptyTranslator && panel.isVisible {
+            scheduleEmptyResize()
+            return
+        }
+        emptyResizeTask?.cancel()
         // Content can re-report the same destination during a native resize. Do
         // not restart that animation while its presentation frame is still moving.
         if panelState.showSettings && !destinationChanged { return }
         guard panel.isVisible else { return }
         applyHeight(clamped)
         scheduleFitAudit()
+    }
+
+    private var isEmptyTranslator: Bool {
+        engine.input.isEmpty && engine.output.isEmpty && !panelState.showSettings && !panelState.showHistory
+    }
+
+    /// Width and height are separate SwiftUI preferences. Gather both from the
+    /// clearing layout before starting one native frame transition. Never apply
+    /// the width with a stale multi-line/result height in the meantime.
+    private func scheduleEmptyResize() {
+        fitAudit?.cancel()
+        emptyResizeTask?.cancel()
+        emptyResizeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard let self, self.isEmptyTranslator, self.panel.isVisible else { return }
+            self.panelState.inputResizeInProgress = false
+            var target = Self.emptyResizeFrame(current: self.panel.frame,
+                                               width: self.effectiveWidth, height: self.desiredHeight)
+            if let visible = self.panel.screen?.visibleFrame {
+                target.origin.x = min(max(target.origin.x, visible.minX + 8), visible.maxX - target.width - 8)
+            }
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                self.panel.setFrame(target, display: true)
+            } else {
+                Self.animateResize(self.panel, to: target)
+            }
+            self.scheduleFitAudit()
+        }
+    }
+
+    static func emptyResizeFrame(current: NSRect, width: CGFloat, height: CGFloat) -> NSRect {
+        NSRect(x: current.midX - width / 2, y: current.maxY - ceil(height), width: width, height: ceil(height))
     }
 
     /// Checks, once the dust has settled, that the window is actually the size its
@@ -410,7 +456,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // - Reduce Motion. This panel resizes constantly; animating through that setting
         //   is a standing annoyance rather than a nicety.
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if engine.isTranslating || reduceMotion {
+        if panelState.inputResizeInProgress || engine.isTranslating || reduceMotion {
             panel.setFrame(frame, display: true)
         } else {
             // No completion handler. `NSAnimationContext`'s completion fires about 11ms
@@ -702,6 +748,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
+        panelState.manualDraftWidth = panelState.panelWidth
         settings.panelWidth = panelState.panelWidth
     }
 }

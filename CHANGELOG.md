@@ -2,6 +2,18 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.6] - 2026-09-10
+
+### Added
+
+- Use a compact, control-measured width for empty and short drafts without increasing height. Compact translation/copy actions use accessible icons.
+- Expand once for input beyond three lines or output beyond six lines at the compact width, keeping the reading width until the draft is cleared. Settings, history, and the language picker retain their reading width; saved user width is preserved.
+
+### Fixed
+
+- Drive input row growth and window resizing from one short, continuous timeline. Keep the first line anchored when Return creates a new line; long drafts still scroll to follow the caret.
+- Clear completed translations with one combined width/height transition. The input row animation no longer interrupts result dismissal, and initial compact-width measurement settles before the window begins shrinking.
+
 ## [1.14.3] - 2026-09-10
 
 ### Fixed
@@ -557,3 +569,4 @@ First tagged release.
 
 [1.14.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.2
 [1.14.3]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.3
+[1.14.6]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.6

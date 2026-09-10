@@ -24,6 +24,7 @@ import SwiftUI
 struct LineSnappingScroll: NSViewRepresentable {
     /// The line grid to snap to: `editorLineStep` for the input, `lineStep` for the result.
     let step: CGFloat
+    var growingEditorLimit: CGFloat? = nil
 
     func makeNSView(context: Context) -> NSView {
         // A zero-size, non-drawing anchor. It exists to be *placed* in the hierarchy
@@ -35,6 +36,7 @@ struct LineSnappingScroll: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.step = step
+        context.coordinator.growingEditorLimit = growingEditorLimit
         // Deferred: on the pass that creates this view neither it nor the scroll view it
         // claims is necessarily in a window yet, and the claim is geometric. Attaching is
         // idempotent, and SwiftUI calls this again on every update, so a first attempt
@@ -53,8 +55,11 @@ struct LineSnappingScroll: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         var step: CGFloat
+        var growingEditorLimit: CGFloat?
         private weak var scrollView: NSScrollView?
         private var observer: NSObjectProtocol?
+        private var boundsObserver: NSObjectProtocol?
+        private var restoringOrigin = false
 
         init(step: CGFloat) { self.step = step }
 
@@ -96,11 +101,36 @@ struct LineSnappingScroll: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.snap() }
             }
+            boundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: found.contentView, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keepGrowingEditorAtTop() }
+            }
+        }
+
+        /// NSTextView may reveal a new caret line before SwiftUI has grown its
+        /// viewport. Short documents expand instead of scrolling; long ones retain
+        /// AppKit's normal caret tracking and the existing line-snap behavior.
+        private func keepGrowingEditorAtTop() {
+            guard !restoringOrigin, let limit = growingEditorLimit,
+                  let scrollView, let text = scrollView.documentView as? NSTextView,
+                  let layout = text.layoutManager, let container = text.textContainer,
+                  scrollView.contentView.bounds.origin.y > 0.5 else { return }
+            restoringOrigin = true
+            defer { restoringOrigin = false }
+            layout.ensureLayout(for: container)
+            let height = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+                + 2 * text.textContainerInset.height
+            guard height <= limit + 0.5 else { return }
+            scrollView.contentView.scroll(to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         func detach() {
             if let observer { NotificationCenter.default.removeObserver(observer) }
+            if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
             observer = nil
+            boundsObserver = nil
             scrollView = nil
         }
 
@@ -136,7 +166,7 @@ struct LineSnappingScroll: NSViewRepresentable {
 
 extension View {
     /// Applies `LineSnappingScroll` to the text scroll view inside this view.
-    func snapsScrollToLines(step: CGFloat) -> some View {
-        background(LineSnappingScroll(step: step).frame(width: 0, height: 0))
+    func snapsScrollToLines(step: CGFloat, growingEditorLimit: CGFloat? = nil) -> some View {
+        background(LineSnappingScroll(step: step, growingEditorLimit: growingEditorLimit).frame(width: 0, height: 0))
     }
 }

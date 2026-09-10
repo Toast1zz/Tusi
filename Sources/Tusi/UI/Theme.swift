@@ -59,6 +59,7 @@ enum Theme {
     /// Panel width bounds, shared by `PanelController`'s init/resize handling and the
     /// persisted-width clamp in `SettingsStore` — one source instead of the same two
     /// literals typed out at four call sites.
+    static let compactPanelMinWidth: CGFloat = 360
     static let panelMinWidth: CGFloat = 470
     static let panelMaxWidth: CGFloat = 700
 
@@ -227,6 +228,15 @@ enum Theme {
     /// two are kept identical by construction instead, and the small arrival delay is the
     /// only difference left between them.
     static let windowResizeDuration: Double = 0.22
+
+    static let inputResizeDuration: Double = 0.12
+
+    /// One frame clock drives both the editor's layout and the native window.
+    static func inputResizeHeight(from: CGFloat, to: CGFloat, elapsed: Double) -> CGFloat {
+        let t = min(1, max(0, elapsed / (inputResizeDuration * animationScale)))
+        let progress = t * t * (3 - 2 * t)
+        return from + (to - from) * progress
+    }
 
     // MARK: - Panel summon (AppKit)
 

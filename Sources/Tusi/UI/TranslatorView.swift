@@ -16,6 +16,9 @@ struct TranslatorView: View {
     @EnvironmentObject private var panelState: PanelState
 
     @FocusState private var inputFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var presentedInputHeight: CGFloat?
+    @State private var inputResizeGeneration = UUID()
     @State private var resultHeight: CGFloat = 20
     /// Whether the result viewport sits at its bottom edge. Streaming auto-scrolls
     /// only when the user is already there — reading an earlier part of a long
@@ -195,6 +198,14 @@ struct TranslatorView: View {
     /// One grid cell for empty or single-line input; measurement adds rows only
     /// when text wraps or the user inserts a newline.
     private var minInputHeight: CGFloat { editorLineStep }
+    private struct InputResizeTarget: Equatable {
+        let height: CGFloat
+        let animated: Bool
+    }
+    private var inputResizeTarget: InputResizeTarget {
+        InputResizeTarget(height: min(max(inputHeight, minInputHeight), maxInputHeight),
+                          animated: !engine.input.isEmpty && !reduceMotion && !engine.hasResultSection && !panelState.showHistory)
+    }
     private var maxResultHeight: CGFloat {
         let budget = panelState.availableHeight - min(inputHeight, maxInputHeight) - 240
             - (panelState.showLanguagePicker ? 40 : 0)
@@ -381,8 +392,9 @@ struct TranslatorView: View {
                     // it leaves the view wherever the flick stopped, which is why the top
                     // and bottom rows were cut through the glyphs at some scroll positions
                     // and not others.
-                    .snapsScrollToLines(step: editorLineStep)
-                    .frame(height: min(max(height, minInputHeight), maxInputHeight))
+                    .snapsScrollToLines(step: editorLineStep, growingEditorLimit: maxInputHeight)
+                    // Clearing is one whole-panel transition, not an editor row edit.
+                    .frame(height: engine.input.isEmpty ? inputResizeTarget.height : (presentedInputHeight ?? inputResizeTarget.height))
             }
 
             if engine.inputWasTruncated {
@@ -414,6 +426,30 @@ struct TranslatorView: View {
         // behind the caret. A notice appearing or disappearing is a different event: it
         // adds a line to the panel, so it rides the same clock the window does.
         .motion(.layout, value: inputNotice)
+        .task(id: inputResizeTarget) {
+            let target = inputResizeTarget
+            let generation = UUID()
+            inputResizeGeneration = generation
+            defer {
+                if inputResizeGeneration == generation { panelState.inputResizeInProgress = false }
+            }
+            guard let start = presentedInputHeight, abs(start - target.height) > 0.5,
+                  target.animated else {
+                presentedInputHeight = target.height
+                return
+            }
+            panelState.inputResizeInProgress = true
+            let started = ProcessInfo.processInfo.systemUptime
+            while !Task.isCancelled {
+                let elapsed = ProcessInfo.processInfo.systemUptime - started
+                presentedInputHeight = Theme.inputResizeHeight(from: start, to: target.height, elapsed: elapsed)
+                if elapsed >= Theme.inputResizeDuration * Theme.animationScale { break }
+                do { try await Task.sleep(for: .milliseconds(8)) } catch { return }
+            }
+            // Keep direct window following enabled until the final layout report
+            // has crossed the SwiftUI/AppKit boundary.
+            try? await Task.sleep(for: .milliseconds(16))
+        }
     }
 
     /// The one notice, if any, under the input box.
@@ -922,6 +958,20 @@ struct TranslatorView: View {
         .accessibilityLabel(L("长按 ⏎ 重新翻译"))
     }
 
+    /// Width expansion is measured against a stable compact width, never the live
+    /// window width; otherwise wrapping/unwrapping could oscillate the decision.
+    static func needsExpandedWidth(input: String, output: String, compactWidth: CGFloat) -> Bool {
+        let width = max(1, compactWidth - 42)
+        let editor = measureEditorLineMetrics()
+        let draft = input.isEmpty ? " " : (input.hasSuffix("\n") ? input + " " : input)
+        if editorTextHeight(draft, width: width) > editor.first + 2 * editor.step + 1 { return true }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        let text = NSAttributedString(string: output, attributes: [.font: NSFont.systemFont(ofSize: 15), .paragraphStyle: paragraph])
+        let height = text.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        return height > 6 * measureLineMetrics().step
+    }
+
     private var bottomBar: some View {
         // Every control in this row is `.fixedSize(horizontal: true)`, so the row has one
         // natural width and no way to give. In English that width ("Casual/Standard/
@@ -939,12 +989,13 @@ struct TranslatorView: View {
         // invisible unconstrained copy — the visible row is already inside the fixed frame
         // and would only ever report the width it was given.
         //
-        // `measuring: true` pins the copy to the row's widest configuration (the copy
-        // button, with its shortcut hint). Measuring the live row instead would report a
+        // `measuring: true` reserves the action slot and a stable direction label.
+        // Compact mode measures icons; the reading mode reserves copy status text.
+        // Measuring the live row instead would report a
         // different width per state — stop button, translate button, copy button — and the
         // window would jump sideways every time a translation started or finished.
         .background(
-            bottomBarRow(showsCopyShortcut: true, measuring: true)
+            bottomBarRow(showsCopyShortcut: false, measuring: true)
                 .fixedSize(horizontal: true, vertical: true)
                 // The reported number is a *panel* width, so it has to include the side
                 // margins the body puts around this row — measuring the row alone would
@@ -977,9 +1028,9 @@ struct TranslatorView: View {
     private func bottomBarRow(showsCopyShortcut: Bool, measuring: Bool = false) -> some View {
         HStack(spacing: 8) {
             DirectionChip(
-                sourceLabel: engine.sourceLabel,
-                target: engine.target,
-                isActive: !engine.input.isEmpty,
+                sourceLabel: measuring ? "中" : engine.sourceLabel,
+                target: measuring ? .english : engine.target,
+                isActive: measuring || !engine.input.isEmpty,
                 isFlipped: engine.flipped,
                 isExpanded: panelState.showLanguagePicker,
                 onTap: {
@@ -1009,14 +1060,17 @@ struct TranslatorView: View {
                 Button {
                     engine.submit()
                 } label: {
-                    Text(settings.commandLabel(L("翻译"), action: .translate))
+                    Group {
+                        if panelState.usesCompactWidth { Image(systemName: "arrow.up") }
+                        else { Text(settings.commandLabel(L("翻译"), action: .translate)) }
+                    }
                         .font(Theme.footnoteMedium)
                         .lineLimit(1)
                         // minWidth, not a hard width: the slot stays stable at the Chinese
                         // label's size (no bar jitter) but "⏎ Translate" is wider and would
                         // be clipped by a fixed 48pt.
                         .frame(height: 26)
-                        .frame(minWidth: 48)
+                        .frame(minWidth: panelState.usesCompactWidth ? 26 : 48)
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasInput)
@@ -1050,7 +1104,7 @@ struct TranslatorView: View {
             }
 
             if measuring || (!engine.isTranslating && !engine.output.isEmpty) {
-                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
+                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil, compact: panelState.usesCompactWidth) {
                     engine.copyOutput()
                 }
                     // Opacity only. The stop and translate controls that share this
