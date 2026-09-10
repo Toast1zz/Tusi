@@ -516,6 +516,12 @@ final class TranslationEngine: ObservableObject {
         state == .done && !escalating && (outputLanguageMismatch || outputCapped || interrupted)
     }
 
+    var canRetranslate: Bool {
+        state == .done && !escalating && !output.isEmpty
+            && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !LocalModelManager.shared.isSwitching
+    }
+
     /// The label of the tier escalation would reach, for the hint that offers it.
     var escalationTargetLabel: String? {
         guard canEscalate, let request,
@@ -838,6 +844,13 @@ final class TranslationEngine: ObservableObject {
         return true
     }
 
+    /// Scope every route leg to the same logical translation, including retries.
+    private func makeStream(context: RequestContext, config: APIConfig) -> AsyncThrowingStream<String, Error> {
+        TranslationService.$sessionID.withValue(context.id) {
+            stream(context.text, context.target, context.tone, context.extra, config)
+        }
+    }
+
     /// Consumes one provider's stream and commits the result on success. Transient
     /// failures (TCP reset, 5xx, timeout) get one quick retry on the same provider —
     /// cheaper than failing over, and often the hiccup is one-off. Returns the outcome
@@ -854,7 +867,7 @@ final class TranslationEngine: ObservableObject {
         // a retry) commits only its own tokens — two models' output is never spliced.
         resetPendingOutput()
         let first = await consumeStream(
-            stream(context.text, context.target, context.tone, context.extra, config),
+            makeStream(context: context, config: config),
             requestRevision: context.revision
         )
         switch first {
@@ -878,7 +891,7 @@ final class TranslationEngine: ObservableObject {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self.inputRevision == context.revision else { return .cancelled }
             let retry = await consumeStream(
-                stream(context.text, context.target, context.tone, context.extra, config),
+                makeStream(context: context, config: config),
                 requestRevision: context.revision
             )
             switch retry {
@@ -1069,7 +1082,7 @@ final class TranslationEngine: ObservableObject {
         // from inside `addTask` would need to hop back to the main actor anyway —
         // starting the streams up front makes that hop happen once, up front.
         let legs = stage.slots.map { slot in
-            (slot, self.stream(context.text, context.target, context.tone, context.extra, context.configs[slot] ?? settings.config(for: slot)))
+            (slot, self.makeStream(context: context, config: context.configs[slot] ?? settings.config(for: slot)))
         }
         return await withTaskGroup(of: (Int, LegOutcome).self) { group -> StreamOutcome in
             for (slot, stream) in legs {

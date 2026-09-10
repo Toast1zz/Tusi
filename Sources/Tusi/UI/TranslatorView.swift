@@ -563,7 +563,7 @@ struct TranslatorView: View {
                 // and the translation all begin on one vertical line — and on the same
                 // line as the input above them, which shares that inset because it comes
                 // from TextEditor's NSTextView line-fragment padding.
-                if !engine.versions.isEmpty || engine.escalating {
+                if !engine.versions.isEmpty || engine.escalating || showsReturnHoldHint {
                     HStack(spacing: 8) {
                         if let shown = shownVersion {
                             ResultProvenance(
@@ -634,6 +634,9 @@ struct TranslatorView: View {
                                 String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
                             } ?? L("请求在线版本，两个结果都会留着"))
                             .transition(.opacity)
+                        }
+                        if showsReturnHoldHint {
+                            returnHoldHint
                         }
                     }
                     .padding(.leading, Self.resultNoticeInset)
@@ -897,6 +900,32 @@ struct TranslatorView: View {
     /// a name), the provider's short brand for an online one.
     private func versionLabel(_ version: TranslationEngine.ResultVersion) -> String {
         version.tier == .local ? L("本地") : (version.host.isEmpty ? L("在线") : SettingsStore.shortHostName(version.host))
+    }
+
+    private var showsReturnHoldHint: Bool {
+        settings.holdReturnToRetranslate && engine.canRetranslate && !panelState.showHistory && !panelState.showLanguagePicker
+            && settings.shortcut(.translate)?.isPlainReturn == true
+    }
+
+    private var returnHoldHint: some View {
+        ViewThatFits(in: .horizontal) {
+            Text(L("长按 ⏎ 重新翻译")).fixedSize()
+            Text(L("长按 ⏎")).fixedSize()
+        }
+        .font(Theme.caption)
+        .foregroundStyle(.secondary)
+        .opacity(panelState.returnHoldProgress == nil ? 1 : 0)
+        .frame(height: 18)
+        .overlay {
+            if let progress = panelState.returnHoldProgress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .controlSize(.mini)
+                    .accessibilityLabel(L("重新翻译确认进度"))
+            }
+        }
+        .help(L("按住回车 1.5 秒，按当前配置重新翻译；提前松手保留原回车操作"))
+        .accessibilityLabel(L("长按 ⏎ 重新翻译"))
     }
 
     private var bottomBar: some View {

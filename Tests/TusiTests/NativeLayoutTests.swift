@@ -37,7 +37,7 @@ final class NativeLayoutTests: XCTestCase {
     func testCompactNativeSurfacesRenderWithinHeightBudget() async throws {
         for width: CGFloat in [470, 700] {
             for dark in [false, true] {
-                for page in ["translator", "settings", "local", "advanced", "translation", "general", "shortcuts"] {
+                for page in ["translator", "hold", "settings", "local", "advanced", "translation", "general", "shortcuts"] {
                     let settings = SettingsStore(preview: true)
                     settings.autoCopy = false
                     settings.soundEnabled = false
@@ -45,11 +45,16 @@ final class NativeLayoutTests: XCTestCase {
                     settings.profiles[1] = settings.profiles[0]
                     settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local-model")
                     let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
-                    engine.debugPreview(input: String(repeating: "这是布局测试。\n", count: 12), output: String(repeating: "A complete translation with several lines of text.\n", count: 30))
+                    let sampleOutput = String(repeating: "A complete translation with several lines of text.\n", count: 30)
+                    engine.debugPreview(input: String(repeating: "这是布局测试。\n", count: 12), output: sampleOutput,
+                                        versions: [.init(text: sampleOutput, slot: 0, tier: .online,
+                                                         languageMismatch: false, capped: false, afterFailover: false,
+                                                         host: "opencode.ai", model: "mimo-v2.5")])
                     let state = PanelState()
                     state.panelWidth = width
                     state.availableHeight = 520
-                    state.showSettings = page != "translator"
+                    state.showSettings = page != "translator" && page != "hold"
+                    if page == "hold" { state.returnHoldProgress = 0.5 }
                     state.showShortcuts = page == "shortcuts"
                     if page == "local" { state.settingsProfileIndex = SettingsStore.localProfileIndex }
                     if page == "translation" { state.settingsSection = .translation }
@@ -104,7 +109,8 @@ final class NativeLayoutTests: XCTestCase {
         state.availableHeight = 480
         let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
         var measured: CGFloat = 0
-        let root = RootView(onHeightChange: { measured = $0 }, onContentMinWidthChange: { _ in })
+        var heightReports: [CGFloat] = []
+        let root = RootView(onHeightChange: { measured = $0; heightReports.append($0) }, onContentMinWidthChange: { _ in })
             .environmentObject(settings).environmentObject(state).environmentObject(engine)
             .environmentObject(UpdateChecker(preview: true))
             .transaction { $0.animation = nil }
@@ -114,18 +120,104 @@ final class NativeLayoutTests: XCTestCase {
         window.contentView = host
         defer { window.close() }
         var firstServiceHeight: CGFloat?
-        for section in [SettingsSection.services, .translation, .general, .services] {
+        for section in [SettingsSection.services, .translation, .general, .translation, .general, .services] {
+            heightReports.removeAll()
             state.settingsSection = section
-            for _ in 0..<4 {
+            for _ in 0..<6 {
                 host.layoutSubtreeIfNeeded()
                 try await Task.sleep(for: .milliseconds(40))
             }
             XCTAssertGreaterThan(measured, 180)
             XCTAssertLessThanOrEqual(measured, SettingsView.maximumHeight(availableHeight: 480) + 1)
+            if section == .general { XCTAssertLessThan(measured, 400) }
+
+
             if section == .services {
                 if let firstServiceHeight { XCTAssertEqual(measured, firstServiceHeight, accuracy: 1) }
                 else { firstServiceHeight = measured }
             }
         }
     }
+    func testNaturalSettingsTransitionKeepsHeaderAnchoredAndAnimatesWindowMonotonically() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://opencode.ai/v1", apiKey: "fake", model: "mimo-v2.5")
+        settings.profiles[1] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "fake", model: "deepseek-flash")
+        settings.profiles[2] = APIProfile(baseURL: "http://localhost:8080/v1", model: "local-model")
+        let state = PanelState()
+        state.showSettings = true
+        state.settingsSection = .translation
+        state.availableHeight = 600
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 470, height: 440),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        var animated = false
+        var destination: CGFloat = 0
+        let root = RootView(onHeightChange: { height in
+            guard abs(destination - height) > 0.5 else { return }
+            destination = height
+            var frame = window.frame
+            frame.origin.y = frame.maxY - height
+            frame.size.height = height
+            if animated { PanelController.animateResize(window, to: frame) }
+            else { window.setFrame(frame, display: true) }
+        }, onContentMinWidthChange: { _ in })
+            .environmentObject(settings).environmentObject(state).environmentObject(engine)
+            .environmentObject(UpdateChecker(preview: true))
+            .frame(maxHeight: .infinity, alignment: .top)
+            .environment(\.colorScheme, .light)
+            .background(Color.white)
+        let host = NSHostingView(rootView: root)
+        host.autoresizingMask = [.width, .height]
+        window.contentView = host
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { window.close() }
+        for _ in 0..<15 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        func findCategory(_ view: NSView) -> NSSegmentedControl? {
+            if let control = view as? NSSegmentedControl { return control }
+            return view.subviews.compactMap(findCategory).first
+        }
+        let control = try XCTUnwrap(findCategory(host))
+        func headerScreenTop() -> CGFloat {
+            window.convertToScreen(control.convert(control.bounds, to: nil)).maxY
+        }
+        var trace = "section,frame,height,windowTop,headerTop\n"
+        for section in [SettingsSection.general, .translation, .services, .general] {
+            let startHeight = window.frame.height
+            let top = window.frame.maxY
+            let headerTop = headerScreenTop()
+            animated = true
+            state.settingsSection = section
+            var heights: [CGFloat] = []
+            for index in 0..<35 {
+                try await Task.sleep(for: .milliseconds(16))
+                host.layoutSubtreeIfNeeded()
+                let height = window.frame.height
+                heights.append(height)
+                if [0, 6, 20].contains(index), let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-transition-\(section.rawValue)-\(index).png"))
+                }
+                XCTAssertEqual(window.frame.maxY, top, accuracy: 1)
+                XCTAssertEqual(headerScreenTop(), headerTop, accuracy: 1, "Category controls must not jump")
+                trace += "\(section.rawValue),\(index),\(height),\(window.frame.maxY),\(headerScreenTop())\n"
+            }
+            let endHeight = window.frame.height
+            XCTAssertGreaterThan(abs(startHeight - endHeight), 20, "Pages must retain distinct natural heights")
+            XCTAssertEqual(endHeight, destination, accuracy: 1)
+            let intermediate = heights.filter { abs($0 - startHeight) > 1 && abs($0 - endHeight) > 1 }
+            XCTAssertGreaterThan(intermediate.count, 2, "Window must animate, not snap")
+            let direction: CGFloat = endHeight > startHeight ? 1 : -1
+            for pair in zip(heights, heights.dropFirst()) {
+                XCTAssertGreaterThanOrEqual((pair.1 - pair.0) * direction, -1, "Height must not reverse during transition")
+            }
+        }
+        try trace.write(toFile: "/tmp/tusi-settings-native-transition.csv", atomically: true, encoding: .utf8)
+    }
+
 }

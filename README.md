@@ -11,6 +11,8 @@ A menubar translator for macOS. Type Chinese and get English; type anything else
 - Three slots: primary and backup online services, plus a local-model slot
 - Start local and press ⏎ again for an online second opinion — both answers are kept, and
   the clipboard follows whichever one you are looking at
+- Hold Return for 1.5 seconds to translate a completed result again; an optional switch in
+  Settings → Translation controls both the gesture and its progress hint
 - Two online services, used either primary-first or asked at the same time
 - Three tone presets (casual / standard / formal)
 - A standing instruction carried by every request — a glossary entry, a house style, a name
@@ -45,7 +47,7 @@ Unzip and move `Tusi.app` to Applications. On first launch, if Gatekeeper blocks
 Open Settings (⌘,) and fill in a profile:
 
 - Base URL, e.g. `https://api.deepseek.com` or `https://openrouter.ai/api/v1`
-- Model, e.g. `deepseek-chat`
+- Model, e.g. `deepseek-flash`
 - API key
 - Provider preference order (optional) — OpenRouter's `provider.order`, e.g. `novita`. It is a
   preference, not a restriction: OpenRouter may still fall back to a provider you did not list.

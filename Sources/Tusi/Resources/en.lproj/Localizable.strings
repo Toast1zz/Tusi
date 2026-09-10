@@ -235,3 +235,11 @@
 "还没有配置可用的翻译服务，请先在设置中填写" = "No usable translation service configured yet — fill one in Settings";
 "本地和在线都失败了 · %@" = "Both the local model and the online service failed · %@";
 "两套在线服务都失败了 · %@" = "Both online services failed · %@";
+"长按 ⏎ 重新翻译" = "Hold ⏎ to translate again";
+"松开取消 · 按住至进度完成" = "Keep holding · release to cancel";
+"重新翻译确认进度" = "Translate again confirmation progress";
+"按住回车 1.5 秒，按当前配置重新翻译；提前松手保留原回车操作" = "Hold Return for 1.5 seconds to translate again using the current configuration. Release early for the normal Return action.";
+
+"长按 ⏎" = "Hold ⏎";
+"长按回车重新翻译" = "Hold Return to translate again";
+"关闭后隐藏长按提示，并恢复普通回车操作" = "Turn off to hide the hold hint and restore the normal Return action.";

@@ -17,6 +17,7 @@ enum SettingsSection: String, CaseIterable {
 @MainActor
 final class PanelState: ObservableObject {
     @Published var pinned = false
+    @Published var returnHoldProgress: Double?
     @Published var showSettings = false
     @Published var showShortcuts = false
     @Published var settingsProfileIndex = 0

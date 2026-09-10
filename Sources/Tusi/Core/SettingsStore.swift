@@ -157,6 +157,9 @@ final class SettingsStore: ObservableObject {
     @Published var autoCopy: Bool {
         didSet { defaults.set(autoCopy, forKey: "autoCopy") }
     }
+    @Published var holdReturnToRetranslate: Bool {
+        didSet { defaults.set(holdReturnToRetranslate, forKey: "holdReturnToRetranslate") }
+    }
     @Published var saveHistoryEnabled: Bool {
         didSet { defaults.set(saveHistoryEnabled, forKey: "saveHistoryEnabled") }
     }
@@ -269,6 +272,7 @@ final class SettingsStore: ObservableObject {
         routeStart = routing.start
         onlineStrategy = routing.strategy
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
+        holdReturnToRetranslate = defaults.object(forKey: "holdReturnToRetranslate") as? Bool ?? true
         saveHistoryEnabled = defaults.object(forKey: "saveHistoryEnabled") as? Bool ?? true
         saveDraftEnabled = defaults.object(forKey: "saveDraftEnabled") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true

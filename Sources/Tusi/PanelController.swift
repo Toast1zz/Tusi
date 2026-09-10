@@ -25,6 +25,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private weak var statusItem: NSStatusItem?
 
     private var keyMonitor: Any?
+    private var returnHold = ReturnHold()
+    private var returnHoldTask: Task<Void, Never>?
     private var resignObserver: NSObjectProtocol?
     private var desiredHeight: CGFloat = 160
 
@@ -145,6 +147,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// here because the panel's monitors must be torn down with it.
     @MainActor
     deinit {
+        returnHoldTask?.cancel()
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
         }
@@ -207,6 +210,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        cancelReturnHold()
         guard panel.isVisible else { return }
         // Deliberately NOT NSApp.hide(nil): that call hands activation back to whichever
         // app was frontmost before Tusi took it — exactly like ⌘H — which is what made the
@@ -286,7 +290,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         if let screenHeight = panel.screen?.visibleFrame.height {
             clamped = Self.clampedPanelHeight(desired: clamped, visibleHeight: screenHeight)
         }
+        clamped = ceil(clamped)
+        let destinationChanged = Self.heightNeedsApply(actual: desiredHeight, target: clamped)
         desiredHeight = clamped
+        // Content can re-report the same destination during a native resize. Do
+        // not restart that animation while its presentation frame is still moving.
+        if panelState.showSettings && !destinationChanged { return }
         guard panel.isVisible else { return }
         applyHeight(clamped)
         scheduleFitAudit()
@@ -328,7 +337,11 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private func auditContentFit() {
         guard panel.isVisible, let contentHost else { return }
-        let needed = contentHost.fittingSize.height
+        // A flexible settings viewport's fittingSize is a scroll-view layout hint,
+        // not its requested window size. Its measured document/header supply that
+        // destination independently, including the screen cap.
+        let needed = panelState.showSettings && !panelState.showShortcuts
+            ? desiredHeight : contentHost.fittingSize.height
         let actual = panel.frame.height
         // Logged before it is judged: a measurement rejected below is exactly the one
         // worth seeing when this audit turns out to be doing nothing.
@@ -406,12 +419,18 @@ final class PanelController: NSObject, NSWindowDelegate {
             // the window to its destination immediately and the panel stopped animating
             // its height at all. The settle check is scheduled on the clock instead.
             //
-            // motion-exception: the window's own frame, which no SwiftUI view owns.
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Theme.windowResizeDuration * Theme.animationScale
-                context.timingFunction = Theme.caTimingFunction
-                panel.animator().setFrame(frame, display: true)
-            }
+            Self.animateResize(panel, to: frame)
+        }
+    }
+
+    /// Shared with the native transition regression test so it exercises the same
+    /// window animation used by the installed app.
+    static func animateResize(_ window: NSWindow, to frame: NSRect) {
+        // motion-exception: the window frame follows the shared native resize timeline.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Theme.windowResizeDuration * Theme.animationScale
+            context.timingFunction = Theme.caTimingFunction
+            window.animator().setFrame(frame, display: true)
         }
     }
 
@@ -432,9 +451,75 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Keyboard
 
+    private var canHoldReturn: Bool {
+        settings.holdReturnToRetranslate && panel.isKeyWindow && !panelState.showSettings && !panelState.showShortcuts
+            && !panelState.showHistory && !panelState.showLanguagePicker
+            && panelState.recordingShortcut == nil
+            && (panel.firstResponder as? NSTextView)?.hasMarkedText() != true
+            && settings.shortcut(.translate)?.isPlainReturn == true && engine.canRetranslate
+    }
+
+    private func cancelReturnHold() {
+        returnHold.cancel()
+        returnHoldTask?.cancel()
+        returnHoldTask = nil
+        panelState.returnHoldProgress = nil
+    }
+
+    private func beginReturnHold(_ event: NSEvent) {
+        returnHold.begin(keyCode: event.keyCode, now: ProcessInfo.processInfo.systemUptime)
+        panelState.returnHoldProgress = 0
+        // Any intervening edit or result/configuration change invalidates this gesture.
+        let input = engine.input
+        let output = engine.output
+        let target = engine.target
+        let tone = settings.tone
+        let extra = settings.extraInstruction
+        returnHoldTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(25))
+                guard !Task.isCancelled, let self else { return }
+                guard self.canHoldReturn, self.engine.input == input, self.engine.output == output,
+                      self.engine.target == target, self.settings.tone == tone,
+                      self.settings.extraInstruction == extra else {
+                    self.cancelReturnHold()
+                    return
+                }
+                let now = ProcessInfo.processInfo.systemUptime
+                self.panelState.returnHoldProgress = self.returnHold.progress(now: now)
+                if self.returnHold.fireIfReady(now: now) {
+                    self.panelState.returnHoldProgress = nil
+                    self.returnHoldTask = nil
+                    self.engine.translate()
+                    return
+                }
+            }
+        }
+    }
+
     private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel.isKeyWindow else { return event }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyUp {
+                guard self.returnHold.keyCode == event.keyCode else { return event }
+                let submit = self.returnHold.release(keyCode: event.keyCode)
+                self.cancelReturnHold()
+                if submit && self.canHoldReturn { self.engine.submit() }
+                return nil
+            }
+            if event.type != .keyDown {
+                self.cancelReturnHold()
+                return event
+            }
+            // A swallowed key-up while another application was active must not leave
+            // the next physical press stuck. Auto-repeat is never a fresh gesture.
+            if !event.isARepeat, self.returnHold.keyCode == event.keyCode {
+                self.cancelReturnHold()
+                self.returnHold = ReturnHold()
+            }
+            if self.returnHold.keyCode == event.keyCode { return nil }
+            if self.returnHold.keyCode != nil { self.cancelReturnHold() }
+            guard self.panel.isKeyWindow else { return event }
 
             let flags = KeyCombo.normalized(event.modifierFlags)
 
@@ -492,6 +577,11 @@ final class PanelController: NSObject, NSWindowDelegate {
                 return nil
             }
             if let combo = self.settings.shortcut(.translate), combo.matches(event) {
+                guard !event.isARepeat else { return nil }
+                if combo.isPlainReturn && self.canHoldReturn {
+                    self.beginReturnHold(event)
+                    return nil
+                }
                 // `submit`, not `translate`: once a result is on screen and a better
                 // tier is available, this key asks for that instead of re-running the
                 // same model. See `TranslationEngine.submit`.
@@ -570,7 +660,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.panelState.pinned else { return }
+                guard let self else { return }
+                self.cancelReturnHold()
+                guard !self.panelState.pinned else { return }
                 // If the click landed on the status item, let its action handle the toggle.
                 if let button = self.statusItem?.button, let window = button.window,
                    window.frame.contains(NSEvent.mouseLocation) {

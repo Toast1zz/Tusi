@@ -62,6 +62,10 @@ enum TranslationError: LocalizedError, Equatable {
 }
 
 enum TranslationService {
+    /// Captured before entering the detached transport task. Engine retries and
+    /// competing routes share the logical translation's ID, never its source text.
+    @TaskLocal static var sessionID: UUID?
+
     struct ConnectionTestResult: Equatable {
         var latencyMilliseconds: Int
         var outputProtocol: TranslationOutputProtocol
@@ -192,7 +196,7 @@ enum TranslationService {
         }
     }
 
-    private static func makeRequest(config: APIConfig, body: [String: Any]) throws -> URLRequest {
+    static func makeRequest(config: APIConfig, body: [String: Any], sessionID: UUID) throws -> URLRequest {
         let apiKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if config.requiresAuth, apiKey.isEmpty {
             throw TranslationError.emptyKey
@@ -200,6 +204,11 @@ enum TranslationService {
         var request = URLRequest(url: try endpoint(for: config))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if request.url?.host?.lowercased() == "opencode.ai" {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+            request.setValue("Tusi/\(version)", forHTTPHeaderField: "User-Agent")
+            request.setValue(sessionID.uuidString, forHTTPHeaderField: "x-opencode-session")
+        }
         // Local (loopback) endpoints — Ollama, LM Studio, llama.cpp-server — don't need
         // a Bearer token and often object to one they never asked for; only send auth to
         // endpoints that actually require it.
@@ -360,7 +369,8 @@ enum TranslationService {
         config: APIConfig,
         outputProtocol: TranslationOutputProtocol? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+        let requestSessionID = sessionID ?? UUID()
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
             // Detached: the SSE read + per-chunk JSON decode runs on the cooperative
             // pool instead of the caller's actor (the caller is the main actor), so a
             // fast or large stream never janks the panel. `continuation` is Sendable;
@@ -399,7 +409,7 @@ enum TranslationService {
                             config: config,
                             outputProtocol: selectedProtocol
                         )
-                        var streamRequest = try makeRequest(config: config, body: body)
+                        var streamRequest = try makeRequest(config: config, body: body, sessionID: requestSessionID)
                         streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                         let (bytes, response) = try await session.bytes(for: streamRequest)
 
@@ -413,7 +423,12 @@ enum TranslationService {
                                 if errorData.count > 8192 { break }
                             }
                             let errorBody = String(decoding: errorData, as: UTF8.self)
-                            throw TranslationError.http(http.statusCode, Self.parseErrorMessage(errorBody))
+                            let message = Self.parseErrorMessage(errorBody)
+                            let reason = Self.httpFailureReason(status: http.statusCode, message: message)
+                            // Only fixed diagnostic labels are public. Provider messages
+                            // can echo input or credentials and must remain private.
+                            Log.translation.error("HTTP rejected: status=\(http.statusCode, privacy: .public) reason=\(reason, privacy: .public) host=\(config.displayHost, privacy: .public)")
+                            throw TranslationError.http(http.statusCode, message)
                         }
 
                         let decoder = JSONDecoder()
@@ -631,9 +646,17 @@ enum TranslationService {
         }
     }
 
+    static func httpFailureReason(status: Int, message: String) -> String {
+        let lower = message.lowercased()
+        if status == 400, lower.contains("x-opencode-session"), lower.contains("missing") {
+            return "missing_opencode_session"
+        }
+        return "provider_rejected_request"
+    }
+
     private static func isOutputProtocolCompatibilityError(_ error: Error) -> Bool {
-        if case .http(let code, _) = error as? TranslationError {
-            return code == 400
+        if case .http(let code, let message) = error as? TranslationError {
+            return code == 400 && httpFailureReason(status: code, message: message) != "missing_opencode_session"
         }
         guard let structured = error as? TranslationStructuredOutputError else {
             return false

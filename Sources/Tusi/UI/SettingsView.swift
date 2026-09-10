@@ -1,11 +1,16 @@
 import SwiftUI
 
-private struct SettingsContentHeightKey: PreferenceKey {
+private struct SettingsBodyHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct SettingsHeaderHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+struct SettingsDesiredHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
@@ -23,8 +28,13 @@ struct SettingsView: View {
     @State private var testGenerations: [Int: Int] = [:]
     @State private var shortcutsRowHovering = false
     @State private var extraInstructionExpandedOverride: Bool?
-    @State private var contentHeight: CGFloat = 320
-    @State private var headerHeight: CGFloat = 76
+    @State private var headerHeight: CGFloat = 0
+    @State private var bodyHeight: CGFloat = 0
+
+    private var desiredHeight: CGFloat {
+        guard headerHeight > 0, bodyHeight > 0 else { return 0 }
+        return min(Self.maximumHeight(availableHeight: panelState.availableHeight), ceil(headerHeight + bodyHeight + 48))
+    }
 
     static func maximumHeight(availableHeight: CGFloat) -> CGFloat {
         min(560, max(180, availableHeight - 24))
@@ -80,10 +90,10 @@ struct SettingsView: View {
                 categoryPicker
                 SoftDivider()
             }
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(key: SettingsHeaderHeightKey.self, value: proxy.size.height)
-                })
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: SettingsHeaderHeightKey.self, value: proxy.size.height)
+            })
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 12) {
 
@@ -206,6 +216,8 @@ struct SettingsView: View {
                         SoftDivider()
                         VStack(alignment: .leading, spacing: 10) {
                             settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
+                            settingToggle("长按回车重新翻译", isOn: $settings.holdReturnToRetranslate)
+                                .help(L("关闭后隐藏长按提示，并恢复普通回车操作"))
                             soundToggleRow
                         }
                         .toggleStyle(.switch)
@@ -272,31 +284,24 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: SettingsContentHeightKey.self, value: proxy.size.height)
-                    }
-                )
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: SettingsBodyHeightKey.self, value: proxy.size.height)
+                })
                 .id(panelState.settingsSection)
             }
             .scrollIndicators(.never)
-            .frame(
-                height: min(
-                    contentHeight,
-                    max(1, Self.maximumHeight(availableHeight: panelState.availableHeight) - headerHeight - 48))
-            )
-            .onPreferenceChange(SettingsContentHeightKey.self) { if $0 > 0 { contentHeight = $0 } }
+            .frame(maxHeight: .infinity)
         }
         .padding(18)
+        // The viewport follows the host window throughout its animation. Natural
+        // content size is a destination request, never a second viewport constraint.
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
+        .onPreferenceChange(SettingsBodyHeightKey.self) { if $0 > 0 { bodyHeight = $0 } }
+        .preference(key: SettingsDesiredHeightKey.self, value: desiredHeight)
         .task {
             if !settings.isPreview { await localModels.refresh(settings: settings) }
         }
-        .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
-            }
-        )
         .onChange(of: panelState.settingsSection) { _, _ in
             focusedField = nil
             showKey = false

@@ -3409,7 +3409,7 @@ final class TusiTests: XCTestCase {
         XCTAssertFalse(KeychainError.invalidData.isTemporary)
     }
 
-    func testSettingsHostingReportsNaturalHeightBeyondConstrainedViewport() {
+    func testSettingsHostingReportsNaturalHeightBeyondConstrainedViewport() async throws {
         let settings = SettingsStore(preview: true)
         settings.profiles = [
             APIProfile(baseURL: "https://api.one.example/v1", apiKey: "k", model: "m"),
@@ -3420,33 +3420,31 @@ final class TusiTests: XCTestCase {
         let panelState = PanelState()
         let updateChecker = UpdateChecker(preview: true)
         let engine = TranslationEngine(settings: settings)
-        let root = SettingsView()
-            .environmentObject(settings)
-            .environmentObject(panelState)
-            .environmentObject(updateChecker)
-            .environmentObject(engine)
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 470, height: 160)
-        hosting.layoutSubtreeIfNeeded()
-
-        XCTAssertGreaterThan(hosting.fittingSize.height, 160)
-
-        // Explicit expansion may scroll, but must not make the settings window exceed
-        // its screen budget. A configured provider no longer auto-expands advanced fields.
+        func requestedHeight(width: CGFloat) async throws -> CGFloat {
+            var requested: CGFloat = 0
+            let root = SettingsView()
+                .environmentObject(settings).environmentObject(panelState)
+                .environmentObject(updateChecker).environmentObject(engine)
+                .onPreferenceChange(SettingsDesiredHeightKey.self) { requested = $0 }
+            let hosting = NSHostingView(rootView: root)
+            hosting.frame = NSRect(x: 0, y: 0, width: width, height: 160)
+            for _ in 0..<5 {
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(30))
+            }
+            // A short live viewport must still request the document's natural size.
+            XCTAssertGreaterThan(requested, 160)
+            return requested
+        }
+        let compact = try await requestedHeight(width: 470)
+        XCTAssertLessThan(compact, 500)
         settings.profiles[0].providerOrder = "novita"
         XCTAssertTrue(panelState.settingsAdvancedProfiles.isEmpty)
         panelState.settingsAdvancedProfiles.insert(0)
-        let expanded = SettingsView()
-            .environmentObject(settings)
-            .environmentObject(panelState)
-            .environmentObject(updateChecker)
-            .environmentObject(engine)
-        let atMinWidth = NSHostingView(rootView: expanded.frame(width: Theme.panelMinWidth))
-        atMinWidth.layoutSubtreeIfNeeded()
-        let atMaxWidth = NSHostingView(rootView: expanded.frame(width: Theme.panelMaxWidth))
-        atMaxWidth.layoutSubtreeIfNeeded()
-        XCTAssertLessThanOrEqual(atMinWidth.fittingSize.height, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
-        XCTAssertLessThanOrEqual(atMaxWidth.fittingSize.height, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
+        for width in [Theme.panelMinWidth, Theme.panelMaxWidth] {
+            let expanded = try await requestedHeight(width: width)
+            XCTAssertLessThanOrEqual(expanded, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
+        }
     }
 
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {

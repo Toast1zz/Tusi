@@ -2,6 +2,19 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.2] - 2026-09-10
+
+### Added
+
+- Hold Return for 1.5 seconds on a completed result to translate again, with progress beside the provider label. A short press keeps the existing submit/escalation action on release.
+- Add a persistent switch under Translation settings to disable the hold gesture and its hint. Repeated key events cannot trigger extra requests; focus, input, and modifier changes cancel the hold.
+
+### Fixed
+
+- Preserve each settings category's natural height while a single native window animation keeps the viewport and window synchronized, with the header stationary throughout the transition.
+- Send a stable session ID and Tusi user agent on OpenCode connection tests and translation requests, preserving the ID across retries and protocol fallback.
+- Do not retry a missing OpenCode session header error as an output-protocol incompatibility. Log HTTP status and safe error categories while keeping provider messages private.
+
 ## [1.14.0] - 2026-09-07
 
 ### Added
@@ -535,3 +548,5 @@ First tagged release.
 [1.5.1]: https://github.com/Toast1zz/Tusi/releases/tag/1.5.1
 [1.5.0]: https://github.com/Toast1zz/Tusi/releases/tag/1.5.0
 [1.4.3]: https://github.com/Toast1zz/Tusi/releases/tag/1.4.3
+
+[1.14.2]: https://github.com/Toast1zz/Tusi/releases/tag/v1.14.2

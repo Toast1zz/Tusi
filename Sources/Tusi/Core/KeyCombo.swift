@@ -50,6 +50,10 @@ struct KeyCombo: Equatable {
     var modifiers: UInt
     var display: String
 
+    var isPlainReturn: Bool {
+        Self.canonicalKeyCode(keyCode) == 36 && Self.normalized(NSEvent.ModifierFlags(rawValue: modifiers)).isEmpty
+    }
+
     static let defaultCopy = KeyCombo(
         keyCode: 8,  // C
         modifiers: NSEvent.ModifierFlags([.command, .shift]).rawValue,
