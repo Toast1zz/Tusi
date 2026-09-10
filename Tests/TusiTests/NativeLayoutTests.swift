@@ -221,6 +221,8 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testInputLineResizeSharesWindowFramesAndKeepsFirstLineAnchored() async throws {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        print("INPUT_TRANSITION reduceMotion=\(reduceMotion)")
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.soundEnabled = false
@@ -291,8 +293,10 @@ final class NativeLayoutTests: XCTestCase {
             }
             let end = window.frame.height
             XCTAssertEqual(end, oneLineHeight + (growing ? TranslatorView.measureEditorLineMetrics().step : 0), accuracy: 1)
-            XCTAssertGreaterThan(directReports, 2, "The window must receive intermediate layout frames")
-            XCTAssertGreaterThan(Set(heights).count, 2)
+            if !reduceMotion {
+                XCTAssertGreaterThan(directReports, 2, "The window must receive intermediate layout frames")
+                XCTAssertGreaterThan(Set(heights).count, 2)
+            }
             let direction: CGFloat = growing ? 1 : -1
             for pair in zip([start] + heights, heights) {
                 XCTAssertGreaterThanOrEqual((pair.1 - pair.0) * direction, -1, "Input resize must not reverse")
@@ -390,6 +394,8 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testFirstAndRepeatedClearUseOneMonotonicWindowTransition() async throws {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        print("CLEAR_TRANSITION reduceMotion=\(reduceMotion)")
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.soundEnabled = false
@@ -440,11 +446,13 @@ final class NativeLayoutTests: XCTestCase {
             for (previous, next) in zip(frames, frames.dropFirst()) {
                 XCTAssertLessThanOrEqual(next.width, previous.width + 1, "Clearing must not shrink then widen")
                 XCTAssertLessThanOrEqual(next.height, previous.height + 1, "Clearing must not reverse height")
-                XCTAssertLessThanOrEqual(previous.height - next.height, (start.height - end.height) * 0.4,
-                                         "Clearing must not snap off the result before shrinking the input")
+                if !reduceMotion {
+                    XCTAssertLessThanOrEqual(previous.height - next.height, (start.height - end.height) * 0.4,
+                                             "Clearing must not snap off the result before shrinking the input")
+                }
             }
             let intermediate = frames.filter { $0.height < start.height - 1 && $0.height > end.height + 1 }
-            XCTAssertGreaterThan(intermediate.count, 2)
+            if !reduceMotion { XCTAssertGreaterThan(intermediate.count, 2) }
         }
         XCTAssertEqual(endpoints[0].width, endpoints[1].width, accuracy: 1)
         XCTAssertEqual(endpoints[0].height, endpoints[1].height, accuracy: 1)
