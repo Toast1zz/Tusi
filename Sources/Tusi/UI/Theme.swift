@@ -228,6 +228,23 @@ enum Theme {
     /// only difference left between them.
     static let windowResizeDuration: Double = 0.22
 
+    /// Evaluate the same cubic Bezier used by SwiftUI, with cancellable frame
+    /// updates so editing can take over an in-flight window transition.
+    static func windowResizeProgress(elapsed: Double) -> CGFloat {
+        let x = min(1, max(0, elapsed / (windowResizeDuration * animationScale)))
+        if x == 0 || x == 1 { return CGFloat(x) }
+        func cubic(_ t: Double, _ a: Double, _ b: Double) -> Double {
+            3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t
+        }
+        var lower = 0.0
+        var upper = 1.0
+        for _ in 0..<24 {
+            let t = (lower + upper) / 2
+            if cubic(t, curve.0, curve.2) < x { lower = t } else { upper = t }
+        }
+        return CGFloat(cubic((lower + upper) / 2, curve.1, curve.3))
+    }
+
     static let inputResizeDuration: Double = 0.12
 
     /// One frame clock drives both the editor's layout and the native window.

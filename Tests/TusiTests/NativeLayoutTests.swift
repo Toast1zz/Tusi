@@ -149,7 +149,7 @@ final class NativeLayoutTests: XCTestCase {
         state.settingsSection = .translation
         state.availableHeight = 600
         let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 470, height: 440),
+        let window = FloatingPanel(contentRect: NSRect(x: 100, y: 100, width: 470, height: 440),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         var animated = false
@@ -430,6 +430,173 @@ final class NativeLayoutTests: XCTestCase {
         XCTAssertGreaterThan(resultHeight, natural.height + 100)
         try await settle()
         XCTAssertEqual(window.frame.height, resultHeight, accuracy: 1)
+    }
+
+    func testDirectInputResizeCancelsPreviousWindowAnimation() async throws {
+        let window = FloatingPanel(contentRect: NSRect(x: 200, y: 200, width: 470, height: 307),
+                                   styleMask: [.borderless], backing: .buffered, defer: false)
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        let top = window.frame.maxY
+        PanelController.animateResize(window, to: NSRect(x: 200, y: top - 188, width: 470, height: 188))
+        try await Task.sleep(for: .milliseconds(25))
+        // Mirrors rapid deletion: input interpolation takes over the result-removal
+        // animation, then stops producing height reports at its final one-line size.
+        for height in stride(from: 180.0, through: 83.0, by: -1) {
+            window.setFrame(NSRect(x: 200, y: top - height, width: 470, height: height), display: true)
+            try await Task.sleep(for: .milliseconds(2))
+            XCTAssertEqual(window.frame.height, height, accuracy: 1)
+            XCTAssertEqual(window.frame.maxY, top, accuracy: 1)
+        }
+        for _ in 0..<40 {
+            try await Task.sleep(for: .milliseconds(8))
+            XCTAssertEqual(window.frame.height, 83, accuracy: 1, "Old animation must not restore the 188pt destination")
+        }
+    }
+
+    func testRapidDeletionFromCompletedResultDoesNotWaitForFitAudit() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.soundEnabled = false
+        let state = PanelState()
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
+        engine.debugPreview(input: String(repeating: "Long source line\n", count: 8),
+                            output: String(repeating: "Translated line\n", count: 5))
+        let app = NSApplication.shared
+        let existing = Set(app.windows.map(ObjectIdentifier.init))
+        let controller = PanelController(engine: engine, settings: settings, panelState: state,
+                                         updateChecker: UpdateChecker(preview: true), statusItem: nil)
+        let window = try XCTUnwrap(app.windows.first { !existing.contains(ObjectIdentifier($0)) && $0 is FloatingPanel })
+        window.setFrameOrigin(NSPoint(x: 200, y: 200))
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { controller.hide() }
+        try await Task.sleep(for: .milliseconds(700))
+        let top = window.frame.maxY
+        engine.input = "One line remains"
+        for sample in 0..<60 {
+            try await Task.sleep(for: .milliseconds(8))
+            window.contentView?.layoutSubtreeIfNeeded()
+            // Continue same-height edits to debounce the fallback audit. The direct
+            // resize must settle independently of that delayed safety check.
+            if sample % 5 == 0 { engine.input += "a" }
+            if sample >= 25 {
+                XCTAssertLessThan(window.frame.height, 100, "Input resize must settle before the fallback audit")
+                XCTAssertEqual(window.frame.maxY, top, accuracy: 1)
+            }
+        }
+    }
+
+    func testEmptyHistoryCompactsAndUndoRestoresListHeight() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.soundEnabled = false
+        let record = TranslationEngine.Record(id: UUID(), input: "测试", output: "Test", sourceLabel: "中",
+                                              source: .chinese, target: .english, tone: .standard, timestamp: Date())
+        let data = try JSONEncoder().encode([record])
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(
+            read: { $0.lastPathComponent == "history.json" ? data : nil }, write: { _, _ in }))
+        XCTAssertEqual(engine.history.count, 1)
+        let state = PanelState()
+        state.showHistory = true
+        let app = NSApplication.shared
+        let existing = Set(app.windows.map(ObjectIdentifier.init))
+        let controller = PanelController(engine: engine, settings: settings, panelState: state,
+                                         updateChecker: UpdateChecker(preview: true), statusItem: nil)
+        let window = try XCTUnwrap(app.windows.first { !existing.contains(ObjectIdentifier($0)) && $0 is FloatingPanel })
+        window.setFrameOrigin(NSPoint(x: 200, y: 200))
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { controller.hide() }
+        try await Task.sleep(for: .milliseconds(650))
+        let populated = window.frame
+        engine.deleteHistory(record.id)
+        var heights: [CGFloat] = []
+        for _ in 0..<70 {
+            try await Task.sleep(for: .milliseconds(8))
+            window.contentView?.layoutSubtreeIfNeeded()
+            heights.append(window.frame.height)
+            XCTAssertEqual(window.frame.maxY, populated.maxY, accuracy: 1)
+        }
+        XCTAssertTrue(engine.canUndoHistoryDeletion)
+        XCTAssertLessThan(window.frame.height, 140, "Empty history should contain only its header")
+        XCTAssertLessThan(window.frame.height, populated.height - 15)
+        for (a, b) in zip(heights, heights.dropFirst()) {
+            XCTAssertLessThanOrEqual(b, a + 1, "Deleting the last record must not reverse the shrink")
+        }
+        let material = try XCTUnwrap(window.contentView as? NSVisualEffectView)
+        let mask = try XCTUnwrap(material.maskImage)
+        let representation = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(mask.tiffRepresentation)))
+        XCTAssertEqual(try XCTUnwrap(representation.colorAt(x: 0, y: 0)).alphaComponent, 0, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(representation.colorAt(x: representation.pixelsWide / 2, y: representation.pixelsHigh / 2)).alphaComponent, 1, accuracy: 0.01)
+        let view = try XCTUnwrap(window.contentView)
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/tusi-empty-history-compact.png"))
+        engine.undoHistoryDeletion()
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(engine.history.count, 1)
+        XCTAssertEqual(window.frame.height, populated.height, accuracy: 1)
+    }
+
+    func testHistoryToggleKeepsToolbarGlyphsOnSameRow() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.soundEnabled = false
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
+        let state = PanelState()
+        state.showHistory = true
+        let app = NSApplication.shared
+        let existing = Set(app.windows.map(ObjectIdentifier.init))
+        let controller = PanelController(engine: engine, settings: settings, panelState: state,
+                                         updateChecker: UpdateChecker(preview: true), statusItem: nil)
+        let window = try XCTUnwrap(app.windows.first { !existing.contains(ObjectIdentifier($0)) && $0 is FloatingPanel })
+        window.setFrameOrigin(NSPoint(x: 200, y: 200))
+        window.alphaValue = 0
+        window.appearance = NSAppearance(named: .aqua)
+        window.orderBack(nil)
+        defer { controller.hide() }
+        try await Task.sleep(for: .milliseconds(600))
+        let view = try XCTUnwrap(window.contentView)
+        for expanded in [false, true, false] {
+            let point = NSPoint(x: 407, y: 23)
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1))
+            let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime + 0.01, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 2, clickCount: 1, pressure: 0))
+            window.sendEvent(down)
+            window.sendEvent(up)
+            XCTAssertEqual(state.showHistory, expanded, "Mouse click must invoke the history button")
+            for sample in 0..<30 {
+                try await Task.sleep(for: .milliseconds(8))
+                view.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+                func glyphY(_ start: CGFloat, _ end: CGFloat) -> CGFloat? {
+                    var total: CGFloat = 0
+                    var count: CGFloat = 0
+                    for x in Int(start * scale)..<Int(end * scale) {
+                        for y in 0..<bitmap.pixelsHigh {
+                            guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.8,
+                                  min(c.redComponent, c.greenComponent, c.blueComponent) < 0.65 else { continue }
+                            total += CGFloat(y) / scale
+                            count += 1
+                        }
+                    }
+                    return count > 0 ? total / count : nil
+                }
+                let clock = try XCTUnwrap(glyphY(397, 417), "History glyph must remain visible")
+                let gear = try XCTUnwrap(glyphY(431, 451), "Settings glyph must remain visible")
+                XCTAssertEqual(clock, gear, accuracy: 2, "History icon must travel with the other toolbar icons")
+                if [1, 5, 10].contains(sample) {
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-history-toggle-\(expanded)-\(sample).png"))
+                }
+            }
+        }
     }
 
 }

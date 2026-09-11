@@ -8,24 +8,30 @@ import AppKit
 /// track the *window's* bounds exactly. Sized from SwiftUI content instead, it drifts out
 /// of alignment whenever the content and the window animate on different timelines, and
 /// the corners flash square in the gap.
-final class PanelContainerView: NSView {
-    private let effect = NSVisualEffectView()
-
+final class PanelContainerView: NSVisualEffectView {
     init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = cornerRadius
-        layer?.cornerCurve = .continuous
+        layer?.cornerCurve = .circular
         layer?.masksToBounds = true
-        layer?.borderWidth = 1
 
-        effect.material = .popover
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.autoresizingMask = [.width, .height]
-        addSubview(effect)
-
-        applyAppearanceColors()
+        material = .popover
+        blendingMode = .behindWindow
+        state = .active
+        // A parent layer mask only clips ordinary view drawing. Give the material
+        // itself a mask, and make it the window's contentView so AppKit also derives
+        // the window shadow from that same silhouette.
+        let diameter = cornerRadius * 2 + 1
+        let mask = NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+            return true
+        }
+        mask.capInsets = NSEdgeInsets(top: cornerRadius, left: cornerRadius,
+                                      bottom: cornerRadius, right: cornerRadius)
+        mask.resizingMode = .stretch
+        maskImage = mask
     }
 
     @available(*, unavailable)
@@ -34,19 +40,6 @@ final class PanelContainerView: NSView {
     func installContent(_ view: NSView) {
         addSubview(view)
     }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyAppearanceColors()
-    }
-
-    private func applyAppearanceColors() {
-        // labelColor is dynamic; resolving it to a CGColor needs the right appearance
-        // to be current, otherwise the border keeps whatever it resolved to first.
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            self.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.09).cgColor
-        }
-    }
 }
 
 // MARK: - Small controls
@@ -54,6 +47,7 @@ final class PanelContainerView: NSView {
 /// Quiet icon button used in the bottom bar (pin, settings, stop).
 struct BarIconButton: View {
     let systemName: String
+    var activeSystemName: String? = nil
     var isActive = false
     var help: String
     /// Optional vertical nudge for the glyph inside its 26×26 frame. SF Symbols have
@@ -67,7 +61,17 @@ struct BarIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
+            ZStack {
+                // Keep both glyph identities mounted in one moving frame. Replacing
+                // Image(systemName:) during a layout transition can leave the old
+                // symbol behind while the new symbol appears at the destination.
+                Image(systemName: systemName)
+                    .opacity(activeSystemName != nil && isActive ? 0 : 1)
+                if let activeSystemName {
+                    Image(systemName: activeSystemName)
+                        .opacity(isActive ? 1 : 0)
+                }
+            }
                 .font(Theme.bodySmallMedium)
                 .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
                 .offset(y: glyphOffset)

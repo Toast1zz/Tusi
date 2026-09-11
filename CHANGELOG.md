@@ -2,6 +2,18 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.15] - 2026-09-11
+
+### Fixed
+
+- Cancel obsolete window resize animations when rapid input deletion takes over, preserving the shared curve and preventing old heights from overwriting the final input height.
+- Animate the toolbar as one geometry group and keep the history button's symbol identities stable. Prevent mouse release from snapping the history icon ahead of neighboring controls; cover actual mouse-down/mouse-up events in frame-by-frame regression tests.
+- Apply a rounded mask directly to the window's material content view so the background, content clipping, and shadow share the same silhouette. Remove the decorative panel outline.
+
+### Changed
+
+- Compact empty history to its header, count, and available undo action. Remove the large empty-state icon, redundant message, and reserved space; allow short history lists to fit their content before scrolling at the existing cap.
+
 ## [1.14.9] - 2026-09-11
 
 ### Fixed

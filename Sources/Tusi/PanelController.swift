@@ -6,6 +6,45 @@ import SwiftUI
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    private var resizeTask: Task<Void, Never>?
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        // Any direct update owns the frame immediately. A previous animation must
+        // never write its old destination after an input-size update or a drag.
+        resizeTask?.cancel()
+        resizeTask = nil
+        super.setFrame(frameRect, display: flag)
+    }
+
+    func animateFrame(to destination: NSRect) {
+        resizeTask?.cancel()
+        let start = frame
+        resizeTask = Task { [weak self] in
+            let started = ProcessInfo.processInfo.systemUptime
+            while !Task.isCancelled {
+                let elapsed = ProcessInfo.processInfo.systemUptime - started
+                let progress = Theme.windowResizeProgress(elapsed: elapsed)
+                let rect = NSRect(x: start.minX + (destination.minX - start.minX) * progress,
+                                  y: start.minY + (destination.minY - start.minY) * progress,
+                                  width: start.width + (destination.width - start.width) * progress,
+                                  height: start.height + (destination.height - start.height) * progress)
+                self?.applyAnimationFrame(rect)
+                if progress >= 1 { return }
+                do { try await Task.sleep(for: .milliseconds(8)) } catch { return }
+            }
+        }
+    }
+
+    private func applyAnimationFrame(_ rect: NSRect) {
+        super.setFrame(rect, display: true)
+    }
+
+    override func orderOut(_ sender: Any?) {
+        resizeTask?.cancel()
+        resizeTask = nil
+        super.orderOut(sender)
+    }
 }
 
 @MainActor
@@ -443,7 +482,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// panel looks stretched, or looks like it is crushing its own padding.
     private func applyHeight(_ target: CGFloat) {
         HeightTrace.log("window \(panel.frame.height) -> \(target) (translating \(engine.isTranslating))")
-        guard Self.heightNeedsApply(actual: panel.frame.height, target: target) else { return }
+        guard Self.heightNeedsApply(actual: panel.frame.height, target: target) else {
+            // Even an already matching direct frame must cancel an older animation.
+            if panelState.inputResizeInProgress { panel.setFrame(panel.frame, display: true) }
+            return
+        }
         var frame = panel.frame
         let top = frame.maxY
         frame.size.height = target
@@ -474,12 +517,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         if panelState.inputResizeInProgress || engine.isTranslating || reduceMotion {
             panel.setFrame(frame, display: true)
         } else {
-            // No completion handler. `NSAnimationContext`'s completion fires about 11ms
-            // after this call for a window animator — measured, not assumed — rather than
-            // when the 0.22s resize finishes, so verifying the landing from there snapped
-            // the window to its destination immediately and the panel stopped animating
-            // its height at all. The settle check is scheduled on the clock instead.
-            //
+            // The panel owns one cancellable frame task. A direct input update
+            // or another destination cancels it before writing the next frame.
             Self.animateResize(panel, to: frame)
         }
     }
@@ -487,6 +526,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Shared with the native transition regression test so it exercises the same
     /// window animation used by the installed app.
     static func animateResize(_ window: NSWindow, to frame: NSRect) {
+        if let panel = window as? FloatingPanel {
+            panel.animateFrame(to: frame)
+            return
+        }
         // motion-exception: the window frame follows the shared native resize timeline.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Theme.windowResizeDuration * Theme.animationScale

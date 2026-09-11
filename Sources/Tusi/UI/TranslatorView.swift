@@ -309,6 +309,10 @@ struct TranslatorView: View {
             // with the input/result text's own right margin — one consistent margin for
             // the whole panel instead of the bottom row sitting 4pt closer to the edge.
             bottomBar
+                // Move the toolbar as one geometry group. A button's mouse-up
+                // transaction can otherwise snap only its own label to the final
+                // position while its siblings are still following the layout curve.
+                .geometryGroup()
                 .padding(.horizontal, 16)
                 .padding(.top, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
                 .padding(.bottom, 10)
@@ -717,11 +721,11 @@ struct TranslatorView: View {
     // MARK: - Bottom bar
 
     // MARK: - History
-    private var historyViewportHeight: CGFloat {
-        guard !engine.history.isEmpty else { return 112 }
+    private var historyViewportHeight: CGFloat? {
+        guard !engine.history.isEmpty else { return nil }
         let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows
-        return max(100, min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140,
-            28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing)))
+        return max(60, min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140,
+            28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing) - rowSpacing))
     }
     private var historyList: some View {
         VStack(spacing: 0) {
@@ -752,18 +756,9 @@ struct TranslatorView: View {
                     .foregroundStyle(.tertiary)
                 }
             }
-            .padding(.bottom, 9)
+            .padding(.bottom, engine.history.isEmpty ? 0 : 9)
 
-            if engine.history.isEmpty {
-                VStack(spacing: 7) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(Theme.emptyState)
-                    Text("翻译历史为空")
-                        .font(Theme.bodySmall)
-                }
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            if !engine.history.isEmpty {
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 4) {
                         ForEach(engine.history) { record in
@@ -1035,7 +1030,8 @@ struct TranslatorView: View {
                 panelState.pinned.toggle()
             }
             BarIconButton(
-                systemName: panelState.showHistory ? "clock.fill" : "clock",
+                systemName: "clock",
+                activeSystemName: "clock.fill",
                 isActive: panelState.showHistory,
                 help: panelState.showHistory ? "关闭历史" : "翻译历史"
             ) {
