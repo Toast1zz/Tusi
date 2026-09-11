@@ -582,28 +582,10 @@ struct TranslatorView: View {
                     resultHeight = height
                 }
 
-                // Where this came from, and the offer of a better one — under the
-                // result, in the flow, covering nothing. This row is what the "who was
-                // faster" and "used the backup" toasts turned into: the same facts,
-                // stated for as long as they are true instead of for 2.2 seconds on top
-                // of the text.
-                //
-                // Everything from here down carries the result text's own 5pt leading
-                // inset (see `resultNoticeInset`), so the provenance label, the notices
-                // and the translation all begin on one vertical line — and on the same
-                // line as the input above them, which shares that inset because it comes
-                // from TextEditor's NSTextView line-fragment padding.
-                if !engine.versions.isEmpty || engine.escalating || showsReturnHoldHint {
+                // Only actionable version controls occupy a result footer. Provider
+                // details live on the tone control's tooltip instead of a separate row.
+                if engine.escalating || otherVersion != nil || engine.canEscalate {
                     HStack(spacing: 8) {
-                        if let shown = shownVersion {
-                            ResultProvenance(
-                                label: versionLabel(shown),
-                                isLocal: shown.tier == .local,
-                                afterFailover: shown.afterFailover
-                            )
-                            .help([shown.model, shown.host].filter { !$0.isEmpty }.joined(separator: " · "))
-                        }
-
                         Spacer(minLength: 4)
 
                         if engine.escalating {
@@ -664,9 +646,6 @@ struct TranslatorView: View {
                                 String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
                             } ?? L("请求在线版本，两个结果都会留着"))
                             .transition(.opacity)
-                        }
-                        if showsReturnHoldHint {
-                            returnHoldHint
                         }
                     }
                     .padding(.leading, Self.resultNoticeInset)
@@ -932,44 +911,12 @@ struct TranslatorView: View {
         version.tier == .local ? L("本地") : (version.host.isEmpty ? L("在线") : SettingsStore.shortHostName(version.host))
     }
 
-    private var showsReturnHoldHint: Bool {
-        settings.holdReturnToRetranslate && engine.canRetranslate && !panelState.showHistory && !panelState.showLanguagePicker
-            && settings.shortcut(.translate)?.isPlainReturn == true
-    }
-
-    private var returnHoldHint: some View {
-        ViewThatFits(in: .horizontal) {
-            Text(L("长按 ⏎ 重新翻译")).fixedSize()
-            Text(L("长按 ⏎")).fixedSize()
+    private var toneHelp: String {
+        if let shown = shownVersion {
+            return String(format: L("翻译文风 · 当前服务：%@ · 当前模型：%@"),
+                          versionLabel(shown), shown.model.isEmpty ? "—" : shown.model)
         }
-        .font(Theme.caption)
-        .foregroundStyle(.secondary)
-        .opacity(panelState.returnHoldProgress == nil ? 1 : 0)
-        .frame(height: 18)
-        .overlay {
-            if let progress = panelState.returnHoldProgress {
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-                    .controlSize(.mini)
-                    .accessibilityLabel(L("重新翻译确认进度"))
-            }
-        }
-        .help(L("按住回车 1.5 秒，按当前配置重新翻译；提前松手保留原回车操作"))
-        .accessibilityLabel(L("长按 ⏎ 重新翻译"))
-    }
-
-    /// Width expansion is measured against a stable compact width, never the live
-    /// window width; otherwise wrapping/unwrapping could oscillate the decision.
-    static func needsExpandedWidth(input: String, output: String, compactWidth: CGFloat) -> Bool {
-        let width = max(1, compactWidth - 42)
-        let editor = measureEditorLineMetrics()
-        let draft = input.isEmpty ? " " : (input.hasSuffix("\n") ? input + " " : input)
-        if editorTextHeight(draft, width: width) > editor.first + 2 * editor.step + 1 { return true }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        let text = NSAttributedString(string: output, attributes: [.font: NSFont.systemFont(ofSize: 15), .paragraphStyle: paragraph])
-        let height = text.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
-        return height > 6 * measureLineMetrics().step
+        return String(format: L("翻译文风 · 当前模型：%@"), engine.activeModel)
     }
 
     private var bottomBar: some View {
@@ -989,13 +936,12 @@ struct TranslatorView: View {
         // invisible unconstrained copy — the visible row is already inside the fixed frame
         // and would only ever report the width it was given.
         //
-        // `measuring: true` reserves the action slot and a stable direction label.
-        // Compact mode measures icons; the reading mode reserves copy status text.
-        // Measuring the live row instead would report a
+        // `measuring: true` pins the copy to the row's widest configuration (the copy
+        // button, with its shortcut hint). Measuring the live row instead would report a
         // different width per state — stop button, translate button, copy button — and the
         // window would jump sideways every time a translation started or finished.
         .background(
-            bottomBarRow(showsCopyShortcut: false, measuring: true)
+            bottomBarRow(showsCopyShortcut: true, measuring: true)
                 .fixedSize(horizontal: true, vertical: true)
                 // The reported number is a *panel* width, so it has to include the side
                 // margins the body puts around this row — measuring the row alone would
@@ -1041,7 +987,7 @@ struct TranslatorView: View {
             // Tone occupies the slot the model name used to: it's an action, the model
             // is static trivia that settings already shows. It stays in the tooltip.
             ToneSelector(tone: $settings.tone)
-                .help(String(format: L("翻译文风 · 当前模型：%@"), engine.activeModel))
+                .help(toneHelp)
 
             Spacer(minLength: 4)
 
@@ -1060,17 +1006,14 @@ struct TranslatorView: View {
                 Button {
                     engine.submit()
                 } label: {
-                    Group {
-                        if panelState.usesCompactWidth { Image(systemName: "arrow.up") }
-                        else { Text(settings.commandLabel(L("翻译"), action: .translate)) }
-                    }
+                    Text(settings.commandLabel(L("翻译"), action: .translate))
                         .font(Theme.footnoteMedium)
                         .lineLimit(1)
                         // minWidth, not a hard width: the slot stays stable at the Chinese
                         // label's size (no bar jitter) but "⏎ Translate" is wider and would
                         // be clipped by a fixed 48pt.
                         .frame(height: 26)
-                        .frame(minWidth: panelState.usesCompactWidth ? 26 : 48)
+                        .frame(minWidth: 48)
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasInput)
@@ -1104,9 +1047,20 @@ struct TranslatorView: View {
             }
 
             if measuring || (!engine.isTranslating && !engine.output.isEmpty) {
-                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil, compact: panelState.usesCompactWidth) {
+                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
                     engine.copyOutput()
                 }
+                    .overlay(alignment: .bottom) {
+                        if let progress = panelState.returnHoldProgress, !measuring {
+                            ProgressView(value: progress)
+                                .progressViewStyle(.linear)
+                                .controlSize(.mini)
+                                .padding(.horizontal, 8)
+                                .offset(y: 4)
+                                .accessibilityLabel(L("重新翻译确认进度"))
+                                .allowsHitTesting(false)
+                        }
+                    }
                     // Opacity only. The stop and translate controls that share this
                     // slot both plain-fade; a scale pop on just one of the three made
                     // the same position behave differently depending on which control

@@ -41,13 +41,6 @@ final class PanelState: ObservableObject {
     @Published var showLanguagePicker = false
     /// Current panel content width. Starts at 470 and persists across launches.
     @Published var panelWidth: CGFloat = 470
-    @Published var expandedDraftWidth = false
-    @Published var compactControlWidth: CGFloat = Theme.compactPanelMinWidth
-    var manualDraftWidth: CGFloat?
-
-    var usesCompactWidth: Bool {
-        !showSettings && !showHistory && !showLanguagePicker && !expandedDraftWidth
-    }
     @Published var availableHeight: CGFloat = 760
 
     struct PendingShortcut: Equatable {

@@ -243,3 +243,5 @@
 "长按 ⏎" = "Hold ⏎";
 "长按回车重新翻译" = "Hold Return to translate again";
 "关闭后隐藏长按提示，并恢复普通回车操作" = "Turn off to hide the hold hint and restore the normal Return action.";
+
+"翻译文风 · 当前服务：%@ · 当前模型：%@" = "Translation tone · Current provider: %@ · Current model: %@";

@@ -35,8 +35,6 @@ struct RootView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
 
-    @State private var measuredControlWidth: CGFloat = Theme.compactPanelMinWidth
-
     let onHeightChange: (CGFloat) -> Void
     let onContentMinWidthChange: (CGFloat) -> Void
 
@@ -103,36 +101,13 @@ struct RootView: View {
         // content, which measures itself unconstrained, so it reports what the content
         // *wants* rather than the width it was forced into.
         .onPreferenceChange(PanelContentWidthKey.self) { width in
-            guard width > 0 else {
-                if !panelState.usesCompactWidth { onContentMinWidthChange(Theme.panelMinWidth) }
-                return
-            }
-            let needed = width
-            measuredControlWidth = needed
-            if panelState.usesCompactWidth { panelState.compactControlWidth = max(Theme.compactPanelMinWidth, needed) }
-            onContentMinWidthChange(needed)
+            guard width > 0 else { return }
+            onContentMinWidthChange(width)
         }
-        .onChange(of: panelState.usesCompactWidth) { _, compact in
-            onContentMinWidthChange(compact ? panelState.compactControlWidth : measuredControlWidth)
-        }
-        .onChange(of: engine.input, initial: true) { _, _ in updateDraftWidth() }
-        .onChange(of: engine.output) { _, _ in updateDraftWidth() }
-        .onChange(of: panelState.compactControlWidth) { _, _ in updateDraftWidth() }
         // No background, corner radius or border here — those belong to the window and are
         // drawn by PanelContainerView. Sizing them from the content instead means they
         // animate on the content's timeline while the window resizes on AppKit's, and the
         // gap between the two timelines is where the corners flash square.
-    }
-
-    private func updateDraftWidth() {
-        if engine.input.isEmpty && engine.output.isEmpty {
-            panelState.manualDraftWidth = nil
-            panelState.expandedDraftWidth = false
-        } else if !panelState.expandedDraftWidth && TranslatorView.needsExpandedWidth(
-            input: engine.input, output: engine.output, compactWidth: panelState.compactControlWidth
-        ) {
-            panelState.expandedDraftWidth = true
-        }
     }
 
     /// The outgoing page's half of a page-push transition. A full-width `.move` on

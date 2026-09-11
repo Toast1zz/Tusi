@@ -312,87 +312,6 @@ final class NativeLayoutTests: XCTestCase {
         try trace.write(toFile: "/tmp/tusi-input-line-transition.csv", atomically: true, encoding: .utf8)
     }
 
-    func testCompactWidthStaysStableForShortDraftAndExpandsOnceForLongContent() async throws {
-        let settings = SettingsStore(preview: true)
-        settings.autoCopy = false
-        settings.soundEnabled = false
-        let state = PanelState()
-        state.panelWidth = Theme.compactPanelMinWidth
-        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: state.panelWidth, height: 100),
-                              styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        var widths: [CGFloat] = []
-        let root = RootView(onHeightChange: { height in
-            var frame = window.frame
-            frame.origin.y = frame.maxY - ceil(height)
-            frame.size.height = ceil(height)
-            window.setFrame(frame, display: true)
-        }, onContentMinWidthChange: { controls in
-            let target = PanelController.resolvedWidth(saved: settings.panelWidth, controls: controls, compact: state.usesCompactWidth)
-            if abs(target - state.panelWidth) > 0.5 { widths.append(target) }
-            state.panelWidth = target
-            var frame = window.frame
-            let center = frame.midX
-            frame.size.width = target
-            frame.origin.x = center - target / 2
-            window.setFrame(frame, display: true)
-        })
-            .environmentObject(settings).environmentObject(state).environmentObject(engine)
-            .environmentObject(UpdateChecker(preview: true))
-            .frame(maxHeight: .infinity, alignment: .top)
-            .environment(\.colorScheme, .light)
-            .background(Color.white)
-        let host = NSHostingView(rootView: root)
-        window.contentView = host
-        defer { window.close() }
-        func settle() async throws {
-            for _ in 0..<20 {
-                host.layoutSubtreeIfNeeded()
-                try await Task.sleep(for: .milliseconds(15))
-            }
-        }
-        func snapshot(_ name: String) throws {
-            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-compact-\(name).png"))
-        }
-        try await settle()
-        let compact = state.panelWidth
-        print("COMPACT_WIDTH empty=\(compact) height=\(window.frame.height)")
-        XCTAssertLessThan(compact, Theme.panelMinWidth)
-        XCTAssertLessThan(window.frame.height, 100)
-        try snapshot("empty")
-        widths.removeAll()
-        for text in ["投", "投资", "投资人"] {
-            engine.input = text
-            try await settle()
-            XCTAssertEqual(state.panelWidth, compact, accuracy: 0.5)
-        }
-        XCTAssertTrue(widths.isEmpty, "Typing a short draft must not widen the window")
-        engine.debugPreview(input: "投资人", output: "Investor")
-        try await settle()
-        XCTAssertEqual(state.panelWidth, compact, accuracy: 0.5)
-        try snapshot("short-result")
-        engine.input = String(repeating: "这是一段需要更多阅读空间的长文本。", count: 15)
-        try await settle()
-        XCTAssertTrue(state.expandedDraftWidth)
-        XCTAssertGreaterThanOrEqual(state.panelWidth, Theme.panelMinWidth)
-        let expanded = state.panelWidth
-        engine.input = "投资人"
-        try await settle()
-        XCTAssertEqual(state.panelWidth, expanded, accuracy: 0.5, "Deleting near a wrapping boundary must not oscillate width")
-        engine.input = ""
-        try await settle()
-        XCTAssertEqual(state.panelWidth, compact, accuracy: 0.5)
-        state.showSettings = true
-        try await settle()
-        XCTAssertGreaterThanOrEqual(state.panelWidth, Theme.panelMinWidth)
-        state.showSettings = false
-        try await settle()
-        XCTAssertEqual(state.panelWidth, compact, accuracy: 0.5)
-    }
-
     func testFirstAndRepeatedClearUseOneMonotonicWindowTransition() async throws {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         print("CLEAR_TRANSITION reduceMotion=\(reduceMotion)")
@@ -409,6 +328,7 @@ final class NativeLayoutTests: XCTestCase {
         let controller = PanelController(engine: engine, settings: settings, panelState: state,
                                          updateChecker: UpdateChecker(preview: true), statusItem: nil)
         let window = try XCTUnwrap(app.windows.first { !existing.contains(ObjectIdentifier($0)) && $0 is FloatingPanel })
+        window.setFrameOrigin(NSPoint(x: 200, y: 200))
         window.alphaValue = 0
         window.orderBack(nil)
         defer { controller.hide() }
@@ -440,7 +360,7 @@ final class NativeLayoutTests: XCTestCase {
             }
             let end = window.frame
             endpoints.append(end.size)
-            XCTAssertLessThan(end.width, start.width)
+            XCTAssertEqual(end.width, start.width, accuracy: 1, "Clearing must preserve the reading width")
             XCTAssertLessThan(end.height, 100)
             XCTAssertFalse(state.inputResizeInProgress)
             for (previous, next) in zip(frames, frames.dropFirst()) {
@@ -457,6 +377,59 @@ final class NativeLayoutTests: XCTestCase {
         XCTAssertEqual(endpoints[0].width, endpoints[1].width, accuracy: 1)
         XCTAssertEqual(endpoints[0].height, endpoints[1].height, accuracy: 1)
         try trace.write(toFile: "/tmp/tusi-first-repeated-clear.csv", atomically: true, encoding: .utf8)
+    }
+
+    func testSettledAuditRepairsStaleHeightWithoutAnotherPreference() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.autoCopy = false
+        settings.soundEnabled = false
+        let state = PanelState()
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
+        engine.input = "First line\nSecond line\nThird line"
+        let app = NSApplication.shared
+        let existing = Set(app.windows.map(ObjectIdentifier.init))
+        let controller = PanelController(engine: engine, settings: settings, panelState: state,
+                                         updateChecker: UpdateChecker(preview: true), statusItem: nil)
+        let window = try XCTUnwrap(app.windows.first { !existing.contains(ObjectIdentifier($0)) && $0 is FloatingPanel })
+        window.setFrameOrigin(NSPoint(x: 200, y: 200))
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { controller.hide() }
+        func settle() async throws {
+            for _ in 0..<100 {
+                window.contentView?.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        try await settle()
+        let natural = window.frame
+        // Reproduce the incident: the last report still describes the removed result,
+        // while the actual view has already shrunk. No new geometry is required.
+        controller.setContentHeight(natural.height + 163)
+        try await settle()
+        XCTAssertEqual(window.frame.height, natural.height, accuracy: 1)
+        XCTAssertEqual(window.frame.maxY, natural.maxY, accuracy: 1)
+        XCTAssertEqual(window.frame.width, natural.width, accuracy: 1)
+
+        // Editing without changing the line count must also trigger reconciliation.
+        var stale = window.frame
+        stale.origin.y -= 100
+        stale.size.height += 100
+        window.setFrame(stale, display: true)
+        engine.input = "First edit\nSecond line\nThird line"
+        try await settle()
+        XCTAssertEqual(window.frame.height, natural.height, accuracy: 1)
+
+        // A new result arriving during shrink confirmation must invalidate the old
+        // measurement, and its full height must survive the follow-up audits.
+        controller.setContentHeight(natural.height + 163)
+        try await Task.sleep(for: .milliseconds(370))
+        engine.debugPreview(input: engine.input, output: String(repeating: "A completed result line.\n", count: 8))
+        try await settle()
+        let resultHeight = window.frame.height
+        XCTAssertGreaterThan(resultHeight, natural.height + 100)
+        try await settle()
+        XCTAssertEqual(window.frame.height, resultHeight, accuracy: 1)
     }
 
 }

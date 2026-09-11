@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Borderless floating panel that can receive keyboard input.
@@ -9,8 +10,7 @@ final class FloatingPanel: NSPanel {
 
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
-    // Compact draft widths come from measured controls. Reading/settings widths
-    // retain the user's saved preference and the established readable minimum.
+    // Keep the saved reading width, enlarged only when localized controls need it.
 
     private let panel: FloatingPanel
     private let engine: TranslationEngine
@@ -30,24 +30,20 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var contentHost: NSView?
     /// Debounces the audit to one run per settled resize.
     private var fitAudit: DispatchWorkItem?
+    private var contentObservation: AnyCancellable?
+    private var pendingShrinkHeight: CGFloat?
 
     /// The narrowest the content can be drawn without clipping, reported by the view via
     /// `PanelContentWidthKey`. Distinct from `settings.panelWidth`, which is the width the
     /// *user* chose: the effective width is the larger of the two, so a wider localisation
     /// widens the window instead of squeezing the controls against a fixed frame.
-    private var contentMinWidth: CGFloat = Theme.compactPanelMinWidth
+    private var contentMinWidth: CGFloat = Theme.panelMinWidth
     private var emptyResizeTask: Task<Void, Never>?
 
     /// The width the panel should actually use: the user's preference, never narrower than
     /// the content needs, never outside the design bounds.
     private var effectiveWidth: CGFloat {
-        Self.resolvedWidth(saved: settings.panelWidth, controls: contentMinWidth,
-                           compact: panelState.usesCompactWidth, manual: panelState.manualDraftWidth)
-    }
-
-    static func resolvedWidth(saved: CGFloat, controls: CGFloat, compact: Bool, manual: CGFloat? = nil) -> CGFloat {
-        let preferred = compact ? (manual ?? Theme.compactPanelMinWidth) : max(Theme.panelMinWidth, saved)
-        return min(max(preferred, controls), Theme.panelMaxWidth)
+        min(max(settings.panelWidth, contentMinWidth), Theme.panelMaxWidth)
     }
     private var hasShownOnce = false
 
@@ -85,7 +81,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         self.updateChecker = updateChecker
         self.statusItem = statusItem
 
-        let width = panelState.usesCompactWidth ? Theme.compactPanelMinWidth : min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
+        let width = min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
         panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView, .resizable],
@@ -95,9 +91,10 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         super.init()
 
+        settings.panelWidth = width
         panelState.panelWidth = width
         panel.delegate = self
-        panel.minSize = NSSize(width: Theme.compactPanelMinWidth, height: Self.minimumPanelHeight)
+        panel.minSize = NSSize(width: Theme.panelMinWidth, height: Self.minimumPanelHeight)
         panel.maxSize = NSSize(width: Theme.panelMaxWidth, height: 2000)
         panel.isFloatingPanel = true
         panel.level = .floating
@@ -136,6 +133,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         container.installContent(hosting)
         panel.contentView = container
         contentHost = hosting
+
+        // Content can change without SwiftUI delivering a new height preference.
+        // Observe the model independently so a lost report still gets a settled audit.
+        contentObservation = engine.objectWillChange.sink { [weak self] in
+            self?.scheduleFitAudit()
+        }
 
         installKeyMonitor()
         installResignObserver()
@@ -253,11 +256,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
     }
 
-    /// Uses measured controls as the drag floor, then chooses compact or reading
-    /// width without overwriting the saved reading-width preference.
+    /// Keep a stable reading width while respecting localized control requirements.
     private func setContentMinWidth(_ width: CGFloat) {
-        let floor = panelState.usesCompactWidth ? Theme.compactPanelMinWidth : Theme.panelMinWidth
-        let needed = min(max(width, floor), Theme.panelMaxWidth)
+        let needed = min(max(width, Theme.panelMinWidth), Theme.panelMaxWidth)
+        guard abs(needed - contentMinWidth) > 0.5 else { return }
         contentMinWidth = needed
         // AppKit enforces this during a live drag, so the user cannot pull the panel
         // narrower than its own controls.
@@ -291,7 +293,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     /// Called by SwiftUI whenever the measured content height changes.
     /// Keeps the top edge anchored so the panel grows downward.
-    private func setContentHeight(_ height: CGFloat) {
+    func setContentHeight(_ height: CGFloat) {
         var clamped = max(height, Self.minimumPanelHeight)
         // A tall result (many lines) plus a small screen (a compact external display,
         // a projector) could otherwise push the panel's bottom edge off the visible
@@ -361,8 +363,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Delayed past `windowResizeDuration` so it audits the settled state rather than
     /// racing the resize it was scheduled by, and debounced so a streaming translation
     /// runs it once at the end instead of once per chunk.
-    private func scheduleFitAudit() {
+    private func scheduleFitAudit(confirmingShrink: Bool = false) {
         fitAudit?.cancel()
+        if !confirmingShrink { pendingShrinkHeight = nil }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -376,13 +379,18 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
         fitAudit = work
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Theme.windowResizeDuration * Theme.animationScale + 0.12,
+            deadline: .now() + (confirmingShrink ? 0.06 : Theme.windowResizeDuration * Theme.animationScale + 0.12),
             execute: work
         )
     }
 
     private func auditContentFit() {
         guard panel.isVisible, let contentHost else { return }
+        guard !panelState.inputResizeInProgress else {
+            scheduleFitAudit()
+            return
+        }
+        contentHost.layoutSubtreeIfNeeded()
         // A flexible settings viewport's fittingSize is a scroll-view layout hint,
         // not its requested window size. Its measured document/header supply that
         // destination independently, including the screen cap.
@@ -400,18 +408,25 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         HeightTrace.dump(reason: "window \(actual)pt, content needs \(needed)pt")
 
-        // Grow only. Content taller than its window is the visible failure — the result
-        // and the bottom bar run off the bottom edge — and growing to fit can only reveal
-        // what is already drawn. Shrinking on this signal would let a single suspect
-        // measurement cut a result short, so a window that is merely too tall is reported
-        // and left to the next real height report.
-        guard needed > actual else { return }
+        // Shrink only after two settled measurements agree. A model change or a
+        // new preference invalidates the candidate, so transient removal/layout
+        // measurements cannot truncate newly arriving content.
+        if needed < actual {
+            guard let candidate = pendingShrinkHeight, abs(candidate - needed) <= 0.5 else {
+                pendingShrinkHeight = needed
+                scheduleFitAudit(confirmingShrink: true)
+                return
+            }
+        }
+        pendingShrinkHeight = nil
         var clamped = needed
         if let screenHeight = panel.screen?.visibleFrame.height {
             clamped = Self.clampedPanelHeight(desired: clamped, visibleHeight: screenHeight)
         }
-        desiredHeight = clamped
-        applyHeight(clamped)
+        desiredHeight = ceil(clamped)
+        guard Self.heightNeedsApply(actual: actual, target: desiredHeight) else { return }
+        applyHeight(desiredHeight)
+        scheduleFitAudit()
     }
 
     /// Moves the window to `target`, keeping the top edge anchored.
@@ -748,7 +763,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
-        panelState.manualDraftWidth = panelState.panelWidth
         settings.panelWidth = panelState.panelWidth
     }
 }

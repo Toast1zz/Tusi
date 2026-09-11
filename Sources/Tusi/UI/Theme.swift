@@ -59,7 +59,6 @@ enum Theme {
     /// Panel width bounds, shared by `PanelController`'s init/resize handling and the
     /// persisted-width clamp in `SettingsStore` — one source instead of the same two
     /// literals typed out at four call sites.
-    static let compactPanelMinWidth: CGFloat = 360
     static let panelMinWidth: CGFloat = 470
     static let panelMaxWidth: CGFloat = 700
 

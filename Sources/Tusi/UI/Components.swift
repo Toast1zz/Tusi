@@ -284,7 +284,6 @@ struct CopyButton: View {
     /// to do it, rather than by a banner floating over the text it failed to copy.
     var failed = false
     var shortcutHint: String?
-    var compact = false
     let action: () -> Void
 
     @State private var hovering = false
@@ -331,7 +330,7 @@ struct CopyButton: View {
             }
             .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(.white)
-            .padding(.horizontal, compact ? 8 : 12)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Capsule().fill(fill))
             // Brightness only. This used to also scale to 1.03 on hover, which made it
@@ -343,7 +342,6 @@ struct CopyButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel(accessibilityTitle)
-        .help(Text(accessibilityTitle))
         .motion(.state, value: phase)
         .motion(.micro, value: hovering)
     }
@@ -363,22 +361,20 @@ struct CopyButton: View {
                 // alternative (fade one out, fade the other in) reads as two separate
                 // glyphs rather than one control confirming itself.
                 .contentTransition(.symbolEffect(.replace))
-            if !compact {
-                Text({
-                    switch phase {
-                    case .failed: return LocalizedStringKey("复制失败")
-                    case .copied: return LocalizedStringKey("已复制")
-                    case .idle: return LocalizedStringKey("复制")
-                    }
-                }())
-                    .font(Theme.bodySmallSemibold)
-                    .lineLimit(1)
-                if phase == .idle, let shortcutHint, !shortcutHint.isEmpty {
-                    Text(shortcutHint)
-                        .font(Theme.captionMedium)
-                        .opacity(0.65)
-                        .lineLimit(1)
+            Text({
+                switch phase {
+                case .failed: return LocalizedStringKey("复制失败")
+                case .copied: return LocalizedStringKey("已复制")
+                case .idle: return LocalizedStringKey("复制")
                 }
+            }())
+                .font(Theme.bodySmallSemibold)
+                .lineLimit(1)
+            if phase == .idle, let shortcutHint, !shortcutHint.isEmpty {
+                Text(shortcutHint)
+                    .font(Theme.captionMedium)
+                    .opacity(0.65)
+                    .lineLimit(1)
             }
         }
         .fixedSize(horizontal: true, vertical: false)

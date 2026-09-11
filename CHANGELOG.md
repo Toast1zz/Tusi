@@ -2,6 +2,18 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.9] - 2026-09-11
+
+### Fixed
+
+- Reconcile the window height after translation content changes even when its layout notification is missed. Confirm an oversized window against two settled measurements before shrinking, preserving the top edge and reading width and invalidating stale measurements when new content arrives.
+
+### Changed
+
+- Remove the standing hold-to-retranslate hint and the dedicated provider row. Show the displayed result's provider and model in the tone control tooltip; retain actionable version controls and show hold progress only while holding Return.
+
+- Restore the default reading width for empty, short, and long content. Remove automatic compact-width switching and restore labeled translation/copy buttons while retaining single-line input sizing and coordinated resize animations.
+
 ## [1.14.6] - 2026-09-10
 
 ### Added
