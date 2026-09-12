@@ -5,136 +5,116 @@ import SwiftUI
 /// lives here so the interface reads as one coherent system instead of a collection
 /// of per-view literals.
 ///
-/// Type scale (from the audit of all `.system(size:)` call sites):
-/// - 9    → `.caption2` — badge counts, tiny metadata
-/// - 10   → `.caption`   — secondary labels, hints, field captions
-/// - 11   → `.footnote`  — compact controls, chip labels, history meta
-/// - 12   → `.bodySmall` — button text, compact labels
-/// - 12.5 → `.body`      — settings rows, field content
-/// - 14   → `.title`     — page headers
-/// - 15   → `.content`   — main input/result text
-/// - 18   → `.emptyState` — empty-state hero icons
+/// The system is deliberately small. Hierarchy comes from ink — primary, secondary,
+/// tertiary — not from a ladder of sizes, weights and colors:
+///
+/// - Three sizes in the translator: 15 for the text itself, 12 for controls, 11 for
+///   metadata. The settings page keeps the scale it was designed with (see "Settings
+///   page" below) — those tokens belong to it alone.
+/// - Two weights: regular and medium. No rounded or light variants.
+/// - The accent color marks focus, text selection, links — and the copy button, which
+///   keeps its solid blue/green/orange capsule so its state reads at a glance. Orange is
+///   otherwise reserved for failures the user has to act on.
+/// - The tone selector keeps its 1.14.15 design, Liquid Glass pill included; the
+///   translator's other controls use matte fills.
 enum Theme {
     /// System accent color — whatever the user picked in System Settings ▸ Appearance.
-    /// Using it (instead of a baked-in brand gradient) is what makes controls read as
-    /// native macOS chrome rather than a cross-platform app that shipped its own palette.
+    /// Spent only on focus, selection and links, so it still means something when it
+    /// appears.
     static let accent = Color.accentColor
     static let success = Color(nsColor: .systemGreen)
 
-    // MARK: - Fill tokens
+    // MARK: - Fills
     //
-    // Audited every `Color.primary.opacity(…)` call site in the UI: 0.05 / 0.055 / 0.06
-    // showed up five separate times as "a static quiet background", 0.065 / 0.07 four
-    // times as "a hover background", 0.07 / 0.08 as "a hairline stroke" — different
-    // numbers picked at different times for the same intent, not deliberately distinct
-    // steps. Collapsed to the tokens below; each one now means exactly one thing.
-    //
-    // Left alone (not part of this system): SoftDivider's gradient stops (a fade
-    // curve, not a flat fill), the 0.35/0.18 shadow and placeholder-dot opacities, and
-    // anything ≥0.6 (those are foreground/text opacities, a different axis entirely).
+    // Three steps, each meaning one thing. Anything that rests on `fillQuiet` hovers to
+    // `fillActive`; anything that rests on nothing hovers to `fillQuiet`.
 
-    /// The faintest tier: a resting state that must stay barely-there so a hover state
-    /// two tiers up still reads as a real change (history rows).
-    static let fillFaint = Color.primary.opacity(0.025)
-    /// Static quiet backgrounds: field chrome, badges, unselected pills/tabs/rows.
+    /// A resting control surface: the tone track, copy capsule, language pills.
     static let fillQuiet = Color.primary.opacity(0.05)
-    /// Hover state, and anywhere a slightly stronger presence than `fillQuiet` is
-    /// deliberate (not another accidental near-duplicate of it).
-    static let fillHover = Color.primary.opacity(0.07)
-    /// Stronger emphasis fill: the skeleton-loading bars, and a chip's engaged state
-    /// (flipped/expanded) — anything that wants to read as more "present" than a quiet
-    /// background without being a hover state.
+    /// Engaged: a selection, a hover over a resting surface, a chip that is open.
     static let fillActive = Color.primary.opacity(0.1)
     /// Borders and field outlines.
     static let strokeHairline = Color.primary.opacity(0.08)
-    /// ToneSelector's selection pill on macOS < 26 (the Liquid Glass fallback) — its
-    /// own tier because a selection indicator is deliberately more present than any
-    /// hover state, and it's the only thing in the UI that needs to be.
-    static let fillSelection = Color.primary.opacity(0.14)
 
     /// The panel's physical surface corner. Larger than any inner control radius so
     /// nested corners stay visually distinct.
     static let panelCornerRadius: CGFloat = 20
 
     /// Panel width bounds, shared by `PanelController`'s init/resize handling and the
-    /// persisted-width clamp in `SettingsStore` — one source instead of the same two
-    /// literals typed out at four call sites.
+    /// persisted-width clamp in `SettingsStore`.
     static let panelMinWidth: CGFloat = 470
     static let panelMaxWidth: CGFloat = 700
 
-    /// The shared content font for the translator input and result text.
-    static let contentFont = Font.system(size: 15)
-
     // MARK: - Typography
 
-    // Base sizes (regular weight unless noted).
+    /// 15pt — the text itself: input, result, and translations in history.
+    static let contentFont = Font.system(size: 15)
+    /// 12pt — every control label in the panel.
+    static let control = Font.system(size: 12)
+    static let controlMedium = Font.system(size: 12, weight: .medium)
+    /// 11pt — metadata: provenance, notices, day headers, the source line in history.
+    static let meta = Font.system(size: 11)
+    static let metaMedium = Font.system(size: 11, weight: .medium)
 
-    /// 9pt — the smallest metadata: badge counts, tiny inline labels.
+    // MARK: - Corner radii
+
+    /// Rows and inline surfaces: history rows, notices, fields.
+    static let radiusStandard: CGFloat = 8
+
+    // MARK: - Settings page
+    //
+    // The settings page keeps the design it had before the translator was reduced to
+    // three sizes. These tokens are its own; nothing in the translator should use them.
+
+    /// 9pt — the smallest metadata.
     static let caption2 = Font.system(size: 9)
     /// 10pt — secondary labels, hints, field captions.
     static let caption = Font.system(size: 10)
-    /// 11pt — compact controls, chip labels, history metadata, toasts.
+    /// 11pt — compact controls and labels.
     static let footnote = Font.system(size: 11)
     /// 12pt — button text, compact labels, small icons.
     static let bodySmall = Font.system(size: 12)
-    /// 12.5pt — settings rows, field content, larger labels.
+    /// 12.5pt — settings rows, field content.
     static let body = Font.system(size: 12.5)
     /// 14pt — page headers (Settings, Shortcuts).
     static let title = Font.system(size: 14, weight: .semibold)
-    /// 15pt — the main input/result text (alias of `contentFont`).
-    static let content = Font.system(size: 15)
-    /// 18pt — empty-state hero icon.
-    static let emptyState = Font.system(size: 18, weight: .light)
-
-    // Weighted/specialized variants used by controls.
-
-    /// 9pt semibold — badge counts.
+    /// 9pt semibold.
     static let caption2Semibold = Font.system(size: 9, weight: .semibold)
-    /// 9.5pt semibold rounded — history count badge.
-    static let caption2Rounded = Font.system(size: 9.5, weight: .semibold, design: .rounded)
-    /// 10pt medium — small button labels.
-    static let captionMedium = Font.system(size: 10, weight: .medium)
-    /// 10pt semibold — emphasized small labels.
+    /// 10pt semibold.
     static let captionSemibold = Font.system(size: 10, weight: .semibold)
     /// 10.5pt medium — secondary action labels.
     static let caption2Medium = Font.system(size: 10.5, weight: .medium)
-    /// 10.5pt bold — copy button icon.
-    static let caption2Bold = Font.system(size: 10.5, weight: .bold)
     /// 11pt medium — compact control labels.
     static let footnoteMedium = Font.system(size: 11, weight: .medium)
-    /// 11pt semibold — section headers in the translator.
+    /// 11pt semibold — section headers.
     static let footnoteSemibold = Font.system(size: 11, weight: .semibold)
-    /// 11pt semibold rounded — direction chip.
-    static let footnoteRounded = Font.system(size: 11, weight: .semibold, design: .rounded)
     /// 11.5pt medium — update status, recording state.
     static let footnote2Medium = Font.system(size: 11.5, weight: .medium)
     /// 11.5pt semibold — slot tab label.
     static let footnote2Semibold = Font.system(size: 11.5, weight: .semibold)
-    /// 12pt medium — icon button glyphs.
-    static let bodySmallMedium = Font.system(size: 12, weight: .medium)
     /// 12pt semibold — primary button text.
     static let bodySmallSemibold = Font.system(size: 12, weight: .semibold)
-    /// 12.5pt monospaced — code-like fields (base URL, model, key, routing).
-    static let bodyMonospaced = Font.system(size: 12.5, design: .monospaced)
-    /// 10.5pt semibold/medium toggle — tone selector labels.
+    /// 10.5pt bold — the copy button's icon.
+    static let caption2Bold = Font.system(size: 10.5, weight: .bold)
+    /// 10pt medium — the copy button's shortcut hint.
+    static let captionMedium = Font.system(size: 10, weight: .medium)
+    /// 10.5pt semibold — the tone selector's selected label.
     static let toneLabel = Font.system(size: 10.5, weight: .semibold)
-    /// 8pt bold — direction arrow.
-    static let arrowBold = Font.system(size: 8, weight: .bold)
+    /// 12.5pt monospaced — code-like fields (base URL, model, key).
+    static let bodyMonospaced = Font.system(size: 12.5, design: .monospaced)
     /// 11.5pt medium, rounded — the shortcut combo pill in its resting state.
     static let shortcutCombo = Font.system(size: 11.5, weight: .medium, design: .rounded)
-    /// 11.5pt medium, default — the same pill while a shortcut is being recorded
-    /// (recording swaps away from the rounded design so the active state reads as
-    /// a fresh field, not a settled badge).
+    /// 11.5pt medium, default — the same pill while a shortcut is being recorded.
     static let shortcutComboRecording = Font.system(size: 11.5, weight: .medium)
-
-    // MARK: - Corner radii
-
-    /// Small inline elements: badges, tiny pills.
+    /// The faintest resting surface.
+    static let fillFaint = Color.primary.opacity(0.025)
+    /// Hover state for rows and pills.
+    static let fillHover = Color.primary.opacity(0.07)
+    /// The selection pill of the tone selector and the settings choices on macOS < 26
+    /// (the Liquid Glass fallback).
+    static let fillSelection = Color.primary.opacity(0.14)
+    /// Small inline elements: badges, the shortcuts row hover.
     static let radiusSmall: CGFloat = 6
-    /// Everything else: fields, buttons, cards, history rows, the toast surface.
-    /// Used to be three separate values (8/9/10) a single point apart — a difference
-    /// no eye can actually pick out, so it was cycle-of-history, not a real scale.
-    static let radiusStandard: CGFloat = 8
 
     // MARK: - Motion
     //
@@ -144,8 +124,7 @@ enum Theme {
     // 1. **One user action = one timeline = one token.** Tokens are chosen by *cause*
     //    (what the user did), never by *property* (which thing happens to be changing).
     //    A page push animates the slide, the panel height, and every fade inside it
-    //    with `.page` — so it reads as one motion instead of three overlapping ones
-    //    at 0.18 / 0.22 / 0.28.
+    //    with `.page` — so it reads as one motion instead of three overlapping ones.
     // 2. **Everything is declared with `.motion(_:value:)`; nothing uses
     //    `withAnimation`.** An imperative transaction animates whatever else happened
     //    to change on the same runloop turn — that is how an unrelated control ends up
@@ -192,9 +171,7 @@ enum Theme {
         case layout
         /// Pushing between the translator, settings and shortcuts pages — including the
         /// panel height change that comes with it. A separate case from `.layout` because
-        /// it names a different cause, not a different timing: a push travels much
-        /// further than a fold, and pricing it longer for that reason is what put the
-        /// window (0.22) and the slide (0.28) on visibly different clocks.
+        /// it names a different cause, not a different timing.
         case page
         /// The one legitimate spring in the app: ToneSelector's selection pill has real
         /// inertia (a shape moving between resting positions), unlike everything above,

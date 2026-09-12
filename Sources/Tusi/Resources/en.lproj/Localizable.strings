@@ -245,3 +245,11 @@
 "关闭后隐藏长按提示，并恢复普通回车操作" = "Turn off to hide the hold hint and restore the normal Return action.";
 
 "翻译文风 · 当前服务：%@ · 当前模型：%@" = "Translation tone · Current provider: %@ · Current model: %@";
+
+/* MARK: - Wabi-sabi redesign: history and panel */
+"翻译文风" = "Tone";
+"今天" = "Today";
+"昨天" = "Yesterday";
+"还没有翻译记录" = "No translations yet";
+"只保留最近 %d 条" = "Only the last %d are kept";
+"历史已清空" = "History cleared";

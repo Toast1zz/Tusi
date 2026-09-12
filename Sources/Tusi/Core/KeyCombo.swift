@@ -1,10 +1,10 @@
 import AppKit
 
-/// The five shortcuts the user can rebind. Each knows its own default and its rules —
+/// The shortcuts the user can rebind. Each knows its own default and its rules —
 /// the global summon must carry a ⌘/⌃/⌥ modifier (a bare global key would fire on every
 /// press system-wide), while panel-local shortcuts may be bare (translate is a plain ⏎).
 enum ShortcutAction: String, CaseIterable, Identifiable {
-    case summon, translate, newline, close, copy
+    case summon, translate, newline, close, copy, history
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .newline: return L("换行")
         case .close: return L("关闭 / 返回")
         case .copy: return L("复制")
+        case .history: return L("翻译历史")
         }
     }
 
@@ -36,6 +37,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
             return KeyCombo(keyCode: 53, modifiers: 0, display: "Esc")
         case .copy:
             return .defaultCopy
+        case .history:
+            return KeyCombo(keyCode: 16, modifiers: NSEvent.ModifierFlags([.command]).rawValue, display: "⌘Y")  // Y
         }
     }
 }

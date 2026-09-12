@@ -207,7 +207,6 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var persistenceError: String?
     @Published private(set) var canUndoHistoryDeletion = false
     private var deletedRecords: [Record] = []
-    private var deletedRecordExpiry: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var inputRevision: UInt = 0
     private var copyResetTask: Task<Void, Never>?
@@ -231,7 +230,8 @@ final class TranslationEngine: ObservableObject {
 
     /// Ring buffer of completed translations (newest first).
     @Published private(set) var history: [Record] = []
-    private let historyCapacity = 50
+    /// How many translations history keeps. The history view says this number out loud.
+    static let historyCapacity = 50
 
     /// Per-field cap applied only when archiving into `history` — the panel's own
     /// input/output for the current translation are never touched. Bounds the worst
@@ -1377,7 +1377,7 @@ final class TranslationEngine: ObservableObject {
             versions: versions.map(Self.archivedVersion)
         )
         // Publish the bounded snapshot as one atomic observable change.
-        history = Array(([record] + history.filter { $0.id != record.id }).prefix(historyCapacity))
+        history = Array(([record] + history.filter { $0.id != record.id }).prefix(Self.historyCapacity))
         saveHistory()
     }
 
@@ -1418,23 +1418,25 @@ final class TranslationEngine: ObservableObject {
         saveHistory()
     }
 
+    /// Holds what was just deleted so it can be put back. It stays until the history it
+    /// belongs to is left (see `discardHistoryUndo`), not for a fixed few seconds — an undo
+    /// that vanishes while the user is still looking at the list is a trap, not a safety net.
     private func rememberDeletion(_ records: [Record]) {
-        deletedRecordExpiry?.cancel()
         deletedRecords = records
         canUndoHistoryDeletion = !records.isEmpty
-        deletedRecordExpiry = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled else { return }
-            self?.deletedRecords = []
-            self?.canUndoHistoryDeletion = false
-        }
+    }
+
+    /// Called when the user leaves history (closes it, or opens Settings). Past that
+    /// point the deletion is final.
+    func discardHistoryUndo() {
+        rememberDeletion([])
     }
 
     func undoHistoryDeletion() {
         guard settings.saveHistoryEnabled, canUndoHistoryDeletion else { return }
         let existing = Set(history.map(\.id))
         history = Array((history + deletedRecords.filter { !existing.contains($0.id) })
-            .sorted { $0.timestamp > $1.timestamp }.prefix(historyCapacity))
+            .sorted { $0.timestamp > $1.timestamp }.prefix(Self.historyCapacity))
         rememberDeletion([])
         saveHistory()
     }
@@ -1559,7 +1561,7 @@ final class TranslationEngine: ObservableObject {
     /// `pushHistory` applies before saving. Normalize after every decode so one large
     /// history file cannot make the next synchronous save unbounded again.
     private func normalizeLoadedHistory(_ records: [Record]) -> [Record] {
-        records.prefix(historyCapacity).map { record in
+        records.prefix(Self.historyCapacity).map { record in
             let savedInput = TextBudget.prefix(record.input, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
             let savedOutput = TextBudget.prefix(record.output, characters: Self.historyFieldCharacterLimit, bytes: 32_000)
             let inputTruncated = savedInput != record.input

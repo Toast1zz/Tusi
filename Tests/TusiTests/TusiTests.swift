@@ -3447,6 +3447,41 @@ final class TusiTests: XCTestCase {
         }
     }
 
+    /// Undo used to expire after ten seconds while the list was still on screen. It now
+    /// lasts until history is left, which the view reports through `discardHistoryUndo`.
+    func testHistoryUndoLastsUntilDiscarded() async throws {
+        let settings = SettingsStore(preview: true)
+        let record = TranslationEngine.Record(id: UUID(), input: "测试", output: "Test", sourceLabel: "中",
+                                              source: .chinese, target: .english, tone: .standard, timestamp: Date())
+        let data = try JSONEncoder().encode([record])
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(
+            read: { $0.lastPathComponent == "history.json" ? data : nil }, write: { _, _ in }))
+        XCTAssertEqual(engine.history.count, 1)
+        engine.clearHistory()
+        XCTAssertTrue(engine.canUndoHistoryDeletion)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(engine.canUndoHistoryDeletion, "Nothing but leaving history ends the undo")
+        engine.discardHistoryUndo()
+        XCTAssertFalse(engine.canUndoHistoryDeletion)
+        engine.undoHistoryDeletion()
+        XCTAssertTrue(engine.history.isEmpty, "A discarded deletion is final")
+    }
+
+    func testHistoryDayTitlesNameTodayAndYesterday() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_789_200_000)
+        let today = calendar.startOfDay(for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        let earlier = calendar.date(byAdding: .day, value: -5, to: today)!
+        XCTAssertEqual(TranslatorView.dayTitle(today, calendar: calendar, now: now), L("今天"))
+        XCTAssertEqual(TranslatorView.dayTitle(yesterday, calendar: calendar, now: now), L("昨天"))
+        let dated = TranslatorView.dayTitle(earlier, calendar: calendar, now: now)
+        XCTAssertNotEqual(dated, L("今天"))
+        XCTAssertNotEqual(dated, L("昨天"))
+        XCTAssertFalse(dated.isEmpty)
+    }
+
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false

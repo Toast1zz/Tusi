@@ -36,7 +36,7 @@ struct ShortcutsView: View {
             }
             .background(
                 GeometryReader { proxy in
-                    Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height + 36)
+                    Color.clear.preference(key: ShortcutsHeightKey.self, value: proxy.size.height + 36)
                 }
             )
             .frame(maxWidth: .infinity, alignment: .leading)

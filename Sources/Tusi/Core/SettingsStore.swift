@@ -112,7 +112,7 @@ final class SettingsStore: ObservableObject {
     /// True when the failure behind `keychainError` is worth trying again — the device
     /// was locked, or the access prompt was denied. Corrupt data is not: reading it a
     /// second time returns the same corrupt bytes, and the only way out is re-entering
-    /// the key. Drives whether the settings page offers a retry.
+    /// the key. Drives whether Settings offers a retry.
     @Published private(set) var keychainErrorIsRetryable = false
     /// True briefly after API keys land in the Keychain. The save is debounced
     /// (250ms) and otherwise silent — a one-time confirmation tells the user the
@@ -150,7 +150,7 @@ final class SettingsStore: ObservableObject {
     /// (see `concurrentAvailable`): a loopback slot's near-zero network latency wins
     /// every race regardless of answer quality, which defeats the point. The route
     /// builder enforces the same rule, so a stale preference degrades to `.failover`
-    /// instead of quietly behaving like something the settings page never showed.
+    /// instead of quietly behaving like something Settings never showed.
     @Published var onlineStrategy: OnlineStrategy {
         didSet { defaults.set(onlineStrategy.rawValue, forKey: "onlineStrategy") }
     }
@@ -656,7 +656,7 @@ final class SettingsStore: ObservableObject {
 
     /// Whether "同时请求" is a real choice right now. Both online slots must be filled
     /// in and remote — a loopback slot would win every race on network latency alone,
-    /// so racing it says nothing about which answer is better. The settings page hides
+    /// so racing it says nothing about which answer is better. Settings hides
     /// the option when this is false rather than showing a switch that does nothing.
     var concurrentAvailable: Bool {
         profiles[0].isUsable && profiles[1].isUsable

@@ -39,7 +39,7 @@ extension AppDelegate {
                 panelState.settingsProfileIndex = SettingsStore.localProfileIndex
             }
         case "empty":
-            panelState.showSettings = false
+            break  // the bare panel: nothing typed, nothing translated
         case "quotetest":
             settings.profiles = [
                 APIProfile(baseURL: "http://127.0.0.1:8806/v1", apiKey: "sk-x", model: "m"),
@@ -47,7 +47,6 @@ extension AppDelegate {
                 APIProfile(),
             ]
             settings.autoCopy = true
-            panelState.showSettings = false
             engine.$history
                 .dropFirst()
                 .first()
@@ -78,7 +77,6 @@ extension AppDelegate {
                 APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
                 APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
             ]
-            panelState.showSettings = false
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let script: [(Double, () -> Void)] = [
@@ -103,12 +101,10 @@ extension AppDelegate {
                 input: "得益于全新的架构，这次更新带来了显著的性能提升。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost."
             )
-            panelState.showSettings = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 self.panelState.showSettings = true
             }
         case "reopen":
-            panelState.showSettings = false
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost."
@@ -121,13 +117,11 @@ extension AppDelegate {
                 APIProfile(baseURL: "http://127.0.0.1:8802/v1", apiKey: "sk-x", model: "backup-model"),
                 APIProfile(),
             ]
-            panelState.showSettings = false
             engine.input = "这句话应该由备用供应商翻译。"
             engine.translate()
         case "wrong-language":
             // Reproduces the observed failure: Chinese input, English target, and a
             // model that replied to the remark in Chinese instead of translating it.
-            panelState.showSettings = false
             engine.debugPreview(
                 input: "真的吗，你们的回答好官方。",
                 output: "是的，感谢您的反馈。"
@@ -141,7 +135,6 @@ extension AppDelegate {
                 APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
             ]
             settings.routeStart = .local
-            panelState.showSettings = false
             let local = TranslationEngine.ResultVersion(
                 text: "Maybe you could fill in this form every day, for Mitchelle.",
                 slot: SettingsStore.localProfileIndex, tier: .local,
@@ -180,12 +173,10 @@ extension AppDelegate {
                 }
             }
         case "waiting":
-            panelState.showSettings = false
             engine.debugPreviewTranslating(input: "得益于全新的架构，这次更新带来了显著的性能提升。")
         case "picker", "picker-multi":
             // Inline target-language picker pinned open for screenshot checks;
             // "picker-multi" additionally selects an explicit target (multi mode).
-            panelState.showSettings = false
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible."
@@ -195,7 +186,6 @@ extension AppDelegate {
             }
             panelState.showLanguagePicker = true
         default:
-            panelState.showSettings = false
             engine.debugPreview(
                 input: "得益于全新的架构，这次更新带来了显著的性能提升，同时保持了完全的向后兼容。",
                 output: "Thanks to the brand-new architecture, this update delivers a significant performance boost while remaining fully backward compatible.",

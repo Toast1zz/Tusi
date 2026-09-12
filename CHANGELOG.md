@@ -2,6 +2,19 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-09-12
+
+### Fixed
+
+- Stop the panel's content jumping when history opens or closes. The root frame grew with content taller than the window, so NSHostingView centred it — the input moved 43pt up and back — and the bottom bar followed the content instead of the window. The content above the bar is now clipped to the window at the top, the bar rides the window's bottom edge, and both heights report in one pass; a frame-by-frame test holds the input and bar still.
+
+### Changed
+
+- Hold the bottom bar steady: the translation direction and tone on the left; the pin, history and settings on the right. It no longer changes with translation state, so its controls never shift. Copy and stop live under the result, together with where the result came from and the other version.
+- Keep the pin in the bottom bar, set apart from history and settings by a wider gap, so the reading area keeps equal margins on both sides. Dragging the panel pins it.
+- Group history by day with no cards, count badge or per-row metadata: each day opens with a full-width header (its name, and the date on the right) after a wider gap, instead of a rule. State that only the last 50 are kept. A fixed row under the list, which never scrolls away, holds Clear History on the right. Undo appears on the same side (in Clear History's place once everything is cleared) and lasts until history is closed or Settings opens, instead of expiring after ten seconds. History opens with a rebindable ⌘Y.
+- Converge the translator's visual system (the settings page, copy button and tone selector keep their existing designs): three type sizes (15/12/11) and two weights for text and metadata, no rounded variants; accent color only for focus, selection, links and the copy button (which keeps its solid blue capsule, green when copied and orange when copying fails); orange only for failures that need action; three fill steps.
+
 ## [1.14.15] - 2026-09-11
 
 ### Fixed

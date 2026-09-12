@@ -35,9 +35,6 @@ struct TranslatorView: View {
     /// `Text` does. See `measureEditorLineMetrics`.
     private let editorFirstLineHeight: CGFloat
     private let editorLineStep: CGFloat
-    /// Exact height of one `HistoryRecordRow`, measured (not guessed) from the same
-    /// AppKit metrics as the other line-height math below — see `measureHistoryRowHeight`.
-    private let historyRowHeight: CGFloat
     init() {
         let metrics = Self.measureLineMetrics()
         firstLineHeight = metrics.first
@@ -45,7 +42,6 @@ struct TranslatorView: View {
         let editorMetrics = Self.measureEditorLineMetrics()
         editorFirstLineHeight = editorMetrics.first
         editorLineStep = editorMetrics.step
-        historyRowHeight = Self.measureHistoryRowHeight(firstLineHeight: metrics.first, lineStep: metrics.step)
     }
     private func height(lines: Int) -> CGFloat { firstLineHeight + CGFloat(lines - 1) * lineStep }
 
@@ -63,18 +59,30 @@ struct TranslatorView: View {
         return ceil(rect.height)
     }
 
-    /// Derives `HistoryRecordRow`'s exact height from its actual layout (Theme.footnote
-    /// title line + Theme.contentFont 2-line output + Theme.caption footer line, VStack
-    /// spacing 5, vertical padding 7) instead of a hardcoded estimate. CJK and Latin text
-    /// measure to different line heights, and this project has already been burned once
-    /// by a font-size change silently clipping a hardcoded row height.
-    private static func measureHistoryRowHeight(firstLineHeight: CGFloat, lineStep: CGFloat) -> CGFloat {
-        let titleLineHeight = measureSingleLineHeight(fontSize: 11)  // Theme.footnote
-        let footerLineHeight = measureSingleLineHeight(fontSize: 10)  // Theme.caption
-        let outputTwoLineHeight = firstLineHeight + lineStep  // Theme.contentFont, lineLimit(2)
-        let interLineSpacing: CGFloat = 5 * 2  // VStack(spacing: 5) between the 3 stacked lines
-        let verticalPadding: CGFloat = 7 * 2
-        return titleLineHeight + outputTwoLineHeight + footerLineHeight + interLineSpacing + verticalPadding
+    /// How many lines `text` takes in a `Text` at the content font and `width` — the same
+    /// `boundingRect` layout `measureLineMetrics()` uses, so it agrees with what `Text` draws.
+    static func contentLineCount(_ text: String, width: CGFloat, firstLineHeight: CGFloat, lineStep: CGFloat) -> Int {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 3
+        let attributed = NSAttributedString(string: text.isEmpty ? " " : text, attributes: [
+            .font: NSFont.systemFont(ofSize: 15), .paragraphStyle: style,
+        ])
+        let height = ceil(attributed.boundingRect(
+            with: NSSize(width: max(width, 1), height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        ).height)
+        return max(1, Int(((height - firstLineHeight) / max(lineStep, 1)).rounded()) + 1)
+    }
+
+    /// One `HistoryRecordRow`'s height: the source line, the translation at its real line
+    /// count (capped at the row's two), and the row's padding. Measured per record, so a
+    /// history of one-line answers is not sized as if every answer took two lines.
+    private func historyRowHeight(for record: TranslationEngine.Record) -> CGFloat {
+        let width = panelState.panelWidth - 32 - 10  // panel margins, row padding
+        let lines = min(2, Self.contentLineCount(record.output, width: width,
+                                                 firstLineHeight: firstLineHeight, lineStep: lineStep))
+        return Self.metaLineHeight + Self.historyRowSpacing + height(lines: lines)
+            + Self.historyRowVerticalPadding * 2
     }
 
     /// Internal for tests: asserts the derived metrics stay sane.
@@ -249,6 +257,74 @@ struct TranslatorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The content above the bar reports the height it wants, then gets only what
+            // the window has, anchored at the top and clipped at the bottom. The bar below
+            // it therefore rides the window's bottom edge exactly: while the window is
+            // still catching up with a taller layout, the new content is revealed above the
+            // bar instead of pushing the bar out of the window; while it is catching up
+            // with a shorter one, the bar travels up with the edge instead of jumping
+            // ahead of it. Both heights report through the same summed key, in the same
+            // pass, so the window still receives one destination.
+            panelContent
+                .padding(.bottom, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
+                    }
+                )
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .clipped()
+
+            bottomBar
+                // Move the toolbar as one geometry group. A button's own transaction can
+                // otherwise place its label on a different timeline from its siblings.
+                .geometryGroup()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height)
+                    }
+                )
+        }
+        // Every one of these is declared here, at the top of the page, rather than
+        // wrapped around the mutation that causes it: a value can be changed from the
+        // bottom bar, a keyboard shortcut, or the panel controller, and only a
+        // declaration covers all three. History shares `.layout` with everything else
+        // now — it had its own slightly longer token purely to mask the window lag that
+        // no longer exists.
+        .motion(.layout, value: resultPhase)
+        // The provenance row arriving, and the switch appearing beside it when a second
+        // version lands, both change the panel's height — same clock as everything else.
+        .motion(.layout, value: engine.versions)
+        .motion(.layout, value: engine.escalating)
+        .motion(.layout, value: engine.escalationFailure)
+        .motion(.layout, value: panelState.showHistory)
+        .motion(.layout, value: panelState.showLanguagePicker)
+        .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
+            // Every panel show reposts this; a picker left open last time must not
+            // greet the next invocation already expanded.
+            panelState.showLanguagePicker = false
+            let selectAll = notification.object as? Bool == true
+            inputFocused = true
+            guard selectAll else { return }
+            Task { @MainActor in
+                await Task.yield()
+                (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectAll(nil)
+            }
+        }
+        // The picker is a transient choice row; a page change (history/settings) is a
+        // context switch that should fold it away rather than leave it hanging.
+        .onChange(of: panelState.showHistory) { _, _ in panelState.showLanguagePicker = false }
+        .onChange(of: panelState.showSettings) { _, _ in panelState.showLanguagePicker = false }
+    }
+
+    /// Everything above the bottom bar: the input, the result or history, and the
+    /// target-language row.
+    private var panelContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             inputArea
                 .padding(.top, 16)
                 .padding(.horizontal, 16)
@@ -293,7 +369,7 @@ struct TranslatorView: View {
 
             // Inline target picker: expands ABOVE the bottom bar (never a popover — a
             // popup makes the panel resign key and trip the click-outside auto-hide,
-            // the same constraint ToneSelector documents).
+            // which is also why the tone picker is inline).
             //
             // A `Disclosure`, not an `if` + `.move(edge: .bottom)`: the row's arrival is
             // the panel getting taller, and a vertical slide on top of that says the same
@@ -303,52 +379,7 @@ struct TranslatorView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
             }
-
-            // Horizontal padding matches inputArea/resultArea/SoftDivider above (16, not
-            // 12) so the copy button's right edge lines up with the clear button's and
-            // with the input/result text's own right margin — one consistent margin for
-            // the whole panel instead of the bottom row sitting 4pt closer to the edge.
-            bottomBar
-                // Move the toolbar as one geometry group. A button's mouse-up
-                // transaction can otherwise snap only its own label to the final
-                // position while its siblings are still following the layout curve.
-                .geometryGroup()
-                .padding(.horizontal, 16)
-                .padding(.top, panelState.showLanguagePicker ? 8 : (engine.hasResultSection || panelState.showHistory ? 12 : 10))
-                .padding(.bottom, 10)
         }
-        // Every one of these is declared here, at the top of the page, rather than
-        // wrapped around the mutation that causes it: a value can be changed from the
-        // bottom bar, a keyboard shortcut, or the panel controller, and only a
-        // declaration covers all three. History shares `.layout` with everything else
-        // now — it had its own slightly longer token purely to mask the window lag that
-        // no longer exists.
-        .motion(.layout, value: resultPhase)
-        // The provenance row arriving, and the switch appearing beside it when a second
-        // version lands, both change the panel's height — same clock as everything else.
-        .motion(.layout, value: engine.versions)
-        .motion(.layout, value: engine.escalating)
-        .motion(.layout, value: engine.escalationFailure)
-        .motion(.layout, value: panelState.showHistory)
-        .motion(.layout, value: panelState.showLanguagePicker)
-        .onReceive(NotificationCenter.default.publisher(for: .tusiFocusInput)) { notification in
-            // Every panel show reposts this; a picker left open last time must not
-            // greet the next invocation already expanded.
-            panelState.showLanguagePicker = false
-            let selectAll = notification.object as? Bool == true
-            inputFocused = true
-            guard selectAll else { return }
-            Task { @MainActor in
-                await Task.yield()
-                (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectAll(nil)
-            }
-        }
-        // The picker is a transient choice row; a page change (history/settings) is a
-        // context switch that should fold it away rather than leave it hanging.
-        .onChange(of: panelState.showHistory) { _, _ in panelState.showLanguagePicker = false }
-        .onChange(of: panelState.showSettings) { _, _ in panelState.showLanguagePicker = false }
-        // Switching tone is a request to see the text in that tone, so re-run it —
-        // but only when there's already a result the change would apply to.
     }
 
     // MARK: - Input
@@ -406,8 +437,8 @@ struct TranslatorView: View {
                     String(format: L("输入已截断，最多保留 %d 字"), TranslationEngine.maxInputCharacters),
                     systemImage: "scissors"
                 )
-                .font(Theme.caption)
-                .foregroundStyle(.orange)
+                .font(Theme.meta)
+                .foregroundStyle(.secondary)
                 .transition(.opacity)
             } else if engine.input.count >= Self.inputCountdownThreshold {
                 // A count only appears near the ceiling. Showing one from the first
@@ -420,7 +451,7 @@ struct TranslatorView: View {
                     format: L("还可以输入 %d 字"),
                     max(0, TranslationEngine.maxInputCharacters - engine.input.count)
                 ))
-                .font(Theme.caption)
+                .font(Theme.meta)
                 .foregroundStyle(.tertiary)
                 .transition(.opacity)
             }
@@ -531,9 +562,17 @@ struct TranslatorView: View {
             )
             .transition(.opacity)
         case .translating:
-            StreamingPlaceholder()
-                .padding(.vertical, 2)
-                .transition(.opacity)
+            VStack(alignment: .leading, spacing: 8) {
+                StreamingPlaceholder()
+                    .padding(.vertical, 2)
+                // The copy capsule's slot, held by the stop control while the answer is
+                // on its way, so the footer keeps its shape when the text lands.
+                HStack {
+                    Spacer(minLength: 8)
+                    StopButton { engine.cancelTranslation() }
+                }
+            }
+            .transition(.opacity)
         default:
             VStack(alignment: .leading, spacing: 8) {
                 ScrollView(.vertical) {
@@ -586,215 +625,298 @@ struct TranslatorView: View {
                     resultHeight = height
                 }
 
-                // Only actionable version controls occupy a result footer. Provider
-                // details live on the tone control's tooltip instead of a separate row.
-                if engine.escalating || otherVersion != nil || engine.canEscalate {
-                    HStack(spacing: 8) {
-                        Spacer(minLength: 4)
-
-                        if engine.escalating {
-                            // The result stays readable and copyable while this runs: it
-                            // is still the current answer until a better one lands.
-                            HStack(spacing: 5) {
-                                Text("在线重译中…")
-                                    .font(Theme.caption)
-                                    .foregroundStyle(.tertiary)
-                                Button {
-                                    engine.cancelTranslation()
-                                } label: {
-                                    Image(systemName: "stop.circle")
-                                        .font(Theme.bodySmall)
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .buttonStyle(.plain)
-                                .help(L("停止"))
-                                .accessibilityLabel(L("停止"))
-                            }
-                            .transition(.opacity)
-                        } else if let other = otherVersion {
-                            // Free, instant and reversible: the other answer is already
-                            // in hand. Swapping it in place is also what makes the
-                            // difference legible — side by side, in a panel this narrow,
-                            // both columns would be too cramped to read.
-                            Button {
-                                engine.showVersion(other.index)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.left.arrow.right")
-                                        .font(Theme.caption2)
-                                    Text(versionLabel(other.version))
-                                        .font(Theme.caption)
-                                        .lineLimit(1)
-                                }
-                                .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help(String(format: L("显示 %@ 的翻译"), versionLabel(other.version)))
-                            .transition(.opacity)
-                        } else if engine.canEscalate {
-                            // The whole feature in one line, at the only moment it is
-                            // useful: after you have read the answer and know whether it
-                            // was enough. The tier, not the provider — which slot answers
-                            // depends on the online strategy, and the label under the next
-                            // result will name it anyway.
-                            Button {
-                                engine.escalate()
-                            } label: {
-                                Text(settings.commandLabel(L("换在线重译"), action: .translate))
-                                    .font(Theme.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(.plain)
-                            .help(engine.escalationTargetLabel.map {
-                                String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
-                            } ?? L("请求在线版本，两个结果都会留着"))
-                            .transition(.opacity)
-                        }
-                    }
-                    .padding(.leading, Self.resultNoticeInset)
-                    .transition(.opacity)
-                }
-
-                // An escalation that came back empty-handed says so quietly. The
-                // translation above it is untouched and still perfectly usable — this
-                // is a second opinion that did not arrive, not a failure of the result.
                 if let escalationFailure = engine.escalationFailure {
-                    Label(String(format: L("没能取到在线结果 · %@"), escalationFailure), systemImage: "cloud.slash")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, Self.resultNoticeInset)
-                        .transition(.opacity)
-                }
-
-                // A user-stopped stream keeps its partial text, but it must not pass for
-                // a complete translation — say so right under the result.
-                // `.fixedSize(horizontal: false, vertical: true)` on every notice: the
-                // panel is a fixed width (RootView pins it to `panelWidth`), so a notice
-                // that insists on one long line pushes the whole content block wider than
-                // the window and gets it centre-clipped on both edges — input text on the
-                // left, the copy button on the right. Longer localisations must wrap.
-                if engine.canRetryResult {
-                    Button(L("重试")) { engine.translate() }
-                        .buttonStyle(.plain)
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.accent)
-                        .padding(.leading, Self.resultNoticeInset)
+                    notice(String(format: L("没能取到在线结果 · %@"), escalationFailure), systemImage: "cloud.slash")
                 }
                 if engine.outputLanguageMismatch {
-                    // Checked first: a result in the wrong language is wrong outright,
-                    // which matters more than how it ended.
-                    Label(L("结果语言与目标不符，建议重试"), systemImage: "exclamationmark.triangle.fill")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, Self.resultNoticeInset)
-                        .transition(.opacity)
+                    notice(L("结果语言与目标不符，建议重试"), systemImage: "exclamationmark.triangle")
                 } else if engine.interrupted {
-                    Label(L("已停止，结果不完整"), systemImage: "stop.circle.fill")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, Self.resultNoticeInset)
-                        .transition(.opacity)
+                    notice(L("已停止，结果不完整"), systemImage: "stop.circle")
                 } else if engine.outputCapped {
-                    // Same honesty for an overlong result cut at the length cap.
-                    Label(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, Self.resultNoticeInset)
-                        .transition(.opacity)
+                    notice(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
                 } else if engine.restoredFromTruncatedHistory {
-                    Label(L("历史仅保留部分内容"), systemImage: "scissors")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, Self.resultNoticeInset)
-                        .transition(.opacity)
+                    notice(L("历史仅保留部分内容"), systemImage: "scissors")
                 }
+
+                resultFooter
             }
         }
+    }
+
+    /// A remark about the text above it. Secondary ink, not orange: none of these ask
+    /// the user to fix anything, and the retry they might want is in the footer.
+    private func notice(_ text: String, systemImage: String) -> some View {
+        Label {
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(.tertiary)
+        }
+        .font(Theme.meta)
+        .foregroundStyle(.secondary)
+        .padding(.leading, Self.resultNoticeInset)
+        .transition(.opacity)
+    }
+
+    /// Everything about the answer on screen, on the line under it: where it came from
+    /// and the other version on the left, copy on the right.
+    private var resultFooter: some View {
+        HStack(spacing: 10) {
+            if let shown = shownVersion {
+                ResultProvenance(
+                    label: versionLabel(shown),
+                    afterFailover: shown.afterFailover,
+                    detail: slotTooltip(shown.slot)
+                )
+                .layoutPriority(-1)
+            }
+
+            if engine.escalating {
+                // The result stays readable and copyable while this runs: it is still
+                // the current answer until a better one lands.
+                HStack(spacing: 5) {
+                    Text("在线重译中…")
+                        .foregroundStyle(.tertiary)
+                    Button {
+                        engine.cancelTranslation()
+                    } label: {
+                        Image(systemName: "stop.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L("停止"))
+                    .accessibilityLabel(L("停止"))
+                }
+                .font(Theme.meta)
+                .transition(.opacity)
+            } else if let other = otherVersion {
+                Button {
+                    engine.showVersion(other.index)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.left.arrow.right")
+                        Text(versionLabel(other.version))
+                            .lineLimit(1)
+                    }
+                    .font(Theme.meta)
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(String(format: L("显示 %@ 的翻译"), versionLabel(other.version)))
+                .transition(.opacity)
+            } else if engine.canEscalate {
+                Button {
+                    engine.escalate()
+                } label: {
+                    Text(settings.commandLabel(L("换在线重译"), action: .translate))
+                        .font(Theme.meta)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .help(engine.escalationTargetLabel.map {
+                    String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
+                } ?? L("请求在线版本，两个结果都会留着"))
+                .transition(.opacity)
+            }
+
+            if engine.canRetryResult {
+                Button(L("重试")) { engine.translate() }
+                    .buttonStyle(.plain)
+                    .font(Theme.metaMedium)
+                    .foregroundStyle(Theme.accent)
+            }
+
+            Spacer(minLength: 8)
+
+            if !engine.output.isEmpty {
+                CopyButton(
+                    copied: engine.copied,
+                    failed: engine.copyFailed,
+                    shortcutHint: settings.shortcut(.copy)?.display
+                ) {
+                    engine.copyOutput()
+                }
+                .overlay(alignment: .bottom) {
+                    if let progress = panelState.returnHoldProgress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .controlSize(.mini)
+                            .padding(.horizontal, 8)
+                            .offset(y: 4)
+                            .accessibilityLabel(L("重新翻译确认进度"))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.leading, Self.resultNoticeInset)
     }
 
     // MARK: - Bottom bar
 
     // MARK: - History
+
+    private struct HistoryDay: Identifiable {
+        let id: Date
+        let title: String
+        let detail: String
+        var records: [TranslationEngine.Record]
+    }
+
+    /// History grouped by calendar day, newest first. The day says when, so the rows
+    /// don't each have to.
+    private var historyDays: [HistoryDay] {
+        let calendar = Calendar.current
+        var days: [HistoryDay] = []
+        for record in engine.history {
+            let day = calendar.startOfDay(for: record.timestamp)
+            if days.last?.id == day {
+                days[days.count - 1].records.append(record)
+            } else {
+                days.append(HistoryDay(id: day, title: Self.dayTitle(day, calendar: calendar),
+                                       detail: Self.dayDetail(day, calendar: calendar), records: [record]))
+            }
+        }
+        return days
+    }
+
+    /// 今天, 昨天, then a short date in the interface language (with the year only when
+    /// it is not this year).
+    static func dayTitle(_ day: Date, calendar: Calendar = .current, now: Date = Date()) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return L("今天") }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(day, inSameDayAs: yesterday) {
+            return L("昨天")
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans")
+        formatter.calendar = calendar
+        formatter.setLocalizedDateFormatFromTemplate(
+            calendar.isDate(day, equalTo: now, toGranularity: .year) ? "MMMd" : "yMMMd"
+        )
+        return formatter.string(from: day)
+    }
+
+    /// The other half of a day header: the date and weekday for 今天/昨天, the weekday
+    /// alone once the title is already a date.
+    static func dayDetail(_ day: Date, calendar: Calendar = .current, now: Date = Date()) -> String {
+        let named = calendar.isDate(day, inSameDayAs: now)
+            || calendar.date(byAdding: .day, value: -1, to: now).map { calendar.isDate(day, inSameDayAs: $0) } == true
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans")
+        formatter.calendar = calendar
+        formatter.setLocalizedDateFormatFromTemplate(named ? "MMMdEEE" : "EEE")
+        return formatter.string(from: day)
+    }
+
+    private static let historyRowSpacing: CGFloat = 3
+    private static let historyRowVerticalPadding: CGFloat = 6
+    /// Between days: wide enough that a day reads as one group, and its header clearly
+    /// belongs to the rows under it rather than the ones above.
+    private static let dayGap: CGFloat = 22
+    private static let dayHeaderGap: CGFloat = 4
+    private static let historyFooterGap: CGFloat = 10
+    private static let metaLineHeight = measureSingleLineHeight(fontSize: 11)
+
+    /// Sized to the list's content up to a cap, so a short history doesn't sit in an
+    /// empty viewport and a long one scrolls.
     private var historyViewportHeight: CGFloat? {
         guard !engine.history.isEmpty else { return nil }
-        let rowSpacing: CGFloat = 4  // LazyVStack(spacing: 4) between rows
+        let days = CGFloat(historyDays.count)
+        let meta = Self.metaLineHeight
+        let rows = engine.history.reduce(0) { $0 + historyRowHeight(for: $1) }
+        let headers = days * (meta + Self.dayHeaderGap) + max(days - 1, 0) * Self.dayGap
+        // The footer sits inside this height but outside the scroll view, so a long
+        // history scrolls above it and the footer stays in view.
+        let footer = Self.historyFooterGap + meta
         return max(60, min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140,
-            28 + CGFloat(engine.history.count) * (historyRowHeight + rowSpacing) - rowSpacing))
+                           rows + headers + footer))
     }
-    private var historyList: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text("翻译历史")
-                    .font(Theme.footnoteSemibold)
-                    .foregroundStyle(.secondary)
-                Text("\(engine.history.count)")
-                    .font(Theme.caption2Rounded)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Theme.fillQuiet))
-                Spacer(minLength: 4)
-                if engine.canUndoHistoryDeletion {
-                    Button { engine.undoHistoryDeletion() } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .buttonStyle(.plain)
-                    .help(L("撤销删除"))
-                }
-                if !engine.history.isEmpty {
-                    Button("清空历史") {
-                        engine.clearHistory()
-                    }
-                    .buttonStyle(.plain)
-                    .font(Theme.caption2Medium)
-                    .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.bottom, engine.history.isEmpty ? 0 : 9)
 
-            if !engine.history.isEmpty {
+    private var historyList: some View {
+        let days = historyDays
+        return VStack(alignment: .leading, spacing: 0) {
+            if days.isEmpty {
+                // After a deletion the footer's undo already says the list is empty.
+                if !engine.canUndoHistoryDeletion {
+                    Text("还没有翻译记录")
+                        .font(Theme.meta)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, Self.resultNoticeInset)
+                }
+            } else {
                 ScrollView(.vertical) {
-                    LazyVStack(spacing: 4) {
-                        ForEach(engine.history) { record in
-                            HistoryRecordRow(
-                                record: record,
-                                relativeTime: relativeTime(record.timestamp)
-                            ) {
-                                engine.restoreHistory(record)
-                                panelState.showHistory = false
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(days) { day in
+                            // The day as a full-width row — its name on the left, the date
+                            // on the right — so the boundary between days is drawn by the
+                            // header itself and the space above it, not by a rule.
+                            HStack(spacing: 8) {
+                                Text(day.title)
+                                    .font(Theme.metaMedium)
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Text(day.detail)
+                                    .font(Theme.meta)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .contextMenu {
-                                Button(role: .destructive) { engine.deleteHistory(record.id) } label: {
-                                    Label(L("删除"), systemImage: "trash")
+                            .padding(.horizontal, Self.resultNoticeInset)
+                            .padding(.top, day.id == days.first?.id ? 0 : Self.dayGap)
+                            .padding(.bottom, Self.dayHeaderGap)
+                            ForEach(day.records) { record in
+                                HistoryRecordRow(record: record) {
+                                    engine.restoreHistory(record)
+                                    panelState.showHistory = false
+                                }
+                                .contextMenu {
+                                    Button(role: .destructive) { engine.deleteHistory(record.id) } label: {
+                                        Label(L("删除"), systemImage: "trash")
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                // macOS 27 can reserve an opaque white gutter for an automatic
-                // scroller inside this transparent panel. Hide only the indicator;
-                // trackpad, wheel and keyboard scrolling remain unchanged.
                 .scrollIndicators(.never)
             }
+
+            if !days.isEmpty || engine.canUndoHistoryDeletion {
+                historyFooter
+                    .padding(.top, days.isEmpty ? 0 : Self.historyFooterGap)
+            }
         }
-        .frame(height: historyViewportHeight)
+        .frame(height: historyViewportHeight, alignment: .top)
     }
 
-
-    private func relativeTime(_ date: Date) -> String {
-        let interval = -date.timeIntervalSinceNow
-        switch interval {
-        case ..<60: return L("刚刚")
-        case ..<3600: return String(format: L("%d 分钟前"), Int(interval / 60))
-        case ..<86400: return String(format: L("%d 小时前"), Int(interval / 3600))
-        default: return String(format: L("%d 天前"), Int(interval / 86400))
+    /// One row under the list that never scrolls away: how much history keeps on the
+    /// left, the commands on the right. Undo appears on the right too — beside Clear
+    /// History after a single deletion, and in its very place once everything is cleared —
+    /// so the way back is where the click just was. It stays until history is left.
+    private var historyFooter: some View {
+        HStack(spacing: 12) {
+            Text(engine.history.isEmpty
+                 ? L("历史已清空")
+                 : String(format: L("只保留最近 %d 条"), TranslationEngine.historyCapacity))
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+            if engine.canUndoHistoryDeletion {
+                Button(L("撤销")) { engine.undoHistoryDeletion() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
+            if !engine.history.isEmpty {
+                Button(L("清空历史")) { engine.clearHistory() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .font(Theme.meta)
+        .padding(.horizontal, Self.resultNoticeInset)
+        .motion(.state, value: engine.canUndoHistoryDeletion)
     }
 
     // MARK: - Language picker
@@ -863,10 +985,6 @@ struct TranslatorView: View {
     /// ceiling that it is information, far enough that a normal paste never sees it.
     private static let inputCountdownThreshold = TranslationEngine.maxInputCharacters - 4_000
 
-    /// The side margin every row in `body` uses. Named here because the bottom bar's
-    /// width measurement has to add it back to report a panel width.
-    private static let contentHorizontalInset: CGFloat = 16
-
     /// TextEditor's default NSTextView line-fragment inset. The input editor gets it for
     /// free, the result text adds it back by hand, and so does everything printed under
     /// the result — otherwise the provenance label and the notices start 5pt to the left
@@ -906,72 +1024,19 @@ struct TranslatorView: View {
         version.tier == .local ? L("本地") : (version.host.isEmpty ? L("在线") : SettingsStore.shortHostName(version.host))
     }
 
-    private var toneHelp: String {
-        if let shown = shownVersion {
-            return String(format: L("翻译文风 · 当前服务：%@ · 当前模型：%@"),
-                          versionLabel(shown), shown.model.isEmpty ? "—" : shown.model)
-        }
-        return String(format: L("翻译文风 · 当前模型：%@"), engine.activeModel)
-    }
+    // MARK: - Bottom bar
 
+    /// Translation parameters on the left; the panel's own controls on the right — the pin,
+    /// a window toggle, set a little apart from history and settings, which change what
+    /// the panel shows. Nothing here changes with the state of a translation, so the row
+    /// never moves. Every control lives here, so the reading area above keeps equal
+    /// margins on both sides.
     private var bottomBar: some View {
-        // Every control in this row is `.fixedSize(horizontal: true)`, so the row has one
-        // natural width and no way to give. In English that width ("Casual/Standard/
-        // Formal", "Copy ⇧⌘C") exceeds the 470pt minimum panel, and because RootView pins
-        // the content to `panelWidth` the whole column gets centre-clipped — the input
-        // text loses characters on the left and the copy button loses its shortcut on the
-        // right. Shed the keyboard hint instead of overflowing; it is the one piece here
-        // that is pure redundancy (the same shortcut still works, and it's in Settings).
-        ViewThatFits(in: .horizontal) {
-            bottomBarRow(showsCopyShortcut: true)
-            bottomBarRow(showsCopyShortcut: false)
-        }
-        // Report the width this row actually needs so the panel can widen to fit it,
-        // instead of the row being squeezed against a fixed panel width. Measured from an
-        // invisible unconstrained copy — the visible row is already inside the fixed frame
-        // and would only ever report the width it was given.
-        //
-        // `measuring: true` pins the copy to the row's widest configuration (the copy
-        // button, with its shortcut hint). Measuring the live row instead would report a
-        // different width per state — stop button, translate button, copy button — and the
-        // window would jump sideways every time a translation started or finished.
-        .background(
-            bottomBarRow(showsCopyShortcut: true, measuring: true)
-                .fixedSize(horizontal: true, vertical: true)
-                // The reported number is a *panel* width, so it has to include the side
-                // margins the body puts around this row — measuring the row alone would
-                // size the window 32pt too narrow and the row would still be squeezed.
-                .padding(.horizontal, Self.contentHorizontalInset)
-                .hidden()
-                .allowsHitTesting(false)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: PanelContentWidthKey.self, value: proxy.size.width)
-                    }
-                )
-        )
-    }
-
-    /// Which controls the bottom bar is currently showing. See the `.motion` call at the
-    /// bottom of `bottomBarRow` for why this is one value rather than three.
-    private struct BarConfiguration: Equatable {
-        let hasOutput: Bool
-        let isTranslating: Bool
-    }
-
-    private var barConfiguration: BarConfiguration {
-        BarConfiguration(
-            hasOutput: !engine.output.isEmpty,
-            isTranslating: engine.isTranslating
-        )
-    }
-
-    private func bottomBarRow(showsCopyShortcut: Bool, measuring: Bool = false) -> some View {
         HStack(spacing: 8) {
             DirectionChip(
-                sourceLabel: measuring ? "中" : engine.sourceLabel,
-                target: measuring ? .english : engine.target,
-                isActive: measuring || !engine.input.isEmpty,
+                sourceLabel: engine.sourceLabel,
+                target: engine.target,
+                isActive: !engine.input.isEmpty,
                 isFlipped: engine.flipped,
                 isExpanded: panelState.showLanguagePicker,
                 onTap: {
@@ -979,61 +1044,30 @@ struct TranslatorView: View {
                 }
             )
 
-            // Tone occupies the slot the model name used to: it's an action, the model
-            // is static trivia that settings already shows. It stays in the tooltip.
             ToneSelector(tone: $settings.tone)
-                .help(toneHelp)
 
             Spacer(minLength: 4)
 
-            if measuring {
-                // Nothing here: the measuring copy carries the copy button below, which is
-                // wider than either the stop or the translate control it would replace.
-                EmptyView()
-            } else if engine.isTranslating {
-                // No spinner: the shimmering result placeholder already says "working".
-                BarIconButton(systemName: "stop.fill", help: "停止") {
-                    engine.cancelTranslation()
-                }
-                .transition(.opacity)
-            } else if !engine.input.isEmpty && engine.output.isEmpty {
-                let hasInput = !engine.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                Button {
-                    engine.submit()
-                } label: {
-                    Text(settings.commandLabel(L("翻译"), action: .translate))
-                        .font(Theme.footnoteMedium)
-                        .lineLimit(1)
-                        // minWidth, not a hard width: the slot stays stable at the Chinese
-                        // label's size (no bar jitter) but "⏎ Translate" is wider and would
-                        // be clipped by a fixed 48pt.
-                        .frame(height: 26)
-                        .frame(minWidth: 48)
-                }
-                .buttonStyle(.plain)
-                .disabled(!hasInput)
-                .foregroundStyle(hasInput ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-                .accessibilityLabel(L("翻译"))
-                .help(L("翻译"))
-                .transition(.opacity)
-            }
-
             BarIconButton(
-                systemName: panelState.pinned ? "pin.fill" : "pin",
+                systemName: "pin",
+                activeSystemName: "pin.fill",
                 isActive: panelState.pinned,
                 help: panelState.pinned ? "取消固定" : "固定面板（点击外部不关闭）",
-                // The pin glyph is 14pt tall next to 13pt circles (clock/gearshape) at
-                // the same 12pt font size; nudge it down 0.5pt so its optical center
-                // aligns with its neighbors instead of sitting visually higher.
+                // The pin glyph is 14pt tall next to 13pt circles (clock/gearshape) at the
+                // same 12pt font size; nudge it down 0.5pt so its optical centre aligns.
                 glyphOffset: 0.5
             ) {
                 panelState.pinned.toggle()
             }
+            // A wider gap than the 8pt between history and settings: a different kind of
+            // control, grouped by space rather than by a divider.
+            .padding(.trailing, 6)
+
             BarIconButton(
                 systemName: "clock",
                 activeSystemName: "clock.fill",
                 isActive: panelState.showHistory,
-                help: panelState.showHistory ? "关闭历史" : "翻译历史"
+                help: settings.commandLabel(panelState.showHistory ? L("关闭历史") : L("翻译历史"), action: .history)
             ) {
                 panelState.showHistory.toggle()
             }
@@ -1041,47 +1075,20 @@ struct TranslatorView: View {
             BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
                 panelState.showSettings = true
             }
-
-            if measuring || (!engine.isTranslating && !engine.output.isEmpty) {
-                CopyButton(copied: engine.copied, failed: engine.copyFailed, shortcutHint: showsCopyShortcut ? settings.shortcut(.copy)?.display : nil) {
-                    engine.copyOutput()
-                }
-                    .overlay(alignment: .bottom) {
-                        if let progress = panelState.returnHoldProgress, !measuring {
-                            ProgressView(value: progress)
-                                .progressViewStyle(.linear)
-                                .controlSize(.mini)
-                                .padding(.horizontal, 8)
-                                .offset(y: 4)
-                                .accessibilityLabel(L("重新翻译确认进度"))
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    // Opacity only. The stop and translate controls that share this
-                    // slot both plain-fade; a scale pop on just one of the three made
-                    // the same position behave differently depending on which control
-                    // happened to be in it.
-                    .transition(.opacity)
-            }
         }
-        // One value, one timeline. Pressing ⏎ swaps a control here *and* opens the result
-        // section above, and finishing a translation swaps it back *and* resizes the
-        // panel to fit the text — so this row is part of a height change whether or not
-        // its own height moves, and has to run on the same clock as the panel. Three
-        // separate `.motion` scopes would let one keystroke start three animations.
-        .motion(.layout, value: barConfiguration)
     }
+
 }
 
 private struct HistoryRecordRow: View {
     let record: TranslationEngine.Record
-    let relativeTime: String
     let action: () -> Void
 
     @State private var hovering = false
 
     private var tooltip: String {
-        var value = "\(record.input)\n\n\(record.output)"
+        var value = record.timestamp.formatted(date: .abbreviated, time: .shortened)
+            + "\n\n\(record.input)\n\n\(record.output)"
         if record.isTruncated {
             value += "\n\n" + L("历史仅保留部分内容")
         }
@@ -1090,17 +1097,17 @@ private struct HistoryRecordRow: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Text(record.input)
-                        .font(Theme.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(Theme.meta)
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     if record.isTruncated {
                         Image(systemName: "scissors")
-                            .font(Theme.caption2Semibold)
-                            .foregroundStyle(.orange)
+                            .font(Theme.meta)
+                            .foregroundStyle(.tertiary)
                             .help(L("历史仅保留部分内容"))
                     }
                 }
@@ -1109,27 +1116,19 @@ private struct HistoryRecordRow: View {
                     .lineSpacing(3)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 6) {
-                    Text(record.sourceLabel + " → " + record.target.symbol)
-                    Spacer(minLength: 4)
-                    Text(relativeTime)
-                }
-                .font(Theme.caption)
-                .foregroundStyle(.quaternary)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 6)
+            // No card at rest: the text and the space around it are the row.
             .background(
                 RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                    .fill(hovering ? Theme.fillHover : Theme.fillFaint)
+                    .fill(hovering ? Theme.fillQuiet : Color.clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .motion(.micro, value: hovering)
-        // Rows truncate to keep the list compact; the hover tooltip shows the full
-        // text so a long record is still fully readable without opening it.
         .help(tooltip)
     }
 }

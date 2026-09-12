@@ -44,16 +44,13 @@ final class PanelContainerView: NSVisualEffectView {
 
 // MARK: - Small controls
 
-/// Quiet icon button used in the bottom bar (pin, settings, stop).
+/// A round glyph button with no resting surface: the pin, history and settings.
+/// Engaged state is ink, not color — the glyph turns primary and gains a matte disc.
 struct BarIconButton: View {
     let systemName: String
     var activeSystemName: String? = nil
     var isActive = false
     var help: String
-    /// Optional vertical nudge for the glyph inside its 26×26 frame. SF Symbols have
-    /// different optical baselines — e.g. `pin` is a 14pt-tall glyph next to 13pt
-    /// circles (clock/gearshape) at the same font size, so it visually sits higher.
-    /// A small downward offset aligns it with its neighbors. Clickable area unchanged.
     var glyphOffset: CGFloat = 0
     let action: () -> Void
 
@@ -62,9 +59,6 @@ struct BarIconButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Keep both glyph identities mounted in one moving frame. Replacing
-                // Image(systemName:) during a layout transition can leave the old
-                // symbol behind while the new symbol appears at the destination.
                 Image(systemName: systemName)
                     .opacity(activeSystemName != nil && isActive ? 0 : 1)
                 if let activeSystemName {
@@ -72,40 +66,31 @@ struct BarIconButton: View {
                         .opacity(isActive ? 1 : 0)
                 }
             }
-                .font(Theme.bodySmallMedium)
-                .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                .font(Theme.control)
+                .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .offset(y: glyphOffset)
                 .frame(width: 26, height: 26)
                 .background(
-                    Circle().fill(hovering ? Theme.fillHover : Color.clear)
+                    Circle().fill(isActive ? Theme.fillActive : (hovering ? Theme.fillQuiet : Color.clear))
                 )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .motion(.micro, value: hovering)
+        // No `.motion` on `isActive`: toggling history changes the panel height in the
+        // same transaction, and a local animation here would move this button on its
+        // own clock while the rest of the bar follows `.layout`.
         .accessibilityLabel(LocalizedStringKey(help))
-        // `help` arrives as a plain, untranslated String from every call site — wrapping
-        // it in LocalizedStringKey here (once) sends it through the same table lookup a
-        // literal `.help("...")` would get, without repeating that at each call site.
         .help(LocalizedStringKey(help))
     }
 }
 
-/// Direction indicator. Before anything is typed there is no direction to show — the app
-/// hasn't detected a language yet — so it reads "自动", and only resolves to "中 → EN"
-/// (or the reverse) once there's input to judge.
-///
-/// Direction chip: shows the current translation direction (`中 → EN`) and opens the
-/// inline target-language picker when tapped. The picker is the single control for
-/// both "auto CN↔EN" and "explicit target" — there is no separate mode switch. The
-/// chevron rotates with the picker so the chip reads as expandable, not as a label.
 struct DirectionChip: View {
     let sourceLabel: String
     let target: TranslationLanguage
     let isActive: Bool
-    /// Manual direction override engaged (flipped via the picker row in auto mode).
     let isFlipped: Bool
-    /// Whether the inline picker this chip controls is currently expanded.
     let isExpanded: Bool
     var onTap: (() -> Void)? = nil
 
@@ -114,8 +99,6 @@ struct DirectionChip: View {
     private var targetLabel: String { target.symbol }
 
     var body: some View {
-        // A real Button (not onTapGesture + .isButton trait) so Tab and VoiceOver can
-        // actually activate it, not just announce it as one.
         Button {
             onTap?()
         } label: {
@@ -124,28 +107,26 @@ struct DirectionChip: View {
                     Text(sourceLabel)
                         .lineLimit(1)
                     Image(systemName: "arrow.right")
-                        .font(Theme.arrowBold)
+                        .font(Theme.meta)
+                        .foregroundStyle(.tertiary)
                     Text(targetLabel)
                         .lineLimit(1)
                 } else {
                     Image(systemName: "sparkles")
-                        .font(Theme.caption2Semibold)
+                        .font(Theme.meta)
                     Text("自动")
                         .lineLimit(1)
                 }
                 Image(systemName: "chevron.down")
-                    .font(Theme.caption2Semibold)
+                    .font(Theme.meta)
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
             }
-            .font(Theme.footnoteRounded)
+            .font(Theme.controlMedium)
             .fixedSize(horizontal: true, vertical: false)
-            // .secondary, not .tertiary: "自动" and the tone selector's unselected labels are
-            // both "inactive, not currently the point" — they should sit at the same weight.
-            // The capsule background used to paper over the mismatch; plain text doesn't.
-            .foregroundStyle(isActive ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+            .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 7)
-            .padding(.vertical, 2.5)
+            .padding(.vertical, 3)
             .background {
                 if hovering || isFlipped || isExpanded {
                     Capsule().fill(isFlipped || isExpanded ? Theme.fillActive : Theme.fillQuiet)
@@ -160,10 +141,6 @@ struct DirectionChip: View {
         .motion(.state, value: restingState)
     }
 
-    /// All four of the chip's resting-state inputs change for the same reason (the user
-    /// typed, flipped, or opened the picker) and animate identically, so they ride one
-    /// modifier instead of four stacked ones that would each claim to be a separate
-    /// cause.
     private struct RestingState: Equatable {
         let isActive: Bool
         let sourceLabel: String
@@ -176,19 +153,14 @@ struct DirectionChip: View {
     }
 }
 
-/// One capsule in the inline target-language picker row. Mirrors the capsule style the
-/// old Settings grid used (accent fill when selected, quiet fill otherwise) so the
-/// control reads as kin to ToneSelector rather than a new visual species.
+/// One choice in the target-language row. Selection is ink and a matte fill, the same
+/// vocabulary as the tone pill one row below — never a solid accent capsule.
 struct LanguagePill: View {
     let label: String
     let selected: Bool
     var icon: String? = nil
     let action: () -> Void
 
-    // Every other control in this row (ToneSelector, DirectionChip) has a hover
-    // state; this pill was the one dead spot — same fillQuiet→fillHover swap
-    // unselected pills use elsewhere, and the same brightness bump CopyButton uses
-    // for its own solid-accent hover state when selected.
     @State private var hovering = false
 
     var body: some View {
@@ -196,19 +168,18 @@ struct LanguagePill: View {
             HStack(spacing: 4) {
                 if let icon {
                     Image(systemName: icon)
-                        .font(Theme.caption2Semibold)
+                        .font(Theme.meta)
                 }
                 Text(label)
-                    .font(Theme.footnote)
+                    .font(selected ? Theme.controlMedium : Theme.control)
                     .lineLimit(1)
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
             .background(
-                Capsule().fill(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(hovering ? Theme.fillHover : Theme.fillQuiet))
+                Capsule().fill(selected || hovering ? Theme.fillActive : Theme.fillQuiet)
             )
-            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-            .brightness(hovering && selected ? 0.06 : 0)
+            .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -282,6 +253,9 @@ struct ToneSelector: View {
 }
 
 /// Primary copy button — flat solid capsule that morphs into a green check.
+/// The copy command, in the result's own footer. The one solid accent capsule in the
+/// translator: it is the next thing most translations are for, and it has to read at a
+/// glance — including whether the copy worked (green) or failed (orange).
 struct CopyButton: View {
     let copied: Bool
     /// The pasteboard write was rejected. Reported here, by the control that was asked
@@ -382,6 +356,37 @@ struct CopyButton: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+/// Stops a translation in flight. Sits in the slot the copy capsule will occupy when
+/// the result lands, at the same size, so the footer never changes shape.
+struct StopButton: View {
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "stop.fill")
+                    .font(Theme.meta)
+                Text("停止")
+                    .font(Theme.control)
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
+            // The copy capsule's metrics, so the footer keeps its height when one replaces
+            // the other.
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(hovering ? Theme.fillActive : Theme.fillQuiet))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .motion(.micro, value: hovering)
+        .accessibilityLabel(L("停止"))
     }
 }
 
@@ -495,38 +500,29 @@ struct StreamingPlaceholder: View {
     }
 }
 
-/// Where the result on screen came from. A statement, not a control.
-///
-/// This used to be a two-segment pill that both named the source and switched between
-/// versions — which put it in the same clothes as the tone selector one row below, and
-/// welded two different parts of speech together. Attribution is a label; showing the
-/// other version is an action, and the action lives on the other end of the row where
-/// every other result-row action already lives.
+/// Where the result on screen came from. A statement, not a control: tertiary ink,
+/// no icon, and the full model and host on hover.
 struct ResultProvenance: View {
     let label: String
-    let isLocal: Bool
-    /// This answer exists only because the slot ahead of it failed — the one thing the
-    /// old "已用备用翻译" toast said that the slot name alone does not.
+    /// This answer exists only because the slot ahead of it failed.
     let afterFailover: Bool
+    let detail: String
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: afterFailover
-                  ? "arrow.triangle.branch"
-                  : (isLocal ? "desktopcomputer" : "cloud"))
-                .font(Theme.caption2)
-            Text(afterFailover ? String(format: L("%@ · 主用失败后接手"), label) : label)
-                .font(Theme.caption)
-                .lineLimit(1)
-        }
-        .foregroundStyle(afterFailover ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(String(format: L("结果来自 %@"), label))
+        Text(afterFailover ? String(format: L("%@ · 主用失败后接手"), label) : label)
+            .font(Theme.meta)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(detail)
+            .accessibilityLabel(String(format: L("结果来自 %@"), label))
     }
 }
 
 // MARK: - Error box
 
+/// A failed translation. Not a box any more: one orange mark, the message in secondary
+/// ink, and the action that addresses it as a link.
 struct ErrorBox: View {
     let message: String
     /// The action that actually addresses this failure. "Retry" is right for a dropped
@@ -537,11 +533,11 @@ struct ErrorBox: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(Theme.footnote)
+            Image(systemName: "exclamationmark.triangle")
+                .font(Theme.control)
                 .foregroundStyle(.orange)
             Text(message)
-                .font(Theme.bodySmall)
+                .font(Theme.control)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(4)
@@ -549,20 +545,15 @@ struct ErrorBox: View {
                 .fixedSize(horizontal: false, vertical: true)
             Button(primaryLabel, action: primaryAction)
                 .buttonStyle(.plain)
-                .font(Theme.bodySmallSemibold)
+                .font(Theme.controlMedium)
                 .foregroundStyle(Theme.accent)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                .fill(Color.orange.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
-        )
+        .padding(.leading, 5)
+        .padding(.vertical, 4)
     }
 }
+
+// MARK: - Settings page
 
 /// A row-wide segmented choice: a title, the options, and one caption that describes
 /// what the *selected* option actually does.

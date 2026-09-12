@@ -49,7 +49,6 @@ final class FloatingPanel: NSPanel {
 
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
-    // Keep the saved reading width, enlarged only when localized controls need it.
 
     private let panel: FloatingPanel
     private let engine: TranslationEngine
@@ -72,17 +71,13 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var contentObservation: AnyCancellable?
     private var pendingShrinkHeight: CGFloat?
 
-    /// The narrowest the content can be drawn without clipping, reported by the view via
-    /// `PanelContentWidthKey`. Distinct from `settings.panelWidth`, which is the width the
-    /// *user* chose: the effective width is the larger of the two, so a wider localisation
-    /// widens the window instead of squeezing the controls against a fixed frame.
-    private var contentMinWidth: CGFloat = Theme.panelMinWidth
     private var emptyResizeTask: Task<Void, Never>?
 
-    /// The width the panel should actually use: the user's preference, never narrower than
-    /// the content needs, never outside the design bounds.
+    /// The width the panel should actually use: the user's preference, inside the design
+    /// bounds. The bottom bar no longer grows with state or language, so the content never
+    /// needs to push it wider.
     private var effectiveWidth: CGFloat {
-        min(max(settings.panelWidth, contentMinWidth), Theme.panelMaxWidth)
+        min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
     }
     private var hasShownOnce = false
 
@@ -148,8 +143,6 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         let root = RootView(onHeightChange: { [weak self] height in
             self?.setContentHeight(height)
-        }, onContentMinWidthChange: { [weak self] width in
-            self?.setContentMinWidth(width)
         })
         .environmentObject(engine)
         .environmentObject(settings)
@@ -160,7 +153,15 @@ final class PanelController: NSObject, NSWindowDelegate {
         // the top and bottom edges. The panel is anchored at its top edge everywhere
         // else — `position()`, `applyHeight` — so anchor the content there too: slack
         // then collects harmlessly at the bottom instead of eating the input's padding.
-        .frame(maxHeight: .infinity, alignment: .top)
+        //
+        // `minHeight: 0` is what makes that hold in the other direction. With only
+        // `maxHeight`, the frame grows to its content whenever the content is the taller
+        // one — which it briefly is at the start of every expansion, because the view's
+        // height lands a layout pass before the window's — and NSHostingView then centres
+        // the oversized root, pushing the input up by half the difference and dropping
+        // back as the window catches up. Measured at 43pt when opening history. Pinned to
+        // exactly the window's height, the overflow is only ever clipped at the bottom.
+        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
 
         let container = PanelContainerView(cornerRadius: Theme.panelCornerRadius)
         container.frame = panel.contentRect(forFrameRect: panel.frame)
@@ -293,41 +294,6 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         let y = visible.maxY - 6 - height
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
-    }
-
-    /// Keep a stable reading width while respecting localized control requirements.
-    private func setContentMinWidth(_ width: CGFloat) {
-        let needed = min(max(width, Theme.panelMinWidth), Theme.panelMaxWidth)
-        guard abs(needed - contentMinWidth) > 0.5 else { return }
-        contentMinWidth = needed
-        // AppKit enforces this during a live drag, so the user cannot pull the panel
-        // narrower than its own controls.
-        panel.minSize = NSSize(width: needed, height: Self.minimumPanelHeight)
-
-        let target = effectiveWidth
-        guard abs(target - panelState.panelWidth) > 0.5 else { return }
-        panelState.panelWidth = target
-        guard panel.isVisible else { return }
-        if isEmptyTranslator {
-            scheduleEmptyResize()
-            return
-        }
-        emptyResizeTask?.cancel()
-        // Keep the top edge and re-clamp horizontally: growing a panel that sits near a
-        // screen edge must not push it off the visible area.
-        var frame = panel.frame
-        let top = frame.maxY
-        // `desiredHeight`, not the current height: a width change must not carry a
-        // height the window drifted into (see `applyHeight`) into the new frame.
-        frame.size.height = desiredHeight
-        frame.origin.y = top - desiredHeight
-        let centerX = frame.midX
-        frame.size.width = target
-        frame.origin.x = centerX - target / 2
-        if let visible = panel.screen?.visibleFrame {
-            frame.origin.x = min(max(frame.origin.x, visible.minX + 8), visible.maxX - target - 8)
-        }
-        panel.setFrame(frame, display: true)
     }
 
     /// Called by SwiftUI whenever the measured content height changes.
@@ -501,8 +467,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         // sees the frames of the animation the view layer is running; it sees its
         // destination. The window therefore has to animate there itself, and the only way
         // for the two to look like one motion is for them to be the same animation:
-        // `Theme.windowResizeDuration` is the duration of `.layout` and `.page` (the two
-        // tokens allowed to move the panel's height), and `caTimingFunction` is the same
+        // `Theme.windowResizeDuration` is the duration of `.layout` (the one token
+        // allowed to move the panel's height), and `caTimingFunction` is the same
         // curve `Theme.timed` builds from. Same start, same shape, same end.
         //
         // Two cases genuinely must not animate:
@@ -623,11 +589,11 @@ final class PanelController: NSObject, NSWindowDelegate {
             }
             if self.returnHold.keyCode == event.keyCode { return nil }
             if self.returnHold.keyCode != nil { self.cancelReturnHold() }
-            guard self.panel.isKeyWindow else { return event }
 
             let flags = KeyCombo.normalized(event.modifierFlags)
 
-            // Recording a new shortcut swallows everything until it gets a valid combo.
+            // Recording a new shortcut swallows everything until it gets a valid combo —
+            // in whichever Tusi window is recording, which is normally Settings.
             if let action = self.panelState.recordingShortcut {
                 if event.keyCode == 53 {  // Esc always cancels recording.
                     self.panelState.recordingShortcut = nil
@@ -639,6 +605,8 @@ final class PanelController: NSObject, NSWindowDelegate {
                 return nil
             }
 
+            guard self.panel.isKeyWindow else { return event }
+
             // While an input method is composing marked text, Return commits the
             // candidate and Esc cancels it. Those events must reach NSTextView before
             // panel shortcuts get a chance to consume them.
@@ -648,8 +616,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // Close / back — configurable (default Esc). Backs out one level at a time:
             // Shortcuts → Settings → Translator → hide. Backing out of a page matches
-            // the on-screen back buttons (back cue); hiding the panel stays silent so
-            // the frequent Esc-to-dismiss doesn't get noisy.
+            // the on-screen back buttons; hiding the panel stays silent so the frequent
+            // Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
                     self.panelState.showShortcuts = false
@@ -669,6 +637,11 @@ final class PanelController: NSObject, NSWindowDelegate {
 
             // Let text fields in settings behave normally.
             guard !self.panelState.showSettings else { return event }
+
+            if let combo = self.settings.shortcut(.history), combo.matches(event) {
+                self.panelState.showHistory.toggle()
+                return nil
+            }
 
             if let combo = self.settings.shortcut(.copy), combo.matches(event) {
                 self.engine.copyOutput()
@@ -788,21 +761,28 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(
-            // `contentMinWidth`, not `Theme.panelMinWidth`: the floor is whatever the
-            // content actually needs, so a drag can't reintroduce the clipping.
-            width: min(max(frameSize.width, contentMinWidth), Theme.panelMaxWidth),
+            width: min(max(frameSize.width, Theme.panelMinWidth), Theme.panelMaxWidth),
             height: desiredHeight
         )
     }
 
     func windowDidResize(_ notification: Notification) {
-        let width = min(max(panel.frame.width, contentMinWidth), Theme.panelMaxWidth)
+        let width = min(max(panel.frame.width, Theme.panelMinWidth), Theme.panelMaxWidth)
         guard abs(width - panelState.panelWidth) > 0.5 else { return }
         // Live-updates the UI binding every tick of the drag, but does NOT persist —
         // `settings.panelWidth`'s didSet writes UserDefaults synchronously, and a drag
         // fires this dozens of times. Persisting happens once, in
         // `windowDidEndLiveResize`, when the user actually settles on a width.
         panelState.panelWidth = width
+    }
+
+    /// Moving the panel by hand pins it: a panel dragged out of its place under the menu
+    /// bar has been put somewhere on purpose, the way a detachable popover becomes its own
+    /// window. Only a real drag counts — every programmatic frame change (positioning,
+    /// resize animation) happens with no mouse button held.
+    func windowWillMove(_ notification: Notification) {
+        guard NSEvent.pressedMouseButtons & 1 == 1, panel.isVisible else { return }
+        panelState.pinned = true
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {

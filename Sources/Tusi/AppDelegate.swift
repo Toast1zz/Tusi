@@ -51,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // before invoking this closure, so it is safe to assume main-actor
             // isolation here (Swift 6 requires the explicit assertion).
             MainActor.assumeIsolated {
+                // Pressing the summon combo while recording a new one in Settings is the
+                // user typing a shortcut, not asking for the panel.
+                guard self?.panelState.recordingShortcut == nil else { return }
                 self?.togglePanel()
             }
         }
@@ -235,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: L("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
 
         NSApp.mainMenu = mainMenu
     }

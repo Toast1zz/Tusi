@@ -80,8 +80,8 @@ two short requests. Automatic update checks run at startup and every six hours w
 
 History retains both local and online versions, including the host and model that answered.
 Each archived text field is limited to 4,000 characters and 32 KB; truncated versions stay
-marked. Right-click a record to delete it, or clear the list; deletion can be undone for
-ten seconds. History and draft saving can be disabled independently in Settings. Turning
+marked. Right-click a record to delete it, or clear the list from the row under it; Undo
+appears in that same row and stays until you close history or open Settings. History and draft saving can be disabled independently in Settings. Turning
 off saving deletes the corresponding saved data; clearing the input draft does not delete
 history. Text is stored locally with owner-only file permissions, without encryption.
 
@@ -113,6 +113,7 @@ Development certificate carries the developer's name and email. One note on laun
 | Retranslate online (after a local answer) | ⏎ again |
 | Newline | ⇧⏎ or ⌘⏎ |
 | Copy result | ⇧⌘C |
+| History | ⌘Y |
 | Settings | ⌘, |
 | Back / close | Esc |
 
