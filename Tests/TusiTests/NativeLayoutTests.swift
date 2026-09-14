@@ -5,6 +5,36 @@ import XCTest
 
 @MainActor
 final class NativeLayoutTests: XCTestCase {
+    func testTranslationRequestClosesHistoryButEditingDoesNot() async throws {
+        let settings = SettingsStore(preview: true)
+        settings.profiles = settings.profiles.map { _ in APIProfile() }
+        let state = PanelState()
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
+        let host = NSHostingView(rootView: TranslatorView()
+            .environmentObject(settings).environmentObject(state).environmentObject(engine))
+        host.frame = NSRect(x: 0, y: 0, width: 470, height: 500)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        state.showHistory = true
+        engine.input = "New draft"
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(state.showHistory, "Editing alone must leave history open")
+
+        engine.submit()
+        XCTAssertFalse(state.showHistory, "Return submission must reveal the current translation")
+        guard case .failed = engine.state else { return XCTFail("Missing configuration must remain visible") }
+
+        state.showHistory = true
+        engine.input = "   "
+        engine.submit()
+        XCTAssertTrue(state.showHistory, "An empty request must not navigate")
+
+        engine.input = "Another draft"
+        engine.translate()
+        XCTAssertFalse(state.showHistory, "Direct translation actions must also reveal the result")
+    }
+
     func testSettingsCategoryUsesNativeCapsuleTabsAndTargetAction() async throws {
         var selection = SettingsSection.services
         let size: ControlSize

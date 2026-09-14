@@ -2,6 +2,14 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.2] - 2026-09-14
+
+### Fixed
+
+- Return to the current translation when a new request or an upgrade starts while history is open. Close history and the language picker at the shared request boundary so loading, results, and configuration errors are visible immediately.
+- Keep history open while editing the draft or submitting empty text. Chinese input-method candidate confirmation still follows the existing marked-text keyboard handling and does not submit a translation.
+- Add native-view regression coverage for editing, submission, empty requests, direct translation, and configuration failures while history is open.
+
 ## [1.15.1] - 2026-09-14
 
 ### Fixed

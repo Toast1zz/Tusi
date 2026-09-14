@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 final class TranslationEngine: ObservableObject {
+    /// Accepted requests reveal the current translation, including configuration errors.
+    let translationRequested = PassthroughSubject<Void, Never>()
     enum State: Equatable {
         case idle
         case translating
@@ -561,6 +563,7 @@ final class TranslationEngine: ObservableObject {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        translationRequested.send()
         resetForNewRequest()
 
         let route = settings.route
@@ -603,6 +606,7 @@ final class TranslationEngine: ObservableObject {
               let context = request,
               let next = context.route.nextHigherStage(after: currentStageIndex)
         else { return }
+        translationRequested.send()
         translationTask?.cancel()
         escalating = true
         translationTask = Task { [weak self] in

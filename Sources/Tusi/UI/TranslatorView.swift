@@ -319,6 +319,10 @@ struct TranslatorView: View {
         // context switch that should fold it away rather than leave it hanging.
         .onChange(of: panelState.showHistory) { _, _ in panelState.showLanguagePicker = false }
         .onChange(of: panelState.showSettings) { _, _ in panelState.showLanguagePicker = false }
+        .onReceive(engine.translationRequested) {
+            panelState.showHistory = false
+            panelState.showLanguagePicker = false
+        }
     }
 
     /// Everything above the bottom bar: the input, the result or history, and the
