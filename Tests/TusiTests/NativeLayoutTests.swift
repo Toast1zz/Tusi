@@ -309,6 +309,32 @@ final class NativeLayoutTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
         }
         XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, 1, "Long drafts must still scroll to the caret")
+
+        // Exercise marked text crossing a soft-wrap boundary in the real SwiftUI editor.
+        editor.insertText(String(repeating: "中", count: 27),
+                          replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        for _ in 0..<30 {
+            try await Task.sleep(for: .milliseconds(10))
+            host.layoutSubtreeIfNeeded()
+        }
+        let textLayout = try XCTUnwrap(editor.textLayoutManager)
+        editor.setMarkedText("zhongwenzhongwen", selectedRange: NSRange(location: 15, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        let marked = editor.markedRange()
+        XCTAssertTrue(editor.hasMarkedText())
+        for _ in 0..<30 {
+            try await Task.sleep(for: .milliseconds(8))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(editor.textLayoutManager === textLayout)
+            XCTAssertTrue(editor.hasMarkedText(), "Resizing must not commit unfinished pinyin")
+            XCTAssertEqual(editor.markedRange(), marked)
+            let candidateRect = editor.firstRect(forCharacterRange: marked, actualRange: nil)
+            XCTAssertGreaterThan(candidateRect.height, 0)
+            XCTAssertTrue(window.frame.intersects(candidateRect), "Candidate anchor must remain at the editor")
+        }
+        editor.insertText("中文", replacementRange: marked)
+        XCTAssertTrue(editor.string.hasSuffix("中文"))
+        XCTAssertFalse(editor.hasMarkedText())
         try trace.write(toFile: "/tmp/tusi-input-line-transition.csv", atomically: true, encoding: .utf8)
     }
 

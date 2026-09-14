@@ -114,13 +114,24 @@ struct LineSnappingScroll: NSViewRepresentable {
         private func keepGrowingEditorAtTop() {
             guard !restoringOrigin, let limit = growingEditorLimit,
                   let scrollView, let text = scrollView.documentView as? NSTextView,
-                  let layout = text.layoutManager, let container = text.textContainer,
+                  !text.hasMarkedText(),
                   scrollView.contentView.bounds.origin.y > 0.5 else { return }
             restoringOrigin = true
             defer { restoringOrigin = false }
-            layout.ensureLayout(for: container)
-            let height = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
-                + 2 * text.textContainerInset.height
+            let contentHeight: CGFloat
+            // Reading NSTextView.layoutManager switches TextKit 2 to TextKit 1 and
+            // discards marked text. Always use the editor's existing layout engine.
+            if let layout = text.textLayoutManager {
+                guard let content = layout.textContentManager else { return }
+                layout.ensureLayout(for: content.documentRange)
+                contentHeight = layout.usageBoundsForTextContainer.maxY
+            } else if let layout = text.layoutManager, let container = text.textContainer {
+                layout.ensureLayout(for: container)
+                contentHeight = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+            } else {
+                return
+            }
+            let height = contentHeight + 2 * text.textContainerInset.height
             guard height <= limit + 0.5 else { return }
             scrollView.contentView.scroll(to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0))
             scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -148,6 +159,8 @@ struct LineSnappingScroll: NSViewRepresentable {
         /// as the text settling rather than as the panel scrolling on its own.
         private func snap() {
             guard step > 1, let scrollView else { return }
+            // Do not move the caret's viewport while the input method is composing.
+            guard (scrollView.documentView as? NSTextView)?.hasMarkedText() != true else { return }
             let clip = scrollView.contentView
             let current = clip.bounds.origin.y
             let documentHeight = scrollView.documentView?.frame.height ?? 0

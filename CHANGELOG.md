@@ -2,6 +2,14 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.1] - 2026-09-14
+
+### Fixed
+
+- Preserve Chinese input composition when text wraps to a new line. Measuring the editor through the legacy layout manager switched TextKit 2 to TextKit 1 and discarded marked text, leaving unfinished pinyin in the draft. Height measurement now uses the editor's existing layout engine.
+- Leave caret scrolling to AppKit while an input method is composing, without forcing the viewport back to the top or snapping it to a line boundary. Keep normal input growth, first-line anchoring, and long-draft scrolling after composition ends.
+- Add regression coverage for marked-text preservation, layout-engine identity, committing Chinese text, and candidate-anchor geometry across soft wraps in the SwiftUI editor.
+
 ## [1.15.0] - 2026-09-12
 
 ### Fixed
