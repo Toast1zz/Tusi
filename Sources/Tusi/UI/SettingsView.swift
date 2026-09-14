@@ -918,10 +918,7 @@ struct SettingsView: View {
                 // label row, which the collapse header above already is — reusing it
                 // here would print the same text twice.
                 VStack(alignment: .leading, spacing: 5) {
-                    TextField("例：commit 统一译作「提交」", text: $settings.extraInstruction, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(Theme.body)
-                        .lineLimit(1...3)
+                    InstructionEditor(text: $settings.extraInstruction)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(

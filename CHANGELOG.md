@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.3] - 2026-09-14
+
+### Fixed
+
+- Replace the additional translation requirements field with a multiline editor. Return inserts a newline; explicit lines and wrapped text grow the editor from two to six lines, with internal scrolling beyond the cap. Settings window sizing follows content growth and shrinkage within its existing screen-aware limit.
+- Preserve native text editing and Chinese composition without accessing the live editor's legacy layout manager. Add native regression coverage for newlines, window sizing, scrolling, shrinking, and marked text.
+
 ## [1.15.2] - 2026-09-14
 
 ### Fixed
