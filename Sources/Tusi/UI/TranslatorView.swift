@@ -734,6 +734,30 @@ struct TranslatorView: View {
 
             Spacer(minLength: 8)
 
+            if settings.holdReturnToRetranslate && engine.canRetranslate
+                && !panelState.showHistory && !panelState.showLanguagePicker
+                && settings.shortcut(.translate)?.isPlainReturn == true {
+                ViewThatFits(in: .horizontal) {
+                    Text(L("长按 ⏎ 重新翻译")).fixedSize()
+                    Text(L("长按 ⏎")).fixedSize()
+                }
+                .font(Theme.caption)
+                .foregroundStyle(.secondary)
+                .opacity(panelState.returnHoldProgress == nil ? 1 : 0)
+                .frame(height: 18)
+                .overlay {
+                    if let progress = panelState.returnHoldProgress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .controlSize(.mini)
+                            .accessibilityLabel(L("重新翻译确认进度"))
+                    }
+                }
+                .help(L("按住回车 1.5 秒，按当前配置重新翻译；提前松手保留原回车操作"))
+                .accessibilityLabel(L("长按 ⏎ 重新翻译"))
+                .layoutPriority(-1)
+            }
+
             if !engine.output.isEmpty {
                 CopyButton(
                     copied: engine.copied,
@@ -741,17 +765,6 @@ struct TranslatorView: View {
                     shortcutHint: settings.shortcut(.copy)?.display
                 ) {
                     engine.copyOutput()
-                }
-                .overlay(alignment: .bottom) {
-                    if let progress = panelState.returnHoldProgress {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                            .controlSize(.mini)
-                            .padding(.horizontal, 8)
-                            .offset(y: 4)
-                            .accessibilityLabel(L("重新翻译确认进度"))
-                            .allowsHitTesting(false)
-                    }
                 }
                 .transition(.opacity)
             }

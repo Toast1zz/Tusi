@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.4] - 2026-09-15
+
+### Fixed
+
+- Restore the Hold Return to translate again hint in the completed-result action row, with a compact label when space is limited. The hint was removed during the 1.14.9 layout changes even though the hold gesture remained available.
+- Show hold progress in place of the hint instead of beneath Copy. Respect the hold-to-retranslate setting and Return shortcut configuration; holding for 1.5 seconds retranslates, while releasing early preserves the normal Return action.
+
 ## [1.15.3] - 2026-09-14
 
 ### Fixed
