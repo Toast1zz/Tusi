@@ -17,6 +17,8 @@ final class AuditRegressionTests: XCTestCase {
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "fake", model: "online", outputProtocolPreference: .plainText)
         if local {
             settings.routeStart = .local
+            settings.setLocalModelEnabled(true)
+            settings.setLocalModelReady(true)
             settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local")
         }
         return settings
@@ -168,6 +170,8 @@ final class AuditRegressionTests: XCTestCase {
 
     func testLocalOnlyRouteIgnoresUnavailableOnlinePreference() {
         let settings = SettingsStore(preview: true)
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local")
         XCTAssertTrue(settings.isConfigured)
         XCTAssertEqual(settings.route.stages.first?.slots, [2])
@@ -600,6 +604,8 @@ final class AuditRegressionTests: XCTestCase {
         let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
         settings.profiles[0].baseURL = "https://example.com/v1"
         settings.profiles[0].model = "online"
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local")
         XCTAssertTrue(settings.isConfigured)
         credentials.failLoad = false

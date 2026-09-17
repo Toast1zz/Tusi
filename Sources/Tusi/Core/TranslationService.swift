@@ -12,6 +12,7 @@ enum TranslationError: LocalizedError, Equatable {
     case invalidResponse
     case invalidURL
     case insecureURL
+    case localModelUnavailable
     case http(Int, String)
 
     var errorDescription: String? {
@@ -32,6 +33,8 @@ enum TranslationError: LocalizedError, Equatable {
             return L("接口地址无效，请检查设置")
         case .insecureURL:
             return L("远程接口必须使用 HTTPS，本机地址可使用 HTTP")
+        case .localModelUnavailable:
+            return L("本地模型未启用或尚未就绪")
         case .http(let code, let message):
             switch code {
             case 401: return L("API Key 无效或已过期 (401)")
@@ -55,7 +58,7 @@ enum TranslationError: LocalizedError, Equatable {
             return code >= 500
         case .truncatedStream, .watchdogTimeout:
             return true
-        case .emptyKey, .emptyResponse, .invalidResponse, .invalidURL, .insecureURL:
+        case .emptyKey, .emptyResponse, .invalidResponse, .invalidURL, .insecureURL, .localModelUnavailable:
             return false
         }
     }

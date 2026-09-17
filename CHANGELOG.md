@@ -2,6 +2,19 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-09-17
+
+### Added
+
+- Add an Enable local model switch with loading, ready, stopped, and failure states. Turning it off unloads the managed service and disables login startup while preserving model files and selection. Selecting a model while off saves the choice without starting inference.
+- Reconcile startup, enable/disable, and model selection through one serialized lifecycle with safe failure recovery. Existing online-first setups stop keeping an unused model resident; active local-first and local-only setups retain local enablement.
+
+### Fixed
+
+- Limit managed llama-server instances to an 8,192-token context and one request slot, disable the additional host prompt cache, and prevent context shifting. This avoids the default 262,144-token context allocating roughly 16 GiB of KV cache for Hy-MT2-1.8B.
+- Require explicit enablement and runtime readiness before routing or testing local requests, including retries from captured request routes. Stopped models no longer appear configured-but-ready, and local transitions do not block usable online translation.
+- Add lifecycle, persistence, failure recovery, concurrent operation, routing, and native layout regression coverage, plus an opt-in real-service integration test.
+
 ## [1.15.4] - 2026-09-15
 
 ### Fixed

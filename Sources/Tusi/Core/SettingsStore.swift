@@ -140,6 +140,19 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(routeStart.rawValue, forKey: "routeStart") }
     }
 
+    /// Desired lifecycle state survives relaunch; readiness never does. Routing must
+    /// not equate a saved model path with a running, usable service.
+    @Published private(set) var localModelEnabled = false
+    @Published private(set) var localModelReady = false
+
+    func setLocalModelEnabled(_ enabled: Bool) {
+        localModelEnabled = enabled
+        defaults.set(enabled, forKey: "localModelEnabled")
+        if !enabled { localModelReady = false }
+    }
+
+    func setLocalModelReady(_ ready: Bool) { localModelReady = ready && localModelEnabled }
+
     /// What to do when both online slots are filled in. Replaced the
     /// `fallbackEnabled` / `raceFastestEnabled` pair, which were never actually
     /// independent: `resolvedChain` gated the backup on `fallbackEnabled`, and the
@@ -256,10 +269,12 @@ final class SettingsStore: ObservableObject {
         }
     }
     @Published private(set) var launchAtLoginError: String?
-    init(preview: Bool? = nil, credentialStorage: CredentialStorage? = nil) {
+    init(preview: Bool? = nil, credentialStorage: CredentialStorage? = nil, defaultsOverride: UserDefaults? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         self.credentialStorage = credentialStorage ?? (isPreview ? nil : .live)
-        if isPreview {
+        if let defaultsOverride {
+            defaults = defaultsOverride
+        } else if isPreview {
             let suite = "com.tusi.preview.scratch"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             defaults = UserDefaults(suiteName: suite) ?? .standard
@@ -298,12 +313,29 @@ final class SettingsStore: ObservableObject {
             profiles = [APIProfile(), APIProfile(), APIProfile()]
         }
 
+        localModelEnabled = Self.loadLocalModelEnabled(defaults: defaults, start: routeStart,
+            localConfigured: profiles[Self.localProfileIndex].isUsable,
+            // A temporarily locked Keychain must not opt an online user into residency.
+            onlineConfigured: profiles.prefix(2).contains {
+                !$0.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && !$0.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+
         // Sync the persisted sound preference into the shared player after every stored
         // property is initialized.
         SoundPlayer.shared.enabled = soundEnabled
     }
 
     // MARK: - Routing persistence
+
+    static func loadLocalModelEnabled(defaults: UserDefaults, start: RouteStart,
+                                      localConfigured: Bool, onlineConfigured: Bool) -> Bool {
+        if let saved = defaults.object(forKey: "localModelEnabled") as? Bool { return saved }
+        // Preserve active local users; don't keep an unused model resident for online users.
+        let enabled = localConfigured && (start == .local || !onlineConfigured)
+        defaults.set(enabled, forKey: "localModelEnabled")
+        return enabled
+    }
 
     /// Reads the two routing preferences, migrating the four booleans they replaced.
     ///
@@ -643,11 +675,27 @@ final class SettingsStore: ObservableObject {
 
     var fallbackIndex: Int { primaryIndex == 0 ? 1 : 0 }
 
-    /// Whether the local slot is filled in enough to be routed to.
-    var localAvailable: Bool { profiles[Self.localProfileIndex].isUsable }
+    /// Saved configuration, explicit enablement and observed readiness are all required.
+    var localAvailable: Bool { isSlotAvailable(Self.localProfileIndex) }
+
+    func isSlotAvailable(_ index: Int) -> Bool {
+        guard profiles.indices.contains(index), profiles[index].isUsable else { return false }
+        return permitsRequest(to: profiles[index].config, slot: index)
+    }
+
+    /// Checked again at the request boundary: request snapshots retain their original
+    /// configs, but cannot retain permission to use a service that was disabled.
+    func permitsRequest(to config: APIConfig, slot: Int) -> Bool {
+        let url = URL(string: TranslationService.normalizedBaseURLString(config.baseURL))
+        let managedEndpoint = TranslationService.isLoopback(config.displayHost) && url?.port == 8080
+        if slot == Self.localProfileIndex || managedEndpoint {
+            return localModelEnabled && localModelReady
+        }
+        return true
+    }
 
     /// Whether either online slot is filled in.
-    var onlineAvailable: Bool { profiles[0].isUsable || profiles[1].isUsable }
+    var onlineAvailable: Bool { isSlotAvailable(0) || isSlotAvailable(1) }
 
     /// Whether there is any usable slot at all. Unlike the old `isConfigured`, a
     /// filled-in local slot counts: it is a normal route start now, not a manual-only
@@ -670,7 +718,7 @@ final class SettingsStore: ObservableObject {
     /// The single online stage, or nil when no online slot is usable. A half-filled
     /// backup collapses this to one slot rather than breaking a working primary.
     private var onlineStage: RouteStage? {
-        let ordered = [primaryIndex, fallbackIndex].filter { profiles[$0].isUsable }
+        let ordered = [primaryIndex, fallbackIndex].filter { isSlotAvailable($0) }
         guard let sole = ordered.first else { return nil }
         guard ordered.count == 2 else {
             return RouteStage(tier: .online, slots: [sole], strategy: .single)

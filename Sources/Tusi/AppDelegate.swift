@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isPreview = settings.isPreview
         let configured = settings.isConfigured
         Log.app.debug("Tusi \(version) launched (preview=\(isPreview), configured=\(configured))")
+        LocalModelManager.shared.prepareAtLaunch(settings: settings)
         setupMainMenu()
         setupStatusItem()
         panelController = PanelController(
@@ -95,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         // First run without a usable profile: open the panel so setup is obvious.
-        if !settings.isConfigured {
+        if !settings.isConfigured && !(settings.localModelEnabled && settings.profiles[SettingsStore.localProfileIndex].isUsable) {
             panelController.show()
         }
 

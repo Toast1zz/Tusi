@@ -253,3 +253,16 @@
 "还没有翻译记录" = "No translations yet";
 "只保留最近 %d 条" = "Only the last %d are kept";
 "历史已清空" = "History cleared";
+
+"启用本地模型" = "Enable local model";
+"已关闭，不占用模型内存" = "Off · model memory released";
+"正在加载本地模型…" = "Loading local model…";
+"正在关闭本地模型…" = "Stopping local model…";
+"已就绪，可用于本地翻译" = "Ready for local translation";
+"本地模型状态异常，请重试" = "Local model unavailable. Please retry.";
+"使用的模型" = "Model selection";
+"关闭后保留模型文件，需要时可再次开启" = "Model files are kept while off. Turn on whenever needed.";
+"本地模型就绪后，可以让它先翻，再请求在线版本" = "Once ready, the local model can translate first, followed by an online version.";
+"本地模型已关闭，翻译将使用在线服务" = "Local model is off. Translations use online services.";
+"本地模型未启用或尚未就绪" = "The local model is off or not ready yet.";
+"当前翻译使用在线服务" = "Translations currently use online services.";

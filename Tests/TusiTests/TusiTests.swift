@@ -611,6 +611,8 @@ final class TusiTests: XCTestCase {
         // It is an ordinary route start now: a filled local slot is a working app.
         let settings = SettingsStore(preview: true)
         XCTAssertFalse(settings.isConfigured)
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -625,6 +627,8 @@ final class TusiTests: XCTestCase {
         let settings = SettingsStore(preview: true)
         settings.routeStart = .online
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -637,6 +641,8 @@ final class TusiTests: XCTestCase {
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "backup")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -707,6 +713,8 @@ final class TusiTests: XCTestCase {
         let settings = SettingsStore(preview: true)
         XCTAssertFalse(settings.localAvailable)
 
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -1869,6 +1877,8 @@ final class TusiTests: XCTestCase {
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -1892,6 +1902,8 @@ final class TusiTests: XCTestCase {
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
@@ -2012,6 +2024,8 @@ final class TusiTests: XCTestCase {
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )

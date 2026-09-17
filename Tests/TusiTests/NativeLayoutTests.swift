@@ -174,6 +174,8 @@ final class NativeLayoutTests: XCTestCase {
         settings.profiles[0] = APIProfile(baseURL: "https://opencode.ai/v1", apiKey: "fake", model: "mimo-v2.5")
         settings.profiles[1] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "fake", model: "deepseek-flash")
         settings.profiles[2] = APIProfile(baseURL: "http://localhost:8080/v1", model: "local-model")
+        settings.setLocalModelEnabled(true)
+        settings.setLocalModelReady(true)
         let state = PanelState()
         state.showSettings = true
         state.settingsSection = .translation

@@ -311,6 +311,10 @@ struct SettingsView: View {
             cancelTests()
             testStates.removeAll()
         }
+        .onChange(of: settings.localModelEnabled) { _, _ in
+            cancelTests()
+            testStates.removeAll()
+        }
         .onChange(of: editingIndex) { _, _ in
             showKey = false
             cancelTests()
@@ -328,8 +332,35 @@ struct SettingsView: View {
 
     private var localModelPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { settings.localModelEnabled },
+                set: { localModels.setEnabled($0, settings: settings) }
+            )) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("启用本地模型").font(Theme.bodySmallSemibold)
+                    HStack(spacing: 5) {
+                        if localModels.isSwitching {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Circle()
+                                .fill(settings.localAvailable ? AnyShapeStyle(Theme.success) : AnyShapeStyle(Color.secondary.opacity(0.4)))
+                                .frame(width: 5, height: 5)
+                        }
+                        Text(localModels.status).font(Theme.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous).fill(Theme.fillQuiet))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous).strokeBorder(Theme.strokeHairline, lineWidth: 1))
+
             HStack {
-                Text("本地模型").font(Theme.footnoteMedium).foregroundStyle(.secondary)
+                Text("使用的模型").font(Theme.footnoteMedium).foregroundStyle(.secondary)
                 Spacer()
                 Button { Task { await localModels.refresh(settings: settings) } } label: {
                     Image(systemName: "arrow.clockwise")
@@ -339,7 +370,7 @@ struct SettingsView: View {
                 .disabled(localModels.isSwitching)
             }
             Picker("本地模型", selection: Binding(
-                get: { localModels.activeID },
+                get: { localModels.selectedID },
                 set: { localModels.select($0, settings: settings) }
             )) {
                 Text("选择模型").tag("")
@@ -352,14 +383,16 @@ struct SettingsView: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity, alignment: .leading)
             .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
-            HStack(spacing: 6) {
-                if localModels.isSwitching { ProgressView().controlSize(.small) }
-                Text(localModels.status).font(Theme.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("关闭后保留模型文件，需要时可再次开启")
+                .font(Theme.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if let error = localModels.error {
                 Text(error).font(Theme.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if localModels.state == .failed || localModels.error != nil {
+                Button("重试") { localModels.setEnabled(settings.localModelEnabled, settings: settings) }
+                    .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
             }
         }
     }
@@ -435,7 +468,7 @@ struct SettingsView: View {
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(settings.profiles[index].isUsable
+                    .fill(settings.isSlotAvailable(index)
                           ? AnyShapeStyle(Theme.success)
                           : AnyShapeStyle(Color.secondary.opacity(0.35)))
                     .frame(width: 5, height: 5)
@@ -474,9 +507,11 @@ struct SettingsView: View {
     private var localSlotRoleRow: some View {
         HStack(spacing: 6) {
             if !settings.localAvailable {
-                Text("还需要填好下面的接口地址和模型")
+                Text(settings.onlineAvailable
+                     ? L("当前翻译使用在线服务")
+                     : L("本地模型未启用或尚未就绪"))
                     .font(Theme.caption)
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if settings.routeStart == .local {
                 Label("翻译从这里开始", systemImage: "checkmark.seal.fill")
@@ -578,7 +613,9 @@ struct SettingsView: View {
                         : L("每次翻译都直接走在线服务")
                 )
             } else if settings.onlineAvailable, !settings.localAvailable {
-                routingNote(L("填好本地模型后，可以让它先翻，再请求在线版本"))
+                routingNote(settings.localModelEnabled
+                    ? L("本地模型就绪后，可以让它先翻，再请求在线版本")
+                    : L("本地模型已关闭，翻译将使用在线服务"))
             } else if settings.localAvailable, !settings.onlineAvailable {
                 routingNote(L("目前只有本地模型可用，所有翻译都由它完成"))
             }
@@ -1018,7 +1055,7 @@ struct SettingsView: View {
             .foregroundStyle(Theme.accent)
         }
         .controlSize(.large)
-        .disabled(testState == .testing || !settings.profiles[safeEditingIndex].isUsable || localModels.isSwitching)
+        .disabled(testState == .testing || !settings.isSlotAvailable(safeEditingIndex))
         .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
         .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
     }
@@ -1075,6 +1112,7 @@ struct SettingsView: View {
 
     private func runTest() {
         let index = safeEditingIndex
+        guard settings.isSlotAvailable(index) else { return }
         testTasks[index]?.cancel()
         let generation = (testGenerations[index] ?? 0) + 1
         testGenerations[index] = generation

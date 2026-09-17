@@ -521,7 +521,6 @@ final class TranslationEngine: ObservableObject {
     var canRetranslate: Bool {
         state == .done && !escalating && !output.isEmpty
             && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !LocalModelManager.shared.isSwitching
     }
 
     /// The label of the tier escalation would reach, for the hint that offers it.
@@ -559,7 +558,6 @@ final class TranslationEngine: ObservableObject {
     }
 
     func translate() {
-        guard !LocalModelManager.shared.isSwitching else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -568,9 +566,11 @@ final class TranslationEngine: ObservableObject {
 
         let route = settings.route
         guard !route.isEmpty else {
-            // Nothing usable anywhere: every slot is empty or half-filled.
+            // A saved but stopped local model is a lifecycle issue, not missing setup.
             failureKind = .notConfigured
-            state = .failed(L("还没有配置可用的翻译服务，请先在设置中填写"))
+            state = .failed(settings.profiles[SettingsStore.localProfileIndex].isUsable
+                ? TranslationError.localModelUnavailable.localizedDescription
+                : L("还没有配置可用的翻译服务，请先在设置中填写"))
             return
         }
 
@@ -601,7 +601,6 @@ final class TranslationEngine: ObservableObject {
     /// rather than discarded, because it is not a failure, it is just the one the user
     /// wants a second opinion on.
     func escalate() {
-        guard !LocalModelManager.shared.isSwitching else { return }
         guard canEscalate,
               let context = request,
               let next = context.route.nextHigherStage(after: currentStageIndex)
@@ -626,8 +625,13 @@ final class TranslationEngine: ObservableObject {
         var attemptedSlots: Set<Int> = []
         var index = startIndex
 
-        while let stage = context.route.stage(at: index) {
+        while var stage = context.route.stage(at: index) {
             guard !Task.isCancelled, request?.id == context.id else { return }
+            // A route is a request snapshot, but disabling a service revokes permission
+            // to contact it, including a later escalation or retry of that snapshot.
+            stage.slots = stage.slots.filter { settings.permitsRequest(to: context.configs[$0] ?? settings.config(for: $0), slot: $0) }
+            if stage.slots.isEmpty { index += 1; continue }
+            if stage.slots.count == 1 { stage.strategy = .single }
             attemptedTiers.insert(stage.tier)
             let outcome = await runStage(stage, context: context, attemptedSlots: &attemptedSlots)
             switch outcome {
@@ -849,8 +853,11 @@ final class TranslationEngine: ObservableObject {
     }
 
     /// Scope every route leg to the same logical translation, including retries.
-    private func makeStream(context: RequestContext, config: APIConfig) -> AsyncThrowingStream<String, Error> {
-        TranslationService.$sessionID.withValue(context.id) {
+    private func makeStream(context: RequestContext, config: APIConfig, slot: Int) -> AsyncThrowingStream<String, Error> {
+        guard settings.permitsRequest(to: config, slot: slot) else {
+            return AsyncThrowingStream { $0.finish(throwing: TranslationError.localModelUnavailable) }
+        }
+        return TranslationService.$sessionID.withValue(context.id) {
             stream(context.text, context.target, context.tone, context.extra, config)
         }
     }
@@ -871,7 +878,7 @@ final class TranslationEngine: ObservableObject {
         // a retry) commits only its own tokens — two models' output is never spliced.
         resetPendingOutput()
         let first = await consumeStream(
-            makeStream(context: context, config: config),
+            makeStream(context: context, config: config, slot: slot),
             requestRevision: context.revision
         )
         switch first {
@@ -895,7 +902,7 @@ final class TranslationEngine: ObservableObject {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self.inputRevision == context.revision else { return .cancelled }
             let retry = await consumeStream(
-                makeStream(context: context, config: config),
+                makeStream(context: context, config: config, slot: slot),
                 requestRevision: context.revision
             )
             switch retry {
@@ -1086,7 +1093,7 @@ final class TranslationEngine: ObservableObject {
         // from inside `addTask` would need to hop back to the main actor anyway —
         // starting the streams up front makes that hop happen once, up front.
         let legs = stage.slots.map { slot in
-            (slot, self.makeStream(context: context, config: context.configs[slot] ?? settings.config(for: slot)))
+            (slot, self.makeStream(context: context, config: context.configs[slot] ?? settings.config(for: slot), slot: slot))
         }
         return await withTaskGroup(of: (Int, LegOutcome).self) { group -> StreamOutcome in
             for (slot, stream) in legs {

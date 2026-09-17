@@ -134,6 +134,8 @@ extension AppDelegate {
                 APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
                 APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
             ]
+            settings.setLocalModelEnabled(true)
+            settings.setLocalModelReady(true)
             settings.routeStart = .local
             let local = TranslationEngine.ResultVersion(
                 text: "Maybe you could fill in this form every day, for Mitchelle.",
