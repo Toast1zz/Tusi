@@ -322,6 +322,7 @@ struct TranslatorView: View {
         .onReceive(engine.translationRequested) {
             panelState.showHistory = false
             panelState.showLanguagePicker = false
+            engine.discardHistoryUndo()
         }
     }
 
@@ -383,7 +384,28 @@ struct TranslatorView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, engine.hasResultSection || panelState.showHistory ? 12 : 10)
             }
+
+            // After Clear History the panel is back on the translator; the undo comes along,
+            // on the right where Clear History just was, until the user moves on.
+            Disclosure(isExpanded: !panelState.showHistory && engine.canUndoHistoryDeletion) {
+                clearedHistoryNotice
+                    .padding(.horizontal, 16)
+                    .padding(.top, engine.hasResultSection ? 12 : 10)
+            }
         }
+    }
+
+    private var clearedHistoryNotice: some View {
+        HStack(spacing: 12) {
+            Text(L("历史已清空"))
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+            Button(L("撤销")) { engine.undoHistoryDeletion() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+        }
+        .font(Theme.meta)
+        .padding(.horizontal, Self.resultNoticeInset)
     }
 
     // MARK: - Input
@@ -909,9 +931,9 @@ struct TranslatorView: View {
     }
 
     /// One row under the list that never scrolls away: how much history keeps on the
-    /// left, the commands on the right. Undo appears on the right too — beside Clear
-    /// History after a single deletion, and in its very place once everything is cleared —
-    /// so the way back is where the click just was. It stays until history is left.
+    /// left, the commands on the right. Undo appears on the right too, beside Clear History
+    /// after a single deletion, so the way back is where the click just was. It stays until
+    /// history is left. Clearing everything leaves history at once and takes its undo along.
     private var historyFooter: some View {
         HStack(spacing: 12) {
             Text(engine.history.isEmpty
@@ -926,7 +948,12 @@ struct TranslatorView: View {
                     .transition(.opacity)
             }
             if !engine.history.isEmpty {
-                Button(L("清空历史")) { engine.clearHistory() }
+                // Nothing is left to browse, so clearing goes straight back to the
+                // translator; its undo follows there (see `clearedHistoryNotice`).
+                Button(L("清空历史")) {
+                    engine.clearHistory()
+                    panelState.showHistory = false
+                }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
             }

@@ -3481,6 +3481,40 @@ final class TusiTests: XCTestCase {
         XCTAssertTrue(engine.history.isEmpty, "A discarded deletion is final")
     }
 
+    /// Clear History closes history itself, so its undo must survive that exit and be
+    /// offered on the translator; a single deletion still ends when history closes.
+    func testClearedHistoryUndoOutlivesClosingHistoryOnce() throws {
+        let settings = SettingsStore(preview: true)
+        let records = (0..<2).map { i in
+            TranslationEngine.Record(id: UUID(), input: "测试\(i)", output: "Test", sourceLabel: "中",
+                                     source: .chinese, target: .english, tone: .standard,
+                                     timestamp: Date(timeIntervalSince1970: TimeInterval(1_000 + i)))
+        }
+        let data = try JSONEncoder().encode(records)
+        let engine = TranslationEngine(settings: settings, storage: TranslationStorage(
+            read: { $0.lastPathComponent == "history.json" ? data : nil }, write: { _, _ in }))
+
+        engine.clearHistory()
+        engine.historyClosed()
+        XCTAssertTrue(engine.canUndoHistoryDeletion, "Clearing closes history; the undo follows")
+        engine.historyClosed()
+        XCTAssertFalse(engine.canUndoHistoryDeletion, "Leaving history a second time ends it")
+
+        engine.undoHistoryDeletion()
+        XCTAssertTrue(engine.history.isEmpty)
+
+        let fresh = TranslationEngine(settings: settings, storage: TranslationStorage(
+            read: { $0.lastPathComponent == "history.json" ? data : nil }, write: { _, _ in }))
+        fresh.clearHistory()
+        fresh.historyClosed()
+        fresh.undoHistoryDeletion()
+        XCTAssertEqual(fresh.history.count, 2, "Undo from the translator restores everything")
+
+        fresh.deleteHistory(records[0].id)
+        fresh.historyClosed()
+        XCTAssertFalse(fresh.canUndoHistoryDeletion, "A single deletion ends when history closes")
+    }
+
     func testHistoryDayTitlesNameTodayAndYesterday() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

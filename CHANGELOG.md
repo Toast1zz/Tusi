@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.1] - 2026-09-23
+
+### Changed
+
+- Clear History now returns to the translator immediately. The undo comes along: a "History cleared" row with Undo on the right appears above the bottom bar, where Clear History was, and restores every record. It lasts until a new translation starts, Settings opens, or history is opened and closed again; it is not timed.
+- Single-record deletions keep their existing behavior: history stays open and Undo sits beside Clear History until history is left.
+
 ## [1.16.0] - 2026-09-17
 
 ### Added

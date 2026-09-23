@@ -86,9 +86,10 @@ struct RootView: View {
             onHeightChange(height)
         }
         // Undoing a history deletion lasts exactly as long as history is on screen: it ends
-        // when history closes or Settings opens, never on a timer.
+        // when history closes or Settings opens, never on a timer. Clear History is the one
+        // exception — it closes history itself, and its undo follows to the translator.
         .onChange(of: panelState.showHistory) { _, showing in
-            if !showing { engine.discardHistoryUndo() }
+            if !showing { engine.historyClosed() }
         }
         .onChange(of: panelState.showSettings) { _, showing in
             if showing { engine.discardHistoryUndo() }

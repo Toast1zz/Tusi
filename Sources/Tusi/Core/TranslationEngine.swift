@@ -208,6 +208,7 @@ final class TranslationEngine: ObservableObject {
     private var restoringHistory = false
     @Published private(set) var persistenceError: String?
     @Published private(set) var canUndoHistoryDeletion = false
+    private var historyUndoOutlivesExit = false
     private var deletedRecords: [Record] = []
     private var translationTask: Task<Void, Never>?
     private var inputRevision: UInt = 0
@@ -1416,9 +1417,11 @@ final class TranslationEngine: ObservableObject {
         state = .done
     }
 
-    /// Clears all translation history.
+    /// Clears all translation history. The panel leaves history right after, so this undo
+    /// survives that one exit and is offered on the translator instead (see `historyClosed`).
     func clearHistory() {
         rememberDeletion(history)
+        historyUndoOutlivesExit = canUndoHistoryDeletion
         history = []
         saveHistory()
     }
@@ -1435,9 +1438,21 @@ final class TranslationEngine: ObservableObject {
     private func rememberDeletion(_ records: [Record]) {
         deletedRecords = records
         canUndoHistoryDeletion = !records.isEmpty
+        historyUndoOutlivesExit = false
     }
 
-    /// Called when the user leaves history (closes it, or opens Settings). Past that
+    /// Called when history closes. A single deletion is final from here; clearing
+    /// everything closes history itself, so its undo lives on until the next thing the
+    /// user does (see `discardHistoryUndo`).
+    func historyClosed() {
+        if historyUndoOutlivesExit {
+            historyUndoOutlivesExit = false
+        } else {
+            discardHistoryUndo()
+        }
+    }
+
+    /// Called when the user moves on (opens Settings, starts a translation). Past that
     /// point the deletion is final.
     func discardHistoryUndo() {
         rememberDeletion([])
