@@ -80,6 +80,7 @@ struct CredentialStorage {
 
 @MainActor
 final class SettingsStore: ObservableObject {
+    static let jevKeyIndex = -1
     private let defaults: UserDefaults
     private let credentialStorage: CredentialStorage?
     private var loadedKeys: [Int: String]?
@@ -184,6 +185,15 @@ final class SettingsStore: ObservableObject {
     }
     @Published var tone: Tone {
         didSet { defaults.set(tone.rawValue, forKey: "tone") }
+    }
+    @Published var jevAPIKey: String {
+        didSet {
+            guard jevAPIKey != oldValue, credentialStorage != nil, !applyingLoadedKeys,
+                  loadedKeys?[Self.jevKeyIndex] != jevAPIKey else { return }
+            if pendingKeychainKeys == nil { pendingKeychainKeys = [:] }
+            pendingKeychainKeys?[Self.jevKeyIndex] = jevAPIKey
+            scheduleKeychainSave()
+        }
     }
     /// Multi-language mode: the user picks the target explicitly instead of the
     /// automatic CN↔EN pairing.
@@ -292,6 +302,7 @@ final class SettingsStore: ObservableObject {
         saveDraftEnabled = defaults.object(forKey: "saveDraftEnabled") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard
+        jevAPIKey = ""
         multiLanguageMode = defaults.bool(forKey: "multiLanguageMode")
         // Sound is opt-out and follows the system output volume.
         soundEnabled = defaults.object(forKey: "soundEnabled") as? Bool ?? true
@@ -309,6 +320,7 @@ final class SettingsStore: ObservableObject {
             keychainError = loaded.keychainError
             keychainErrorIsRetryable = loaded.retryable
             loadedKeys = loaded.keys
+            jevAPIKey = loaded.keys?[Self.jevKeyIndex] ?? ""
         } else {
             profiles = [APIProfile(), APIProfile(), APIProfile()]
         }
@@ -636,6 +648,7 @@ final class SettingsStore: ObservableObject {
     private func applyLoadedKeys(_ keys: [Int: String]) {
         applyingLoadedKeys = true
         defer { applyingLoadedKeys = false }
+        if jevAPIKey.isEmpty, let key = keys[Self.jevKeyIndex] { jevAPIKey = key }
         for (index, profile) in profiles.enumerated() {
             // Only backfill remote profiles: a loopback (local) profile has no key by
             // design, and a stale key from an earlier remote configuration of the same

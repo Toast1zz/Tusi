@@ -15,8 +15,8 @@ import SwiftUI
 /// - The accent color marks focus, text selection, links — and the copy button, which
 ///   keeps its solid blue/green/orange capsule so its state reads at a glance. Orange is
 ///   otherwise reserved for failures the user has to act on.
-/// - The tone selector keeps its 1.14.15 design, Liquid Glass pill included; the
-///   translator's other controls use matte fills.
+/// - The tone selector uses a sliding Liquid Glass pill; the translator's other
+///   controls use matte fills.
 enum Theme {
     /// System accent color — whatever the user picked in System Settings ▸ Appearance.
     /// Spent only on focus, selection and links, so it still means something when it
@@ -110,8 +110,7 @@ enum Theme {
     static let fillFaint = Color.primary.opacity(0.025)
     /// Hover state for rows and pills.
     static let fillHover = Color.primary.opacity(0.07)
-    /// The selection pill of the tone selector and the settings choices on macOS < 26
-    /// (the Liquid Glass fallback).
+    /// The tone and language choice pills' Liquid Glass fallback on macOS < 26.
     static let fillSelection = Color.primary.opacity(0.14)
     /// Small inline elements: badges, the shortcuts row hover.
     static let radiusSmall: CGFloat = 6
@@ -173,7 +172,7 @@ enum Theme {
         /// panel height change that comes with it. A separate case from `.layout` because
         /// it names a different cause, not a different timing.
         case page
-        /// The one legitimate spring in the app: ToneSelector's selection pill has real
+        /// The one legitimate spring in the app: the selection pills have real
         /// inertia (a shape moving between resting positions), unlike everything above,
         /// which is a state switching rather than an object moving.
         case selection

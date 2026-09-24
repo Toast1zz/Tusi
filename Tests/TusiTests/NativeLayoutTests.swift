@@ -5,6 +5,12 @@ import XCTest
 
 @MainActor
 final class NativeLayoutTests: XCTestCase {
+    func testResolvedAutoToneFitsCompactToolbar() {
+        let selector = NSHostingView(rootView: ToneSelector(tone: .constant(.automatic), resolvedTone: .formal))
+        selector.layoutSubtreeIfNeeded()
+        XCTAssertLessThanOrEqual(selector.fittingSize.width, 245)
+    }
+
     func testTranslationRequestClosesHistoryButEditingDoesNot() async throws {
         let settings = SettingsStore(preview: true)
         settings.profiles = settings.profiles.map { _ in APIProfile() }
@@ -67,10 +73,11 @@ final class NativeLayoutTests: XCTestCase {
     func testCompactNativeSurfacesRenderWithinHeightBudget() async throws {
         for width: CGFloat in [470, 700] {
             for dark in [false, true] {
-                for page in ["translator", "hold", "settings", "local", "advanced", "translation", "general", "shortcuts"] {
+                for page in ["translator", "hold", "settings", "local", "jev", "advanced", "translation", "general", "shortcuts"] {
                     let settings = SettingsStore(preview: true)
                     settings.autoCopy = false
                     settings.soundEnabled = false
+                    if page == "translator" { settings.tone = .automatic }
                     settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "test-key", model: "translation-model", providerOrder: "provider-a")
                     settings.profiles[1] = settings.profiles[0]
                     settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local-model")
@@ -87,7 +94,11 @@ final class NativeLayoutTests: XCTestCase {
                     if page == "hold" { state.returnHoldProgress = 0.5 }
                     state.showShortcuts = page == "shortcuts"
                     if page == "local" { state.settingsProfileIndex = SettingsStore.localProfileIndex }
+                    if page == "jev" { state.settingsProfileIndex = SettingsStore.localProfileIndex + 1 }
                     if page == "translation" { state.settingsSection = .translation }
+                    if page == "translation" {
+                        settings.extraInstruction = "保持术语一致。保留段落与引号。所有专有名词按原文拼写。"
+                    }
                     if page == "general" { state.settingsSection = .general }
                     if page == "advanced" { state.settingsAdvancedProfiles = [0] }
                     var measured: CGFloat = 0
@@ -111,7 +122,7 @@ final class NativeLayoutTests: XCTestCase {
                     }
                     XCTAssertGreaterThan(measured, 0)
                     if page == "translator" { XCTAssertLessThanOrEqual(measured, 520) }
-                    if ["settings", "local", "advanced", "translation", "general"].contains(page) {
+                    if ["settings", "local", "jev", "advanced", "translation", "general"].contains(page) {
                         XCTAssertGreaterThan(measured, 240)
                         XCTAssertLessThanOrEqual(measured, SettingsView.maximumHeight(availableHeight: 520) + 1)
                         print("SETTINGS_LAYOUT \(page) width=\(width) height=\(measured)")

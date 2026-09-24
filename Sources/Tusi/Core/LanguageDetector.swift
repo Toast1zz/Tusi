@@ -118,14 +118,12 @@ struct TranslationLanguage: Codable, Equatable, Hashable {
     }
 }
 
-/// Register the translation should land in. Kept to three because the choice has to be
-/// made in one glance from the bottom bar — more options would turn it into a form.
-/// Declaration order is the on-screen order: the three read as one spectrum from loose
-/// to buttoned-up, with 标准 sitting between them.
+/// Register the translation should land in, plus an automatic choice for each request.
 enum Tone: String, CaseIterable, Identifiable, Codable {
     case casual
     case standard
     case formal
+    case automatic
 
     var id: String { rawValue }
 
@@ -134,6 +132,7 @@ enum Tone: String, CaseIterable, Identifiable, Codable {
         case .standard: return L("标准")
         case .formal: return L("正式")
         case .casual: return L("口语")
+        case .automatic: return L("自动")
         }
     }
 
@@ -142,12 +141,13 @@ enum Tone: String, CaseIterable, Identifiable, Codable {
         case .standard: return L("忠实自然，适合大多数场合")
         case .formal: return L("书面、专业，适合邮件、文档")
         case .casual: return L("轻松口语，适合聊天、社交")
+        case .automatic: return L("发送文本给 Jev 判断文风，再开始翻译")
         }
     }
 
     var promptInstruction: String {
         switch self {
-        case .standard:
+        case .standard, .automatic:
             return "Use a neutral register that faithfully matches the source's own tone."
         case .formal:
             return "Use a polished, professional register suitable for business email and documentation. Prefer complete sentences and precise vocabulary; avoid slang and contractions."

@@ -722,8 +722,8 @@ final class TusiTests: XCTestCase {
     }
 
     func testSlotLabelShowsShortBrandNameNotFullHost() {
-        // The tabs now share the settings row equally (SettingsView.slotTab); a full
-        // domain would eat a disproportionate share, so the label strips the generic
+        // The selected service tab shows its provider in the remaining row width;
+        // a full domain would consume too much of it, so the label strips the generic
         // "api." subdomain and the trailing TLD down to just the brand.
         let settings = SettingsStore(preview: true)
         settings.profiles[0] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "k", model: "m")

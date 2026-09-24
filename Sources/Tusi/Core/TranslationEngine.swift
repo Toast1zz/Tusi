@@ -84,6 +84,7 @@ final class TranslationEngine: ObservableObject {
         _ extra: String,
         _ config: APIConfig
     ) -> AsyncThrowingStream<String, Error>
+    typealias ToneClassifier = (_ text: String, _ key: String) async throws -> Tone
 
     @Published var input = "" {
         didSet {
@@ -114,6 +115,8 @@ final class TranslationEngine: ObservableObject {
     }
     @Published private(set) var output = ""
     @Published private(set) var state: State = .idle
+    @Published private(set) var resolvedTone: Tone?
+    @Published private(set) var toneDecisionNote: String?
     @Published private(set) var target: TranslationLanguage = .english
     @Published private(set) var source: TranslationLanguage = .chinese
     @Published private(set) var sourceLabel = "中"
@@ -202,6 +205,7 @@ final class TranslationEngine: ObservableObject {
 
     private let settings: SettingsStore
     private let stream: Streamer
+    private let toneClassifier: ToneClassifier
     private let storage: TranslationStorage
     private let clipboard: TranslationClipboard
     private var preferences = Set<AnyCancellable>()
@@ -295,10 +299,14 @@ final class TranslationEngine: ObservableObject {
                 extra: extra,
                 config: config
             )
+        },
+        toneClassifier: @escaping ToneClassifier = { text, key in
+            try await JevToneService.classify(text: text, key: key)
         }
     ) {
         self.settings = settings
         self.stream = stream
+        self.toneClassifier = toneClassifier
         self.storage = storage
         self.clipboard = clipboard
         self.historyURL = Self.historyURL(preview: settings.isPreview)
@@ -310,7 +318,7 @@ final class TranslationEngine: ObservableObject {
             .dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _, _ in
                 guard let self, !self.restoringHistory, let request = self.request,
-                      request.tone != self.settings.tone || request.extra != self.settings.extraInstruction else { return }
+                      request.selectedTone != self.settings.tone || request.extra != self.settings.extraInstruction else { return }
                 self.translate()
             }.store(in: &preferences)
         settings.$saveHistoryEnabled.dropFirst().receive(on: RunLoop.main)
@@ -465,6 +473,8 @@ final class TranslationEngine: ObservableObject {
         versions.removeAll()
         shownVersion = 0
         request = nil
+        resolvedTone = nil
+        toneDecisionNote = nil
         currentStageIndex = 0
         escalating = false
         escalationFailure = nil
@@ -490,6 +500,7 @@ final class TranslationEngine: ObservableObject {
         var sourceLabel: String
         var target: TranslationLanguage
         var tone: Tone
+        var selectedTone: Tone
         var extra: String
         var revision: UInt
         var route: TranslationRoute
@@ -541,7 +552,7 @@ final class TranslationEngine: ObservableObject {
     /// anyone can tell whether they need it. So a fast double-tap on a typo costs
     /// nothing, and there is no 300ms window every ordinary ⏎ has to wait out.
     func submit() {
-        if let request, request.tone != settings.tone || request.extra != settings.extraInstruction {
+        if let request, request.selectedTone != settings.tone || request.extra != settings.extraInstruction {
             translate()
             return
         }
@@ -580,19 +591,46 @@ final class TranslationEngine: ObservableObject {
             source: source,
             sourceLabel: sourceLabel,
             target: target,
-            tone: settings.tone,
+            tone: settings.tone == .automatic ? .standard : settings.tone,
+            selectedTone: settings.tone,
             extra: settings.extraInstruction,
             revision: inputRevision,
             route: route,
             configs: Dictionary(uniqueKeysWithValues: settings.profiles.indices.map { ($0, settings.config(for: $0)) })
         )
         request = context
+        resolvedTone = settings.tone == .automatic ? nil : settings.tone
         currentStageIndex = 0
         state = .translating
 
         translationTask = Task { [weak self] in
-            await self?.runRoute(context, from: 0)
+            await self?.resolveToneAndRun(context, key: self?.settings.jevAPIKey ?? "")
         }
+    }
+
+    private func resolveToneAndRun(_ context: RequestContext, key: String) async {
+        var resolved = context
+        var note: String?
+        if context.selectedTone == .automatic {
+            if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                note = L("未配置 Jev API Key，已使用标准文风")
+            } else {
+                do {
+                    let choice = try await toneClassifier(context.text, key)
+                    resolved.tone = choice == .automatic ? .standard : choice
+                } catch {
+                    // A classifier outage must not prevent the translation itself.
+                    resolved.tone = .standard
+                    note = L("Jev 判断失败，已使用标准文风")
+                }
+            }
+        }
+        guard !Task.isCancelled, request?.id == context.id,
+              inputRevision == context.revision, settings.tone == context.selectedTone else { return }
+        request = resolved
+        resolvedTone = resolved.tone
+        toneDecisionNote = note
+        await runRoute(resolved, from: 0)
     }
 
     /// Asks the next tier up for its own answer, keeping the current one.
@@ -1228,6 +1266,8 @@ final class TranslationEngine: ObservableObject {
         versions.removeAll()
         shownVersion = 0
         request = nil
+        resolvedTone = nil
+        toneDecisionNote = nil
         currentStageIndex = 0
         escalating = false
         escalationFailure = nil
@@ -1253,9 +1293,11 @@ final class TranslationEngine: ObservableObject {
         let route = settings.route
         self.request = RequestContext(
             text: input, source: source, sourceLabel: sourceLabel, target: target,
-            tone: settings.tone, extra: settings.extraInstruction,
+            tone: settings.tone == .automatic ? .standard : settings.tone,
+            selectedTone: settings.tone, extra: settings.extraInstruction,
             revision: inputRevision, route: route
         )
+        self.resolvedTone = request?.tone
         self.currentStageIndex = versions.last.flatMap { last in
             route.stages.firstIndex { $0.tier == last.tier }
         } ?? 0

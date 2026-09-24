@@ -40,7 +40,6 @@
 "隐藏" = "Hide";
 "显示" = "Show";
 "附加要求（可选）" = "Additional instructions (optional)";
-"对所有翻译生效，例如统一术语、保留格式" = "Applies to every translation — e.g. consistent terminology, preserved formatting";
 "例：commit 统一译作「提交」" = "e.g. always translate “commit” as “提交”";
 "翻译完成后自动复制" = "Copy automatically when translation finishes";
 "登录时启动" = "Launch at login";
@@ -78,6 +77,7 @@
 "会发送最多 4 个极短测试请求来检测输出兼容性" = "Sends up to 4 very short test requests to check output compatibility";
 "连接中…" = "Connecting…";
 "连接正常 · %d ms · %@" = "Connected · %d ms · %@";
+"连接正常 · %d ms" = "Connected · %d ms";
 "结构化输出" = "Structured output";
 "工具输出" = "Tool output";
 "JSON 兼容" = "JSON compatibility";
@@ -108,6 +108,18 @@
 "标准" = "Standard";
 "正式" = "Formal";
 "口语" = "Casual";
+"自动" = "Auto";
+"发送文本给 Jev 判断文风，再开始翻译" = "Send text to Jev to choose a tone before translating";
+"未配置 Jev API Key，已使用标准文风" = "Jev API key is missing. Standard tone was used.";
+"Jev 判断失败，已使用标准文风" = "Jev could not choose a tone. Standard tone was used.";
+"文风判断" = "Tone detection";
+"Key 保存在本机钥匙串；选择自动文风时将待译文本发送给 Jev" = "The key stays in your Mac's Keychain; Auto sends source text to Jev.";
+"Jev 选择：%@" = "Jev chose: %@";
+"自动·%@" = "Auto · %@";
+"Jev API Key 无效或无权限" = "Invalid Jev API key or insufficient access";
+"Jev 请求过于频繁，请稍后重试" = "Jev rate limit reached. Try again later.";
+"Jev 服务返回错误（%d）" = "Jev returned an error (%d)";
+"Jev 返回了无效的判断结果" = "Jev returned an invalid decision";
 "忠实自然，适合大多数场合" = "Faithful and natural — fits most situations";
 "书面、专业，适合邮件、文档" = "Written and professional — fits email and documents";
 "轻松口语，适合聊天、社交" = "Relaxed and conversational — fits chat and social posts";

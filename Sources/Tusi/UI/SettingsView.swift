@@ -16,6 +16,7 @@ struct SettingsDesiredHeightKey: PreferenceKey {
 }
 
 struct SettingsView: View {
+    private static let jevServiceIndex = SettingsStore.localProfileIndex + 1
     @ObservedObject private var localModels = LocalModelManager.shared
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -23,9 +24,13 @@ struct SettingsView: View {
     @EnvironmentObject private var updateChecker: UpdateChecker
 
     @State private var showKey = false
+    @State private var showJevKey = false
     @State private var testStates: [Int: TestState] = [:]
     @State private var testTasks: [Int: Task<Void, Never>] = [:]
     @State private var testGenerations: [Int: Int] = [:]
+    @State private var jevTestState: JevTestState = .idle
+    @State private var jevTestTask: Task<Void, Never>?
+    @State private var jevTestGeneration = 0
     @State private var shortcutsRowHovering = false
     @State private var extraInstructionExpandedOverride: Bool?
     @State private var headerHeight: CGFloat = 0
@@ -45,6 +50,7 @@ struct SettingsView: View {
         case model
         case providerOrder
         case apiKey
+        case jevAPIKey
     }
 
     @FocusState private var focusedField: FocusedField?
@@ -53,6 +59,13 @@ struct SettingsView: View {
         case idle
         case testing
         case success(TranslationService.ConnectionTestResult)
+        case failure(String)
+    }
+
+    private enum JevTestState: Equatable {
+        case idle
+        case testing
+        case success(Int)
         case failure(String)
     }
 
@@ -65,12 +78,12 @@ struct SettingsView: View {
         nonmutating set { panelState.settingsProfileIndex = newValue }
     }
 
-    /// Indexing guard: `profiles` is a fixed three-slot invariant (primary, backup,
-    /// local) maintained by the UI, but a stale `settingsProfileIndex` must degrade to
-    /// slot 0 instead of crashing on an out-of-range subscript if it ever breaks.
+    /// Jev has a service tab but no translation profile slot.
     private var safeEditingIndex: Int {
         settings.profiles.indices.contains(editingIndex) ? editingIndex : 0
     }
+
+    private var isEditingJev: Bool { editingIndex == Self.jevServiceIndex }
 
     private var isEditingLocalSlot: Bool {
         editingIndex == SettingsStore.localProfileIndex
@@ -99,7 +112,9 @@ struct SettingsView: View {
 
                     if panelState.settingsSection == .services {
                         slotTabs
-
+                        if isEditingJev {
+                            jevSection
+                        } else {
                         VStack(alignment: .leading, spacing: 12) {
                             if isEditingLocalSlot {
                                 localModelPicker
@@ -209,6 +224,7 @@ struct SettingsView: View {
 
                         testRow
                         advancedSection
+                        }
                     } else if panelState.settingsSection == .translation {
                         routingSection
                         SoftDivider()
@@ -306,6 +322,10 @@ struct SettingsView: View {
             focusedField = nil
             showKey = false
             cancelTests()
+            cancelJevTest()
+        }
+        .onChange(of: settings.jevAPIKey) { _, _ in
+            cancelJevTest()
         }
         .onChange(of: settings.profiles) { _, _ in
             cancelTests()
@@ -317,7 +337,9 @@ struct SettingsView: View {
         }
         .onChange(of: editingIndex) { _, _ in
             showKey = false
+            showJevKey = false
             cancelTests()
+            cancelJevTest()
         }
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
@@ -325,6 +347,7 @@ struct SettingsView: View {
             panelState.recordingShortcut = nil
             panelState.shortcutError = nil
             cancelTests()
+            cancelJevTest()
         }
     }
 
@@ -445,13 +468,15 @@ struct SettingsView: View {
     private var slotTabs: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                ForEach(0...SettingsStore.localProfileIndex, id: \.self) { index in
+                ForEach(0...Self.jevServiceIndex, id: \.self) { index in
                     slotTab(index)
-                        .frame(maxWidth: .infinity)
                 }
             }
+            .motion(.layout, value: editingIndex)
 
-            if isEditingLocalSlot {
+            if isEditingJev {
+                EmptyView()
+            } else if isEditingLocalSlot {
                 localSlotRoleRow
             } else {
                 onlineSlotRoleRow
@@ -463,28 +488,28 @@ struct SettingsView: View {
         let selected = editingIndex == index
         let isPrimary = settings.primaryIndex == index
         let isLocal = index == SettingsStore.localProfileIndex
+        let isJev = index == Self.jevServiceIndex
         return Button {
             editingIndex = index
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(settings.isSlotAvailable(index)
+                    .fill((isJev ? !settings.jevAPIKey.isEmpty : settings.isSlotAvailable(index))
                           ? AnyShapeStyle(Theme.success)
                           : AnyShapeStyle(Color.secondary.opacity(0.35)))
                     .frame(width: 5, height: 5)
-                Text(isLocal ? "本地模型" : (isPrimary ? "主用" : "备用"))
+                Text(isJev ? "Jev" : isLocal ? "本地模型" : (isPrimary ? "主用" : "备用"))
                     .font(Theme.footnote2Semibold)
                     .fixedSize()
-                // No `.fixedSize()` here (unlike the role label): the three tabs now
-                // share the row equally, so the host name is exactly the part that
-                // should give way and truncate on a long one, not force the capsule
-                // wider than its equal share.
-                Text(settings.label(for: index))
-                    .font(Theme.caption)
-                    .opacity(0.7)
-                    .lineLimit(1)
+                if selected {
+                    Text(isJev ? L("文风判断") : settings.label(for: index))
+                        .font(Theme.caption)
+                        .opacity(0.7)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: selected ? .infinity : nil)
             .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
@@ -966,16 +991,115 @@ struct SettingsView: View {
                             RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
                                 .strokeBorder(Theme.strokeHairline, lineWidth: 1)
                         )
-                    Text("对所有翻译生效，例如统一术语、保留格式")
-                        .font(Theme.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 // See advancedSection: the gap belongs above the fold, not inside it.
                 .padding(.top, 8)
             }
         }
         .motion(.layout, value: showExtraInstruction)
+    }
+
+    private var jevSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            labeledField(
+                "API Key",
+                focused: focusedField == .jevAPIKey
+            ) {
+                Image(systemName: "lock.fill")
+                    .font(Theme.caption2)
+                    .foregroundStyle(.secondary)
+                    .help(L("Key 保存在本机钥匙串；选择自动文风时将待译文本发送给 Jev"))
+            } content: {
+                HStack(spacing: 6) {
+                    Group {
+                        if showJevKey {
+                            TextField("Jev API Key", text: $settings.jevAPIKey)
+                        } else {
+                            SecureField("Jev API Key", text: $settings.jevAPIKey)
+                        }
+                    }
+                    .textFieldStyle(.plain)
+                    .font(Theme.bodyMonospaced)
+                    .focused($focusedField, equals: .jevAPIKey)
+
+                    if settings.keychainSaved {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    Button {
+                        showJevKey.toggle()
+                    } label: {
+                        Image(systemName: showJevKey ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.plain)
+                    .help(showJevKey ? "隐藏" : "显示")
+                }
+            }
+            if let error = settings.keychainError {
+                Text(error)
+                    .font(Theme.caption)
+                    .foregroundStyle(.orange)
+            }
+            HStack(spacing: 10) {
+                Button {
+                    testJevConnection()
+                } label: {
+                    HStack(spacing: 5) {
+                        if jevTestState == .testing {
+                            ProgressView().controlSize(.small).scaleEffect(0.6)
+                        } else {
+                            Image(systemName: "bolt.fill")
+                        }
+                        Text("测试连接")
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+                .controlSize(.large)
+                .disabled(jevTestState == .testing || settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .buttonStyle(.bordered)
+
+                Spacer(minLength: 8)
+                switch jevTestState {
+                case .idle:
+                    EmptyView()
+                case .testing:
+                    Text("连接中…").foregroundStyle(.tertiary)
+                case .success(let milliseconds):
+                    Label(String(format: L("连接正常 · %d ms"), milliseconds), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .failure(let message):
+                    Label(message, systemImage: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(Theme.footnote)
+        }
+    }
+
+    private func cancelJevTest() {
+        jevTestTask?.cancel()
+        jevTestTask = nil
+        jevTestGeneration += 1
+        jevTestState = .idle
+    }
+
+    private func testJevConnection() {
+        cancelJevTest()
+        let generation = jevTestGeneration
+        let key = settings.jevAPIKey
+        jevTestState = .testing
+        jevTestTask = Task { @MainActor in
+            do {
+                let milliseconds = try await JevToneService.testConnection(key: key)
+                guard !Task.isCancelled, generation == jevTestGeneration else { return }
+                jevTestState = .success(milliseconds)
+            } catch {
+                guard !Task.isCancelled, generation == jevTestGeneration else { return }
+                jevTestState = .failure(error.localizedDescription)
+            }
+            jevTestTask = nil
+        }
     }
 
     // MARK: - Fields

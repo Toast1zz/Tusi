@@ -190,16 +190,12 @@ struct LanguagePill: View {
     }
 }
 
-/// Inline three-way tone picker. Deliberately a segmented control rather than a menu:
-/// a popup would make the panel resign key and trip the click-outside auto-hide.
-///
-/// The selection indicator is a single pill that *slides* between options via
-/// matchedGeometryEffect, rather than fading in and out under each one. On macOS 26+ it's
-/// Liquid Glass in Clear mode — this control doesn't need to grab attention, so a quiet
-/// refractive pill suits it better than a solid accent fill; older systems get a soft
-/// translucent capsule instead.
+/// Inline tone picker. A menu would make the nonactivating panel resign key.
+/// The selected glass pill moves between fixed-width labels.
 struct ToneSelector: View {
     @Binding var tone: Tone
+    var resolvedTone: Tone? = nil
+    var decisionNote: String? = nil
     @Namespace private var pill
 
     var body: some View {
@@ -212,10 +208,6 @@ struct ToneSelector: View {
                     Text(option.label)
                         .font(selected ? Theme.toneLabel : Theme.caption2Medium)
                         .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        // Without this, these labels could get silently truncated (seen
-                        // with the longer English tone names) instead of reporting their
-                        // real width — .fixedSize() forces Text to always claim what it
-                        // actually needs.
                         .fixedSize()
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3.5)
@@ -227,20 +219,17 @@ struct ToneSelector: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .help(option.help)
+                .help(option == .automatic
+                      ? (decisionNote ?? resolvedTone.map { String(format: L("Jev 选择：%@"), $0.label) } ?? option.help)
+                      : option.help)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)
         .background(Capsule().fill(Theme.fillQuiet))
-        // Declared here rather than wrapped around the mutation in the button: the pill
-        // has to slide whoever changed the tone, including the settings page and the
-        // keyboard, and a `withAnimation` at one call site only covers that call site.
         .motion(.selection, value: tone)
     }
 
-    /// The sliding highlight. Clear Liquid Glass where the OS supports it, a soft
-    /// translucent capsule everywhere else.
     private struct SelectionPill: View {
         var body: some View {
             if #available(macOS 26.0, *) {

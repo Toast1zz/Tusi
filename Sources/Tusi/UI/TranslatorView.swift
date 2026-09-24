@@ -697,6 +697,13 @@ struct TranslatorView: View {
                 )
                 .layoutPriority(-1)
             }
+            if settings.tone == .automatic, let resolved = engine.resolvedTone {
+                Text(String(format: L("自动·%@"), resolved.label))
+                    .font(Theme.meta)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
+            }
 
             if engine.escalating {
                 // The result stays readable and copyable while this runs: it is still
@@ -1088,7 +1095,8 @@ struct TranslatorView: View {
                 }
             )
 
-            ToneSelector(tone: $settings.tone)
+            ToneSelector(tone: $settings.tone, resolvedTone: engine.resolvedTone,
+                         decisionNote: engine.toneDecisionNote)
 
             Spacer(minLength: 4)
 

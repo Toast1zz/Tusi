@@ -581,6 +581,21 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertEqual(credentials.writes, 1)
     }
 
+    func testJevKeySharesCredentialItemWithoutChangingTranslationKeys() {
+        let credentials = Credentials()
+        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        settings.jevAPIKey = "jev-key"
+        settings.flushPendingSaves()
+        XCTAssertEqual(credentials.keys[SettingsStore.jevKeyIndex], "jev-key")
+        XCTAssertEqual(credentials.keys[0], "old-primary")
+        XCTAssertEqual(credentials.keys[1], "old-backup")
+
+        let reloaded = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        XCTAssertEqual(reloaded.jevAPIKey, "jev-key")
+        reloaded.flushPendingSaves()
+        XCTAssertEqual(credentials.writes, 1, "Loading Jev key must not rewrite the Keychain")
+    }
+
     func testSaveRetryDoesNotClearFailureWithoutSavingAndHonorsDeletion() {
         let credentials = Credentials()
         let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)

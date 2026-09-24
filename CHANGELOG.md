@@ -2,6 +2,18 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-09-24
+
+### Added
+
+- Add an optional Auto tone that asks Jev to choose Casual, Standard, or Formal when a translation starts. Unclear decisions, missing credentials, and request failures use Standard. Retries and higher-tier translations keep the same chosen tone.
+- Add a separate Jev service tab with Keychain-backed API key storage and a connection test that sends only a fixed sample sentence.
+
+### Changed
+
+- Keep the translator's sliding tone control while showing Auto's chosen tone beside completed results.
+- Let the selected service tab expand to show its provider while the other tabs show only their names. Remove redundant descriptions from the Jev and additional-instructions settings.
+
 ## [1.16.1] - 2026-09-23
 
 ### Changed
