@@ -15,8 +15,26 @@ struct SettingsDesiredHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+/// The service detail page's natural height; its own key for the same reason as
+/// `ShortcutsHeightKey`.
+struct ServiceDetailHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Settings is two levels deep, like System Settings: an overview of grouped rows, and
+/// a page per service pushed from its row. Each level is its own instance of this view,
+/// so a push animates between two pages instead of swapping content in place.
 struct SettingsView: View {
+    enum Mode { case overview, service }
+
     private static let jevServiceIndex = SettingsStore.localProfileIndex + 1
+    let mode: Mode
+
+    init(mode: Mode = .overview) {
+        self.mode = mode
+    }
+
     @ObservedObject private var localModels = LocalModelManager.shared
     @EnvironmentObject private var engine: TranslationEngine
     @EnvironmentObject private var settings: SettingsStore
@@ -31,8 +49,6 @@ struct SettingsView: View {
     @State private var jevTestState: JevTestState = .idle
     @State private var jevTestTask: Task<Void, Never>?
     @State private var jevTestGeneration = 0
-    @State private var shortcutsRowHovering = false
-    @State private var extraInstructionExpandedOverride: Bool?
     @State private var headerHeight: CGFloat = 0
     @State private var bodyHeight: CGFloat = 0
 
@@ -99,203 +115,27 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(spacing: 12) {
-                header
-                categoryPicker
-                SoftDivider()
+                if mode == .overview {
+                    header
+                    categoryPicker
+                } else {
+                    serviceHeader
+                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: SettingsHeaderHeightKey.self, value: proxy.size.height)
             })
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 12) {
-
-                    if panelState.settingsSection == .services {
-                        slotTabs
-                        if isEditingJev {
-                            jevSection
-                        } else {
-                        VStack(alignment: .leading, spacing: 12) {
-                            if isEditingLocalSlot {
-                                localModelPicker
-                            } else {
-                            labeledField("接口地址", focused: focusedField == .baseURL) {
-                                TextField(
-                                    "https://api.example.com/v1", text: $settings.profiles[safeEditingIndex].baseURL
-                                )
-                                .textFieldStyle(.plain)
-                                .font(Theme.bodyMonospaced)
-                                .focused($focusedField, equals: .baseURL)
-                                .accessibilityLabel("接口地址")
-                            }
-                            labeledField("模型", focused: focusedField == .model) {
-                                TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
-                                    .textFieldStyle(.plain)
-                                    .font(Theme.bodyMonospaced)
-                                    .focused($focusedField, equals: .model)
-                                    .accessibilityLabel("模型")
-                            }
-                            }
-                            if isCurrentProfileLocal {
-                                // Local (loopback) inference servers don't take an API key — Ollama,
-                                // LM Studio, llama.cpp-server. Showing the field here would push users
-                                // to type a fake key; a quiet hint is more honest.
-                                HStack(alignment: .top, spacing: 5) {
-                                    Image(systemName: "desktopcomputer")
-                                        .font(Theme.caption2)
-                                        .padding(.top, 1)
-                                    Text("本地服务无需 API Key")
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .font(Theme.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                                        .fill(Theme.fillQuiet)
-                                )
-                            } else {
-                                labeledField("API Key", focused: focusedField == .apiKey) {
-                                    Image(systemName: "lock.fill")
-                                        .font(Theme.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
-                                        .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
-                                } content: {
-                                    HStack(spacing: 6) {
-                                        Group {
-                                            if showKey {
-                                                TextField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
-                                            } else {
-                                                SecureField("sk-…", text: $settings.profiles[safeEditingIndex].apiKey)
-                                            }
-                                        }
-                                        .textFieldStyle(.plain)
-                                        .font(Theme.bodyMonospaced)
-                                        .focused($focusedField, equals: .apiKey)
-
-                                        if settings.keychainSaved {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .font(Theme.footnote)
-                                                .foregroundStyle(.green)
-                                                .transition(.opacity)
-                                        }
-
-                                        Button {
-                                            showKey.toggle()
-                                        } label: {
-                                            Image(systemName: showKey ? "eye.slash" : "eye")
-                                                .font(Theme.footnote)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help(showKey ? "隐藏" : "显示")
-                                        .accessibilityLabel(showKey ? "隐藏" : "显示")
-                                    }
-                                    // `.state`, not `.micro`: this is a confirmation appearing, not
-                                    // hover feedback. It used to scale up from 0.7 over 0.12s, which
-                                    // is not an element arriving — it is a flash.
-                                    .motion(.state, value: settings.keychainSaved)
-                                    .accessibilityLabel("API Key")
-                                }
-                            }
-
-                            if let error = settings.keychainError {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(error)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    // Only for failures a second attempt can actually clear (locked
-                                    // device, denied prompt). A corrupt item would fail identically,
-                                    // so offering retry there would just teach the button to lie.
-                                    if settings.keychainErrorIsRetryable {
-                                        Button("重试") { settings.retryLoadKeys() }
-                                            .buttonStyle(.plain)
-                                            .font(Theme.bodySmallSemibold)
-                                            .foregroundStyle(Theme.accent)
-                                    }
-                                }
-                                .font(Theme.caption)
-                                .foregroundStyle(.orange)
-                            }
-                        }
-
-                        testRow
-                        advancedSection
-                        }
+                VStack(alignment: .leading, spacing: 18) {
+                    if mode == .service {
+                        serviceDetail
+                    } else if panelState.settingsSection == .services {
+                        servicesOverview
                     } else if panelState.settingsSection == .translation {
-                        routingSection
-                        SoftDivider()
-                        extraInstructionSection
-                        SoftDivider()
-                        VStack(alignment: .leading, spacing: 10) {
-                            settingToggle("翻译完成后自动复制", isOn: $settings.autoCopy)
-                            settingToggle("长按回车重新翻译", isOn: $settings.holdReturnToRetranslate)
-                                .help(L("关闭后隐藏长按提示，并恢复普通回车操作"))
-                            soundToggleRow
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(Theme.body)
+                        translationOverview
                     } else {
-                        shortcutsNavRow
-
-                        SoftDivider()
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            settingToggle("保存翻译历史", isOn: $settings.saveHistoryEnabled)
-                            settingToggle("保留输入草稿", isOn: $settings.saveDraftEnabled)
-                            Text("关闭保存会删除对应的本机记录")
-                                .font(Theme.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Button(L("清除输入草稿")) { engine.clearDraft() }
-                                .buttonStyle(.plain)
-                                .disabled(engine.input.isEmpty)
-                            if let error = engine.persistenceError {
-                                Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .font(Theme.body)
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-
-                        // Bounded on both sides. Without the second divider the rows below —
-                        // auto-copy, launch at login, updates — read as part of "翻译路线", which
-                        // is exactly the kind of false grouping this page is being cleaned up to
-                        // stop making.
-                        SoftDivider()
-
-                        // One VStack, one spacing value, for every row on the page from here down
-                        // (including the multi-line race unit below) — three separately-spaced
-                        // blocks used to rely on the outer page spacing (14) between them and an
-                        // inner spacing (10) within them, which read as uneven rhythm rather than
-                        // a deliberate grouping.
-                        VStack(alignment: .leading, spacing: 10) {
-                            settingToggle("登录时启动", isOn: $settings.launchAtLogin)
-                            if let error = settings.launchAtLoginError {
-                                Text(error)
-                                    .font(Theme.caption)
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            updateSettingRow
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(Theme.body)
-
-                        if panelState.globalHotkeyFailed {
-                            HStack(spacing: 5) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(Theme.caption2)
-                                Text("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出")
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .font(Theme.caption)
-                            .foregroundStyle(.orange)
-                        }
+                        generalOverview
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,7 +143,7 @@ struct SettingsView: View {
                 .background(GeometryReader { proxy in
                     Color.clear.preference(key: SettingsBodyHeightKey.self, value: proxy.size.height)
                 })
-                .id(panelState.settingsSection)
+                .id(mode == .overview ? panelState.settingsSection.rawValue : "service-\(editingIndex)")
             }
             .scrollIndicators(.never)
             .frame(maxHeight: .infinity)
@@ -314,7 +154,9 @@ struct SettingsView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
         .onPreferenceChange(SettingsBodyHeightKey.self) { if $0 > 0 { bodyHeight = $0 } }
-        .preference(key: SettingsDesiredHeightKey.self, value: desiredHeight)
+        // Each page reports on its own key, so the page leaving during a push can never
+        // lend its height to the one arriving (see ShortcutsHeightKey).
+        .modifier(DesiredHeightReport(mode: mode, height: desiredHeight))
         .task {
             if !settings.isPreview { await localModels.refresh(settings: settings) }
         }
@@ -351,6 +193,338 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Overview pages
+
+    /// Services as a list — which ones exist, what each is doing — with the details of
+    /// any one a click away. The list states the whole route at a glance, which a row of
+    /// tabs showing one service at a time could not.
+    private var servicesOverview: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup(title: L("翻译服务")) {
+                ForEach(Array(serviceOrder.enumerated()), id: \.element) { position, index in
+                    if position > 0 { GroupDivider(inset: Self.serviceTextInset) }
+                    serviceRow(index)
+                }
+            }
+            SettingsGroup(title: L("文风判断")) {
+                serviceRow(Self.jevServiceIndex)
+            }
+            if hasRoutingChoices {
+                SettingsGroup(title: L("翻译路线")) {
+                    routingSection
+                        .padding(12)
+                }
+            }
+        }
+    }
+
+    /// The online services in the order the route tries them, then the local model.
+    private var serviceOrder: [Int] {
+        let primary = settings.primaryIndex == 1 ? 1 : 0
+        return [primary, 1 - primary, SettingsStore.localProfileIndex]
+    }
+
+    private var translationOverview: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup(title: L("附加要求")) {
+                InstructionEditor(text: $settings.extraInstruction)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 6)
+            }
+            SettingsGroup(title: L("翻译完成后")) {
+                toggleRow("自动复制结果", isOn: $settings.autoCopy)
+                GroupDivider()
+                toggleRow("长按回车重新翻译", isOn: $settings.holdReturnToRetranslate)
+                    .help(L("关闭后隐藏长按提示，并恢复普通回车操作"))
+                GroupDivider()
+                soundToggleRow
+                    .settingsRow()
+            }
+        }
+    }
+
+    private var generalOverview: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup {
+                shortcutsNavRow
+            }
+            SettingsGroup(title: L("隐私与数据")) {
+                toggleRow("保存翻译历史", isOn: $settings.saveHistoryEnabled)
+                GroupDivider()
+                toggleRow("保留输入草稿", isOn: $settings.saveDraftEnabled)
+                GroupDivider()
+                HStack {
+                    Text("当前草稿")
+                    Spacer(minLength: 8)
+                    Button(L("清除")) { engine.clearDraft() }
+                        .controlSize(.small)
+                        .disabled(engine.input.isEmpty)
+                }
+                .font(Theme.body)
+                .settingsRow()
+            }
+            if let error = engine.persistenceError {
+                footnote(error, warning: true)
+            }
+            SettingsGroup(title: L("启动与更新")) {
+                toggleRow("登录时启动", isOn: $settings.launchAtLogin)
+                GroupDivider()
+                updateSettingRow
+                    .settingsRow()
+            }
+            if let error = settings.launchAtLoginError {
+                footnote(error, warning: true)
+            }
+            if panelState.globalHotkeyFailed {
+                footnote(L("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出"), warning: true)
+            }
+        }
+    }
+
+    private func footnote(_ text: String, warning: Bool = false) -> some View {
+        Text(text)
+            .font(Theme.caption)
+            .foregroundStyle(warning ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+    }
+
+    // MARK: - Service rows
+
+    /// Where a service row's text starts: the row inset, the status dot, and its gap.
+    private static let serviceTextInset: CGFloat = 12 + 6 + 10
+
+    @State private var hoveredService: Int?
+
+    private func serviceRow(_ index: Int) -> some View {
+        let summary = serviceSummary(index)
+        return Button {
+            editingIndex = index
+            panelState.showServiceDetail = true
+        } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(summary.ready ? AnyShapeStyle(Theme.success) : AnyShapeStyle(Color.secondary.opacity(0.35)))
+                    .frame(width: 6, height: 6)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(summary.title)
+                        if let name = summary.name {
+                            Text(name).foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(Theme.body)
+                    .lineLimit(1)
+                    Text(summary.detail)
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(Theme.captionSemibold)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hoveredService == index ? Theme.fillQuiet : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { hoveredService = index } else if hoveredService == index { hoveredService = nil }
+        }
+        .motion(.micro, value: hoveredService == index)
+        .accessibilityLabel([summary.title, summary.name, summary.detail].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    private struct ServiceSummary {
+        let title: String
+        let name: String?
+        let detail: String
+        let ready: Bool
+    }
+
+    /// One line per service that says what it is doing in the route right now.
+    private func serviceSummary(_ index: Int) -> ServiceSummary {
+        if index == Self.jevServiceIndex {
+            let ready = !settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return ServiceSummary(title: "Jev", name: nil,
+                                  detail: ready ? L("已配置") : L("未配置"),
+                                  ready: ready)
+        }
+        if index == SettingsStore.localProfileIndex {
+            let model = settings.profiles[index].model.trimmingCharacters(in: .whitespaces)
+            let detail = settings.localAvailable ? model
+                : (settings.localModelEnabled ? L("未就绪") : L("已关闭"))
+            return ServiceSummary(title: L("本地模型"), name: nil, detail: detail,
+                                  ready: settings.localAvailable)
+        }
+        let profile = settings.profiles[index]
+        let primary = settings.primaryIndex == index
+        let concurrent = settings.onlineStrategy == .concurrent && settings.concurrentAvailable
+        let title = concurrent ? L("在线服务") : (primary ? L("主用") : L("备用"))
+        guard profile.isUsable else {
+            return ServiceSummary(title: title, name: nil, detail: L("未配置"), ready: false)
+        }
+        return ServiceSummary(title: title, name: settings.label(for: index),
+                              detail: profile.model.trimmingCharacters(in: .whitespaces),
+                              ready: settings.isSlotAvailable(index))
+    }
+
+    /// Whether the route has anything to choose.
+    private var hasRoutingChoices: Bool {
+        settings.startChoiceAvailable || (settings.profiles[0].isUsable && settings.profiles[1].isUsable)
+    }
+
+    // MARK: - Service detail page
+
+    private var serviceTitle: String {
+        if isEditingJev { return L("Jev 文风判断") }
+        if isEditingLocalSlot { return L("本地模型") }
+        if settings.onlineStrategy == .concurrent && settings.concurrentAvailable { return L("在线服务") }
+        return settings.primaryIndex == editingIndex ? L("主用服务") : L("备用服务")
+    }
+
+    private var serviceHeader: some View {
+        HStack(spacing: 8) {
+            backButton { panelState.showServiceDetail = false }
+            Text(serviceTitle)
+                .font(Theme.title)
+            Spacer()
+            serviceRoleAction
+        }
+    }
+
+    @ViewBuilder
+    private var serviceDetail: some View {
+        if isEditingJev {
+            jevSection
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                serviceFields
+                testRow
+                advancedSection
+            }
+        }
+    }
+
+    private var serviceFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if isEditingLocalSlot {
+                localModelPicker
+            } else {
+            labeledField("接口地址", focused: focusedField == .baseURL) {
+                TextField(
+                    "接口地址", text: $settings.profiles[safeEditingIndex].baseURL,
+                    prompt: Self.placeholder("https://api.example.com/v1")
+                )
+                .textFieldStyle(.plain)
+                .font(Theme.bodyMonospaced)
+                .focused($focusedField, equals: .baseURL)
+                .accessibilityLabel("接口地址")
+            }
+            labeledField("模型", focused: focusedField == .model) {
+                TextField("模型", text: $settings.profiles[safeEditingIndex].model, prompt: Self.placeholder("model-name"))
+                    .textFieldStyle(.plain)
+                    .font(Theme.bodyMonospaced)
+                    .focused($focusedField, equals: .model)
+                    .accessibilityLabel("模型")
+            }
+            }
+            // Local (loopback) servers take no key, so they get no key field.
+            if !isCurrentProfileLocal {
+                labeledField("API Key", focused: focusedField == .apiKey) {
+                    Image(systemName: "lock.fill")
+                        .font(Theme.caption2)
+                        .foregroundStyle(.secondary)
+                        .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
+                        .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
+                } content: {
+                    HStack(spacing: 6) {
+                        Group {
+                            if showKey {
+                                TextField("API Key", text: $settings.profiles[safeEditingIndex].apiKey, prompt: Self.placeholder("sk-…"))
+                            } else {
+                                SecureField("API Key", text: $settings.profiles[safeEditingIndex].apiKey, prompt: Self.placeholder("sk-…"))
+                            }
+                        }
+                        .textFieldStyle(.plain)
+                        .font(Theme.bodyMonospaced)
+                        .focused($focusedField, equals: .apiKey)
+
+                        if settings.keychainSaved {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(Theme.footnote)
+                                .foregroundStyle(.green)
+                                .transition(.opacity)
+                        }
+
+                        Button {
+                            showKey.toggle()
+                        } label: {
+                            Image(systemName: showKey ? "eye.slash" : "eye")
+                                .font(Theme.footnote)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(showKey ? "隐藏" : "显示")
+                        .accessibilityLabel(showKey ? "隐藏" : "显示")
+                    }
+                    // `.state`, not `.micro`: this is a confirmation appearing, not
+                    // hover feedback. It used to scale up from 0.7 over 0.12s, which
+                    // is not an element arriving — it is a flash.
+                    .motion(.state, value: settings.keychainSaved)
+                    .accessibilityLabel("API Key")
+                }
+            }
+
+            if let error = settings.keychainError {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(error)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Only for failures a second attempt can actually clear (locked
+                    // device, denied prompt). A corrupt item would fail identically,
+                    // so offering retry there would just teach the button to lie.
+                    if settings.keychainErrorIsRetryable {
+                        Button("重试") { settings.retryLoadKeys() }
+                            .buttonStyle(.plain)
+                            .font(Theme.bodySmallSemibold)
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+                .font(Theme.caption)
+                .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func backButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(Theme.bodySmallSemibold)
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Theme.fillQuiet))
+        }
+        .buttonStyle(.plain)
+        .help(settings.commandLabel(L("返回"), action: .close))
+    }
+
+    /// Label left, switch right, as one native control.
+    private func toggleRow(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Text(label)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .font(Theme.body)
+        .settingsRow()
+    }
+
     // MARK: - Header
 
     private var localModelPicker: some View {
@@ -376,7 +550,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .toggleStyle(.switch)
-            .controlSize(.small)
+            .controlSize(.mini)
             .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
             .padding(12)
             .background(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous).fill(Theme.fillQuiet))
@@ -406,11 +580,8 @@ struct SettingsView: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity, alignment: .leading)
             .disabled(localModels.isSwitching || engine.isTranslating || engine.escalating || testState == .testing)
-            Text("关闭后保留模型文件，需要时可再次开启")
-                .font(Theme.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if let error = localModels.error {
-                Text(error).font(Theme.caption).foregroundStyle(.red)
+                Text(error).font(Theme.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if localModels.state == .failed || localModels.error != nil {
@@ -435,17 +606,7 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Button {
-                panelState.showSettings = false
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(Theme.bodySmallSemibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Theme.fillQuiet))
-            }
-            .buttonStyle(.plain)
-            .help(settings.commandLabel(L("返回"), action: .close))
+            backButton { panelState.showSettings = false }
 
             Text("设置")
                 .font(Theme.title)
@@ -454,7 +615,7 @@ struct SettingsView: View {
 
             Text("Tusi v\(appVersion)")
                 .font(Theme.caption)
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -463,149 +624,31 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    // MARK: - Slot tabs
-
-    private var slotTabs: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                ForEach(0...Self.jevServiceIndex, id: \.self) { index in
-                    slotTab(index)
-                }
-            }
-            .motion(.layout, value: editingIndex)
-
-            if isEditingJev {
-                EmptyView()
-            } else if isEditingLocalSlot {
-                localSlotRoleRow
-            } else {
-                onlineSlotRoleRow
-            }
-        }
-    }
-
-    private func slotTab(_ index: Int) -> some View {
-        let selected = editingIndex == index
-        let isPrimary = settings.primaryIndex == index
-        let isLocal = index == SettingsStore.localProfileIndex
-        let isJev = index == Self.jevServiceIndex
-        return Button {
-            editingIndex = index
-        } label: {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill((isJev ? !settings.jevAPIKey.isEmpty : settings.isSlotAvailable(index))
-                          ? AnyShapeStyle(Theme.success)
-                          : AnyShapeStyle(Color.secondary.opacity(0.35)))
-                    .frame(width: 5, height: 5)
-                Text(isJev ? "Jev" : isLocal ? "本地模型" : (isPrimary ? "主用" : "备用"))
-                    .font(Theme.footnote2Semibold)
-                    .fixedSize()
-                if selected {
-                    Text(isJev ? L("文风判断") : settings.label(for: index))
-                        .font(Theme.caption)
-                        .opacity(0.7)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-            .frame(maxWidth: selected ? .infinity : nil)
-            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .background(
-                Capsule().fill(
-                    selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillQuiet)
-                )
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
     // MARK: - Slot roles
 
-    /// The local slot's role line. Same "action, or current state plus the way out"
-    /// pattern as the primary/backup line below — the local slot is an ordinary slot
-    /// with an ordinary role now, not a standing mode that bypassed the rest of the app.
+    /// The one role change a service page offers, as a link in its header: make this
+    /// the primary, or choose whether the local model or the online services go first.
+    /// Nothing is shown when there is nothing to change.
     @ViewBuilder
-    private var localSlotRoleRow: some View {
-        HStack(spacing: 6) {
-            if !settings.localAvailable {
-                Text(settings.onlineAvailable
-                     ? L("当前翻译使用在线服务")
-                     : L("本地模型未启用或尚未就绪"))
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if settings.routeStart == .local {
-                Label("翻译从这里开始", systemImage: "checkmark.seal.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(.tertiary)
-
-                if settings.onlineAvailable {
-                    Text("·")
-                        .font(Theme.caption)
-                        .foregroundStyle(.quaternary)
-                    Button {
-                        settings.routeStart = .online
-                    } label: {
-                        Text("改为先用在线")
-                            .font(Theme.caption2Medium)
-                            .foregroundStyle(Theme.accent)
-                    }
-                    .buttonStyle(.plain)
+    private var serviceRoleAction: some View {
+        if isEditingLocalSlot {
+            if settings.startChoiceAvailable {
+                roleActionButton(settings.routeStart == .local ? L("改为先用在线") : L("设为起点")) {
+                    settings.routeStart = settings.routeStart == .local ? .online : .local
                 }
-            } else {
-                Button {
-                    settings.routeStart = .local
-                } label: {
-                    Label("设为起点", systemImage: "arrow.up.circle")
-                        .font(Theme.caption2Medium)
-                        .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain)
-
-                Text(settings.commandLabel(L("换在线重译"), action: .translate))
-                    .font(Theme.caption)
-                    .foregroundStyle(.quaternary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+        } else if !isEditingJev,
+                  !(settings.onlineStrategy == .concurrent && settings.concurrentAvailable),
+                  settings.primaryIndex != editingIndex {
+            roleActionButton(L("设为主用")) { settings.primaryIndex = editingIndex }
         }
     }
 
-    /// The primary/backup role line. Under 同时请求 there is no primary — both slots are
-    /// asked at the same time — so the page says that instead of offering a choice that
-    /// would change nothing.
-    @ViewBuilder
-    private var onlineSlotRoleRow: some View {
-        HStack(spacing: 6) {
-            if settings.onlineStrategy == .concurrent && settings.concurrentAvailable {
-                Label("同时请求，两套地位相同", systemImage: "arrow.trianglehead.branch")
-                    .font(Theme.caption)
-                    .foregroundStyle(.tertiary)
-            } else if settings.primaryIndex == editingIndex {
-                Label("当前为主用，优先使用这套", systemImage: "checkmark.seal.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                Button {
-                    settings.primaryIndex = editingIndex
-                } label: {
-                    Label("设为主用", systemImage: "arrow.up.circle")
-                        .font(Theme.caption2Medium)
-                        .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain)
-
-                Text(settings.profiles[editingIndex].isUsable
-                     ? "· 现在是主用失败后的备用"
-                     : "· 填好后可作为主用失败时的备用")
-                    .font(Theme.caption)
-                    .foregroundStyle(.quaternary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+    private func roleActionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(Theme.footnoteMedium)
+            .foregroundStyle(Theme.accent)
     }
 
     // MARK: - Routing
@@ -620,10 +663,6 @@ struct SettingsView: View {
     @ViewBuilder
     private var routingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("翻译路线")
-                .font(Theme.footnoteSemibold)
-                .foregroundStyle(.secondary)
-
             if settings.startChoiceAvailable {
                 SegmentedChoice(
                     title: L("从哪开始"),
@@ -632,17 +671,8 @@ struct SettingsView: View {
                         .init(id: RouteStart.online.rawValue, label: L("在线服务")),
                     ],
                     selection: settings.routeStart.rawValue,
-                    onSelect: { settings.routeStart = RouteStart(rawValue: $0) ?? .online },
-                    caption: settings.routeStart == .local
-                        ? L("先用本地模型翻译，再按翻译键请求在线版本")
-                        : L("每次翻译都直接走在线服务")
+                    onSelect: { settings.routeStart = RouteStart(rawValue: $0) ?? .online }
                 )
-            } else if settings.onlineAvailable, !settings.localAvailable {
-                routingNote(settings.localModelEnabled
-                    ? L("本地模型就绪后，可以让它先翻，再请求在线版本")
-                    : L("本地模型已关闭，翻译将使用在线服务"))
-            } else if settings.localAvailable, !settings.onlineAvailable {
-                routingNote(L("目前只有本地模型可用，所有翻译都由它完成"))
             }
 
             if settings.profiles[0].isUsable && settings.profiles[1].isUsable {
@@ -662,10 +692,7 @@ struct SettingsView: View {
                         ),
                     ],
                     selection: effectiveOnlineStrategy.rawValue,
-                    onSelect: { settings.onlineStrategy = OnlineStrategy(rawValue: $0) ?? .failover },
-                    caption: effectiveOnlineStrategy == .failover
-                        ? L("先用主用，只有它失败时才换备用")
-                        : L("两套同时请求，采用先完成的可用结果；两套均可能计费")
+                    onSelect: { settings.onlineStrategy = OnlineStrategy(rawValue: $0) ?? .failover }
                 )
             }
         }
@@ -700,26 +727,6 @@ struct SettingsView: View {
         )
     }
 
-    private func routingNote(_ text: String) -> some View {
-        Text(text)
-            .font(Theme.caption)
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - Toggles
-
-    /// Label left, switch right — so every switch lines up in one column regardless of how
-    /// long its label is. Using a native Toggle keeps the label, switch, keyboard focus,
-    /// and VoiceOver value as one control instead of two unrelated hit targets.
-    private func settingToggle(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
-        Toggle(isOn: isOn) {
-            Text(label)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     // MARK: - Sound
 
     /// Sound plays only for the finished translation result and follows the system
@@ -741,6 +748,8 @@ struct SettingsView: View {
             Spacer(minLength: 8)
             Toggle("", isOn: $settings.soundEnabled)
                 .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
                 .accessibilityLabel("翻译成功音效")
         }
     }
@@ -768,7 +777,10 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(updateChecker.state == .checking)
-                Toggle("", isOn: $settings.autoCheckUpdates).labelsHidden()
+                Toggle("", isOn: $settings.autoCheckUpdates)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
             }
 
             if case .available(let version, let url) = updateChecker.state {
@@ -798,7 +810,7 @@ struct SettingsView: View {
     private var updateStatusInline: some View {
         switch updateChecker.state {
         case .checking:
-            ProgressView().controlSize(.small).scaleEffect(0.55)
+            ProgressView().controlSize(.mini)
         case .upToDate:
             Text("已是最新")
                 .font(Theme.caption)
@@ -820,25 +832,30 @@ struct SettingsView: View {
         Button {
             panelState.showShortcuts = true
         } label: {
-            HStack {
+            HStack(spacing: 8) {
                 Text("快捷键")
                     .font(Theme.body)
                 Spacer()
+                // The one binding people need to remember, so it is worth a glance here.
+                if let summon = settings.shortcut(.summon) {
+                    Text(summon.display)
+                        .font(Theme.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Image(systemName: "chevron.right")
                     .font(Theme.captionSemibold)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                    .fill(shortcutsRowHovering ? Theme.fillHover : Color.clear)
-            )
+            .settingsRow()
+            .background(shortcutsRowHovering ? Theme.fillQuiet : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { shortcutsRowHovering = $0 }
         .motion(.micro, value: shortcutsRowHovering)
     }
+
+    @State private var shortcutsRowHovering = false
 
     // MARK: - Advanced
 
@@ -879,12 +896,12 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if isEditingLocalSlot {
                         labeledField("接口地址", focused: focusedField == .baseURL) {
-                            TextField("http://127.0.0.1:8080/v1", text: $settings.profiles[safeEditingIndex].baseURL)
+                            TextField("接口地址", text: $settings.profiles[safeEditingIndex].baseURL, prompt: Self.placeholder("http://127.0.0.1:8080/v1"))
                                 .textFieldStyle(.plain).font(Theme.bodyMonospaced)
                                 .focused($focusedField, equals: .baseURL)
                         }
                         labeledField("模型", focused: focusedField == .model) {
-                            TextField("model-name", text: $settings.profiles[safeEditingIndex].model)
+                            TextField("模型", text: $settings.profiles[safeEditingIndex].model, prompt: Self.placeholder("model-name"))
                                 .textFieldStyle(.plain).font(Theme.bodyMonospaced)
                                 .focused($focusedField, equals: .model)
                         }
@@ -904,10 +921,6 @@ struct SettingsView: View {
                             .controlSize(.small)
                             .accessibilityLabel("输出协议")
                         }
-                        Text("自动使用已验证格式；首次不兼容时会改用纯文本并重试一次。")
-                            .font(Theme.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     // "优先顺序", not "路由": the request only carries OpenRouter's
@@ -917,15 +930,15 @@ struct SettingsView: View {
                     // promised a guarantee the request never asks for.
                     labeledField(
                         "供应商优先顺序（可选）",
-                        hint: "仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商",
                         focused: focusedField == .providerOrder
                     ) {
-                        TextField("novita, together", text: $settings.profiles[safeEditingIndex].providerOrder)
+                        TextField("供应商优先顺序（可选）", text: $settings.profiles[safeEditingIndex].providerOrder, prompt: Self.placeholder("novita, together"))
                             .textFieldStyle(.plain)
                             .font(Theme.bodyMonospaced)
                             .focused($focusedField, equals: .providerOrder)
                             .accessibilityLabel("供应商优先顺序（可选）")
                     }
+                    .help(L("仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商"))
                 }
                 // The stack's own 8pt spacing is above the chevron row, not inside the
                 // fold — a collapsed `Disclosure` is zero-height, but a sibling gap is
@@ -943,62 +956,6 @@ struct SettingsView: View {
         .motion(.layout, value: showAdvanced)
     }
 
-    /// Defaults to expanded when there's already an instruction saved (so it isn't
-    /// hidden on first sight), but a manual toggle always wins after that — same
-    /// override pattern as `showAdvanced`, just not per-slot since the instruction
-    /// applies to every profile.
-    private var showExtraInstruction: Bool {
-        get {
-            extraInstructionExpandedOverride
-                ?? !settings.extraInstruction.trimmingCharacters(in: .whitespaces).isEmpty
-        }
-        nonmutating set { extraInstructionExpandedOverride = newValue }
-    }
-
-    /// Collapsed by default for the same reason `advancedSection` is: most users never
-    /// touch it, so it shouldn't cost every user a field + explanation line by default.
-    private var extraInstructionSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                showExtraInstruction.toggle()
-            } label: {
-                HStack(spacing: 5) {
-                    Text("附加要求（可选）")
-                        .font(Theme.footnoteMedium)
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(Theme.caption2Semibold)
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(showExtraInstruction ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Disclosure(isExpanded: showExtraInstruction) {
-                // Not `labeledField`: that helper renders its own "附加要求（可选）"
-                // label row, which the collapse header above already is — reusing it
-                // here would print the same text twice.
-                VStack(alignment: .leading, spacing: 5) {
-                    InstructionEditor(text: $settings.extraInstruction)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                                .fill(Theme.fillQuiet)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                                .strokeBorder(Theme.strokeHairline, lineWidth: 1)
-                        )
-                }
-                // See advancedSection: the gap belongs above the fold, not inside it.
-                .padding(.top, 8)
-            }
-        }
-        .motion(.layout, value: showExtraInstruction)
-    }
-
     private var jevSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             labeledField(
@@ -1008,14 +965,14 @@ struct SettingsView: View {
                 Image(systemName: "lock.fill")
                     .font(Theme.caption2)
                     .foregroundStyle(.secondary)
-                    .help(L("Key 保存在本机钥匙串；选择自动文风时将待译文本发送给 Jev"))
+                    .help(L("Key 保存在本机钥匙串；选择智能文风时将待译文本发送给 Jev"))
             } content: {
                 HStack(spacing: 6) {
                     Group {
                         if showJevKey {
-                            TextField("Jev API Key", text: $settings.jevAPIKey)
+                            TextField("Jev API Key", text: $settings.jevAPIKey, prompt: Self.placeholder("Jev API Key"))
                         } else {
-                            SecureField("Jev API Key", text: $settings.jevAPIKey)
+                            SecureField("Jev API Key", text: $settings.jevAPIKey, prompt: Self.placeholder("Jev API Key"))
                         }
                     }
                     .textFieldStyle(.plain)
@@ -1030,9 +987,12 @@ struct SettingsView: View {
                         showJevKey.toggle()
                     } label: {
                         Image(systemName: showJevKey ? "eye.slash" : "eye")
+                            .font(Theme.footnote)
+                            .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
                     .help(showJevKey ? "隐藏" : "显示")
+                    .accessibilityLabel(showJevKey ? "隐藏" : "显示")
                 }
             }
             if let error = settings.keychainError {
@@ -1046,7 +1006,7 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 5) {
                         if jevTestState == .testing {
-                            ProgressView().controlSize(.small).scaleEffect(0.6)
+                            ProgressView().controlSize(.mini)
                         } else {
                             Image(systemName: "bolt.fill")
                         }
@@ -1056,7 +1016,7 @@ struct SettingsView: View {
                 }
                 .controlSize(.large)
                 .disabled(jevTestState == .testing || settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .buttonStyle(.bordered)
+                .modifier(TestConnectionButtonStyle())
 
                 Spacer(minLength: 8)
                 switch jevTestState {
@@ -1069,7 +1029,7 @@ struct SettingsView: View {
                         .foregroundStyle(.green)
                 case .failure(let message):
                     Label(message, systemImage: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1103,6 +1063,14 @@ struct SettingsView: View {
     }
 
     // MARK: - Fields
+
+    /// A field's example value. Verbatim, because a `LocalizedStringKey` is parsed as
+    /// Markdown and a bare URL in it becomes a blue link — which is how the empty base
+    /// URL field used to look like it had already been filled in. Tertiary, so an
+    /// example can never be mistaken for a value.
+    static func placeholder(_ example: String) -> Text {
+        Text(verbatim: example).foregroundStyle(.tertiary)
+    }
 
     // `label`/`hint` arrive as plain String params — literals live at each call site, one
     // level removed from these Text()s — so LocalizedStringKey(...) does the lookup that
@@ -1170,7 +1138,7 @@ struct SettingsView: View {
         } label: {
             HStack(spacing: 5) {
                 if testState == .testing {
-                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                    ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "bolt.fill")
                 }
@@ -1186,11 +1154,7 @@ struct SettingsView: View {
 
     private var testRow: some View {
         HStack(spacing: 10) {
-            if #available(macOS 26.0, *) {
-                connectionTestCommand.buttonStyle(.glass).buttonBorderShape(.capsule)
-            } else {
-                connectionTestCommand.buttonStyle(.bordered)
-            }
+            connectionTestCommand.modifier(TestConnectionButtonStyle())
 
             Spacer(minLength: 8)
 
@@ -1219,7 +1183,7 @@ struct SettingsView: View {
             case .failure(let message):
                 HStack(spacing: 4) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.orange)
                     Text(message)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
@@ -1257,5 +1221,90 @@ struct SettingsView: View {
             }
         }
         testTasks[index] = task
+    }
+}
+
+/// Both Test Connection buttons — a service slot's and Jev's — in one style: a glass
+/// capsule on macOS 26, a bordered button before it.
+private struct TestConnectionButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.buttonStyle(.glass).buttonBorderShape(.capsule)
+        } else {
+            content.buttonStyle(.bordered)
+        }
+    }
+}
+
+// MARK: - Grouped rows
+
+/// A titled group of rows on one rounded surface, as in System Settings: the title says
+/// what the rows are about, the footer says what they do, and the surface says they
+/// belong together — no divider lines between sections needed.
+private struct SettingsGroup<Content: View>: View {
+    var title: String? = nil
+    var footer: String? = nil
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let title {
+                Text(title)
+                    .font(Theme.footnoteMedium)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.fillQuiet)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusGroup, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.radiusGroup, style: .continuous)
+                    .strokeBorder(Theme.strokeHairline, lineWidth: 1)
+            )
+            if let footer {
+                Text(footer)
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+            }
+        }
+    }
+}
+
+/// The hairline between two rows of a group, inset to the rows' text.
+private struct GroupDivider: View {
+    var inset: CGFloat = 12
+
+    var body: some View {
+        Rectangle()
+            .fill(Theme.strokeHairline)
+            .frame(height: 1)
+            .padding(.leading, inset)
+    }
+}
+
+private extension View {
+    /// A group row's insets and minimum height.
+    func settingsRow() -> some View {
+        padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+    }
+}
+
+/// Reports the settings page's height on the key belonging to its level.
+private struct DesiredHeightReport: ViewModifier {
+    let mode: SettingsView.Mode
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        switch mode {
+        case .overview: content.preference(key: SettingsDesiredHeightKey.self, value: height)
+        case .service: content.preference(key: ServiceDetailHeightKey.self, value: height)
+        }
     }
 }

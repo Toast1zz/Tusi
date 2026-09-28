@@ -58,14 +58,11 @@ struct BarIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack {
-                Image(systemName: systemName)
-                    .opacity(activeSystemName != nil && isActive ? 0 : 1)
-                if let activeSystemName {
-                    Image(systemName: activeSystemName)
-                        .opacity(isActive ? 1 : 0)
-                }
-            }
+            // One symbol that is replaced, the same way the copy capsule swaps its glyph.
+            // It animates only when the toggle rides a timeline (history's `.layout`);
+            // the pin has none and swaps in place, as before.
+            Image(systemName: isActive ? (activeSystemName ?? systemName) : systemName)
+                .contentTransition(.symbolEffect(.replace))
                 .font(Theme.control)
                 .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .offset(y: glyphOffset)
@@ -205,10 +202,9 @@ struct ToneSelector: View {
                 Button {
                     tone = option
                 } label: {
-                    Text(option.label)
-                        .font(selected ? Theme.toneLabel : Theme.caption2Medium)
+                    WeightStableLabel(text: option.label, selected: selected,
+                                      selectedFont: Theme.toneLabel, restingFont: Theme.toneLabelResting)
                         .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .fixedSize()
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3.5)
                         .background {
@@ -238,6 +234,25 @@ struct ToneSelector: View {
                 Capsule().fill(Theme.fillSelection)
             }
         }
+    }
+}
+
+/// A label whose selected state is set in a heavier weight without changing its width.
+/// The selected weight is laid out (hidden) underneath, so every option is as wide as its
+/// bold form and selecting one never nudges its neighbours — measurable in Latin scripts,
+/// where semibold runs about 2% wider than medium.
+struct WeightStableLabel: View {
+    let text: String
+    let selected: Bool
+    let selectedFont: Font
+    let restingFont: Font
+
+    var body: some View {
+        ZStack {
+            Text(text).font(selectedFont).hidden()
+            Text(text).font(selected ? selectedFont : restingFont)
+        }
+        .fixedSize()
     }
 }
 
@@ -489,7 +504,7 @@ struct StreamingPlaceholder: View {
     }
 }
 
-/// Where the result on screen came from. A statement, not a control: tertiary ink,
+/// Where the result on screen came from. A statement, not a control: secondary ink,
 /// no icon, and the full model and host on hover.
 struct ResultProvenance: View {
     let label: String
@@ -500,7 +515,9 @@ struct ResultProvenance: View {
     var body: some View {
         Text(afterFailover ? String(format: L("%@ · 主用失败后接手"), label) : label)
             .font(Theme.meta)
-            .foregroundStyle(.tertiary)
+            // Secondary, not tertiary: which service answered is information the user
+            // reads, and tertiary ink measured 2:1 against the panel.
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
             .help(detail)
@@ -598,13 +615,12 @@ struct SegmentedChoice: View {
                 Button {
                     onSelect(option.id)
                 } label: {
-                    Text(option.label)
-                        .font(selected ? Theme.caption2Semibold : Theme.caption2Medium)
+                    WeightStableLabel(text: option.label, selected: selected,
+                                      selectedFont: Theme.captionSemibold, restingFont: Theme.caption2Medium)
                         .foregroundStyle(
-                            disabled ? AnyShapeStyle(.quaternary)
+                            disabled ? AnyShapeStyle(.tertiary)
                                 : selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
                         )
-                        .fixedSize()
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background {

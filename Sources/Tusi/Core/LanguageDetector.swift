@@ -132,7 +132,7 @@ enum Tone: String, CaseIterable, Identifiable, Codable {
         case .standard: return L("标准")
         case .formal: return L("正式")
         case .casual: return L("口语")
-        case .automatic: return L("自动")
+        case .automatic: return L("智能")
         }
     }
 

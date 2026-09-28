@@ -2,6 +2,20 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-09-28
+
+### Fixed
+
+- Settings' Services / Translation / General selector no longer shows a black track while the page slides in. The fade flattened the control's glass into an offscreen layer with nothing to sample; the control now fades in place.
+- Window resizing and the text area's snap to a whole line are clocked by the display instead of a sleep timer, so they no longer drop or repeat frames, and they still finish while the screen is asleep or locked.
+- A long history list fades its last visible row instead of cutting text in half, and Return-to-retranslate is not offered beside an explicit Retry.
+
+### Changed
+
+- Settings ▸ Services is a list of every service (primary, backup, local model, Jev) with its status; opening one pushes its own page. Esc backs out one level at a time.
+- Rename Auto tone to Smart. Settings pages use larger text (13pt body, 11pt minimum), and translucent surfaces and text selection strengthen under Increase Contrast.
+- History rows show a delete button on hover. Shortcut rows show Clear and Restore only under the pointer. Which service answered, and the input draft, use readable secondary ink.
+
 ## [1.17.0] - 2026-09-24
 
 ### Added

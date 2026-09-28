@@ -24,6 +24,8 @@ struct TranslatorView: View {
     /// only when the user is already there — reading an earlier part of a long
     /// result must not be yanked back to the tail on every chunk.
     @State private var isAtBottom = true
+    /// The same flag for the history list, which fades its last visible row the same way.
+    @State private var historyIsAtBottom = true
 
     // Line geometry for the 15pt content font with lineSpacing 3, measured with the
     // same AppKit machinery the input height uses — derived, not hardcoded, so a
@@ -167,6 +169,15 @@ struct TranslatorView: View {
             startPoint: .top,
             endPoint: .bottom
         )
+    }
+
+    /// A mask that fades the bottom `height` points of a scroll viewport.
+    static func bottomFade(height: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(colors: [.black, .black.opacity(0.12)], startPoint: .top, endPoint: .bottom)
+                .frame(height: height)
+        }
     }
 
     /// The `Text` grid's trailing gap, the counterpart of `editorLineGap` for the result.
@@ -541,7 +552,11 @@ struct TranslatorView: View {
     private func performFailureAction() {
         switch engine.failureKind {
         case .notConfigured, .credentials, .configuration:
+            // The services list, not a page left open last time: it shows which
+            // service is not ready.
             panelState.settingsSection = .services
+            panelState.showShortcuts = false
+            panelState.showServiceDetail = false
             panelState.showSettings = true
         case .transient, .unknown, .none:
             engine.translate()
@@ -591,6 +606,8 @@ struct TranslatorView: View {
             VStack(alignment: .leading, spacing: 8) {
                 StreamingPlaceholder()
                     .padding(.vertical, 2)
+                    // Starts where the text that replaces it will start.
+                    .padding(.leading, Self.resultNoticeInset)
                 // The copy capsule's slot, held by the stop control while the answer is
                 // on its way, so the footer keeps its shape when the text lands.
                 HStack {
@@ -605,6 +622,10 @@ struct TranslatorView: View {
                     Text(engine.output)
                         .font(Theme.contentFont)
                         .lineSpacing(3)
+                        // The input editor draws in `textColor`; a bare `Text` defaults to
+                        // `labelColor`, which is lighter. Left alone, the draft the user
+                        // just typed outweighed the translation they came for.
+                        .foregroundStyle(Color(nsColor: .textColor))
                         .textSelection(.enabled)
                         // Matches TextEditor's default 5pt NSTextView line-fragment
                         // inset (see the input placeholder's identical padding and
@@ -698,9 +719,9 @@ struct TranslatorView: View {
                 .layoutPriority(-1)
             }
             if settings.tone == .automatic, let resolved = engine.resolvedTone {
-                Text(String(format: L("自动·%@"), resolved.label))
+                Text(String(format: L("智能·%@"), resolved.label))
                     .font(Theme.meta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
@@ -763,7 +784,8 @@ struct TranslatorView: View {
 
             Spacer(minLength: 8)
 
-            if settings.holdReturnToRetranslate && engine.canRetranslate
+            // Not beside an explicit Retry: the two would offer the same thing twice.
+            if settings.holdReturnToRetranslate && engine.canRetranslate && !engine.canRetryResult
                 && !panelState.showHistory && !panelState.showLanguagePicker
                 && settings.shortcut(.translate)?.isPlainReturn == true {
                 ViewThatFits(in: .horizontal) {
@@ -916,6 +938,8 @@ struct TranslatorView: View {
                                 HistoryRecordRow(record: record) {
                                     engine.restoreHistory(record)
                                     panelState.showHistory = false
+                                } onDelete: {
+                                    engine.deleteHistory(record.id)
                                 }
                                 .contextMenu {
                                     Button(role: .destructive) { engine.deleteHistory(record.id) } label: {
@@ -927,6 +951,11 @@ struct TranslatorView: View {
                     }
                 }
                 .scrollIndicators(.never)
+                // Rows are not a whole-line grid the way the result is, so the viewport
+                // edge can fall through a row. Fade that row like the result's last line
+                // instead of showing glyphs sliced in half.
+                .mask(historyIsAtBottom ? AnyView(Rectangle()) : AnyView(Self.bottomFade(height: 28)))
+                .trackBottomEdge($historyIsAtBottom)
             }
 
             if !days.isEmpty || engine.canUndoHistoryDeletion {
@@ -1135,6 +1164,7 @@ struct TranslatorView: View {
 private struct HistoryRecordRow: View {
     let record: TranslationEngine.Record
     let action: () -> Void
+    let onDelete: () -> Void
 
     @State private var hovering = false
 
@@ -1148,40 +1178,66 @@ private struct HistoryRecordRow: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(record.input)
-                        .font(Theme.meta)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if record.isTruncated {
-                        Image(systemName: "scissors")
+        // The delete control is a sibling of the row's button, not nested inside it: a
+        // button inside a button leaves which one takes the click up to AppKit.
+        ZStack(alignment: .topTrailing) {
+            Button(action: action) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Text(record.input)
                             .font(Theme.meta)
-                            .foregroundStyle(.tertiary)
-                            .help(L("历史仅保留部分内容"))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        if record.isTruncated {
+                            Image(systemName: "scissors")
+                                .font(Theme.meta)
+                                .foregroundStyle(.tertiary)
+                                .help(L("历史仅保留部分内容"))
+                                .opacity(hovering ? 0 : 1)
+                        }
                     }
+                    // Room for the delete glyph, reserved whether or not it shows so the
+                    // source line never re-truncates under the pointer.
+                    .padding(.trailing, 16)
+                    Text(record.output)
+                        .font(Theme.contentFont)
+                        .lineSpacing(3)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Text(record.output)
-                    .font(Theme.contentFont)
-                    .lineSpacing(3)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 6)
+                // No card at rest: the text and the space around it are the row.
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
+                        .fill(hovering ? Theme.fillQuiet : Color.clear)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous))
             }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 6)
-            // No card at rest: the text and the space around it are the row.
-            .background(
-                RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous)
-                    .fill(hovering ? Theme.fillQuiet : Color.clear)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous))
+            .buttonStyle(.plain)
+            .help(tooltip)
+            .accessibilityAction(named: Text(L("删除")), onDelete)
+
+            // A context-menu command must also exist somewhere visible (HIG); this is
+            // that somewhere. It appears with the hover fill, on the source line.
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(Theme.meta)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("删除"))
+            .accessibilityHidden(true)
+            .padding(.top, 3)
+            .padding(.trailing, 3)
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
         }
-        .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .motion(.micro, value: hovering)
-        .help(tooltip)
     }
 }
 

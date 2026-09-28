@@ -19,7 +19,8 @@ extension AppDelegate {
         panelState.pinned = true
         panelController.show()
         switch preview {
-        case "settings", "update-available", "update-latest", "shortcuts", "settings-local":
+        case "settings", "update-available", "update-latest", "shortcuts", "settings-local",
+             "service", "service-local", "service-jev":
             settings.profiles = [
                 APIProfile(baseURL: "https://api.deepseek.com", apiKey: "sk-preview", model: "deepseek-chat"),
                 APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
@@ -35,9 +36,12 @@ extension AppDelegate {
             } else if preview == "shortcuts" {
                 panelState.settingsSection = .general
                 panelState.showShortcuts = true
-            } else if preview == "settings-local" {
+            } else if preview == "settings-local" || preview == "service-local" {
                 panelState.settingsProfileIndex = SettingsStore.localProfileIndex
+            } else if preview == "service-jev" {
+                panelState.settingsProfileIndex = SettingsStore.localProfileIndex + 1
             }
+            panelState.showServiceDetail = preview.hasPrefix("service")
         case "empty":
             break  // the bare panel: nothing typed, nothing translated
         case "quotetest":

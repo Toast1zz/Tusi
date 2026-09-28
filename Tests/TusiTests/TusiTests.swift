@@ -3434,12 +3434,13 @@ final class TusiTests: XCTestCase {
         let panelState = PanelState()
         let updateChecker = UpdateChecker(preview: true)
         let engine = TranslationEngine(settings: settings)
-        func requestedHeight(width: CGFloat) async throws -> CGFloat {
+        func requestedHeight(width: CGFloat, mode: SettingsView.Mode = .overview) async throws -> CGFloat {
             var requested: CGFloat = 0
-            let root = SettingsView()
+            let root = SettingsView(mode: mode)
                 .environmentObject(settings).environmentObject(panelState)
                 .environmentObject(updateChecker).environmentObject(engine)
-                .onPreferenceChange(SettingsDesiredHeightKey.self) { requested = $0 }
+                .onPreferenceChange(SettingsDesiredHeightKey.self) { if mode == .overview { requested = $0 } }
+                .onPreferenceChange(ServiceDetailHeightKey.self) { if mode == .service { requested = $0 } }
             let hosting = NSHostingView(rootView: root)
             hosting.frame = NSRect(x: 0, y: 0, width: width, height: 160)
             for _ in 0..<5 {
@@ -3450,13 +3451,17 @@ final class TusiTests: XCTestCase {
             XCTAssertGreaterThan(requested, 160)
             return requested
         }
+        // The services overview lists every service and the route choices; a service's
+        // own form is one page further in and much shorter.
         let compact = try await requestedHeight(width: 470)
-        XCTAssertLessThan(compact, 500)
+        XCTAssertLessThan(compact, 540)
+        let service = try await requestedHeight(width: 470, mode: .service)
+        XCTAssertLessThan(service, 400)
         settings.profiles[0].providerOrder = "novita"
         XCTAssertTrue(panelState.settingsAdvancedProfiles.isEmpty)
         panelState.settingsAdvancedProfiles.insert(0)
         for width in [Theme.panelMinWidth, Theme.panelMaxWidth] {
-            let expanded = try await requestedHeight(width: width)
+            let expanded = try await requestedHeight(width: width, mode: .service)
             XCTAssertLessThanOrEqual(expanded, SettingsView.maximumHeight(availableHeight: panelState.availableHeight))
         }
     }

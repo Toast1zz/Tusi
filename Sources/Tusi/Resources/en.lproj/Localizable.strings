@@ -108,14 +108,14 @@
 "标准" = "Standard";
 "正式" = "Formal";
 "口语" = "Casual";
-"自动" = "Auto";
+"智能" = "Smart";
 "发送文本给 Jev 判断文风，再开始翻译" = "Send text to Jev to choose a tone before translating";
 "未配置 Jev API Key，已使用标准文风" = "Jev API key is missing. Standard tone was used.";
 "Jev 判断失败，已使用标准文风" = "Jev could not choose a tone. Standard tone was used.";
 "文风判断" = "Tone detection";
-"Key 保存在本机钥匙串；选择自动文风时将待译文本发送给 Jev" = "The key stays in your Mac's Keychain; Auto sends source text to Jev.";
+"Key 保存在本机钥匙串；选择智能文风时将待译文本发送给 Jev" = "The key stays in your Mac's Keychain; Smart tone sends source text to Jev.";
 "Jev 选择：%@" = "Jev chose: %@";
-"自动·%@" = "Auto · %@";
+"智能·%@" = "Smart · %@";
 "Jev API Key 无效或无权限" = "Invalid Jev API key or insufficient access";
 "Jev 请求过于频繁，请稍后重试" = "Jev rate limit reached. Try again later.";
 "Jev 服务返回错误（%d）" = "Jev returned an error (%d)";
@@ -267,14 +267,30 @@
 "历史已清空" = "History cleared";
 
 "启用本地模型" = "Enable local model";
-"已关闭，不占用模型内存" = "Off · model memory released";
-"正在加载本地模型…" = "Loading local model…";
 "正在关闭本地模型…" = "Stopping local model…";
-"已就绪，可用于本地翻译" = "Ready for local translation";
-"本地模型状态异常，请重试" = "Local model unavailable. Please retry.";
 "使用的模型" = "Model selection";
 "关闭后保留模型文件，需要时可再次开启" = "Model files are kept while off. Turn on whenever needed.";
 "本地模型就绪后，可以让它先翻，再请求在线版本" = "Once ready, the local model can translate first, followed by an online version.";
 "本地模型已关闭，翻译将使用在线服务" = "Local model is off. Translations use online services.";
 "本地模型未启用或尚未就绪" = "The local model is off or not ready yet.";
 "当前翻译使用在线服务" = "Translations currently use online services.";
+
+/* MARK: - Settings groups (2026-09-25 layout) */
+"翻译服务" = "Translation services";
+"附加要求" = "Standing instruction";
+"翻译完成后" = "After translating";
+"自动复制结果" = "Copy result automatically";
+"隐私与数据" = "Privacy and data";
+"当前草稿" = "Current draft";
+"清除" = "Clear";
+"启动与更新" = "Startup and updates";
+"Jev 文风判断" = "Jev tone detection";
+"主用服务" = "Primary service";
+"备用服务" = "Backup service";
+"已配置" = "Configured";
+"未就绪" = "Not ready";
+"已关闭" = "Off";
+"正在加载…" = "Loading…";
+"正在关闭…" = "Stopping…";
+"已就绪" = "Ready";
+"出错了，请重试" = "Something went wrong. Try again.";

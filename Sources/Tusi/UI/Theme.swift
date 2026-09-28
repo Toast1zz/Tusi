@@ -29,12 +29,46 @@ enum Theme {
     // Three steps, each meaning one thing. Anything that rests on `fillQuiet` hovers to
     // `fillActive`; anything that rests on nothing hovers to `fillQuiet`.
 
+    //
+    // Each is ink at a low opacity, with a second, stronger opacity for Increase Contrast
+    // (System Settings ▸ Accessibility ▸ Display). At 5–10% these surfaces are all but
+    // gone once the system turns every native control's edges up, so they follow it.
+
     /// A resting control surface: the tone track, copy capsule, language pills.
-    static let fillQuiet = Color.primary.opacity(0.05)
+    static let fillQuiet = ink(0.05, increasedContrast: 0.12)
     /// Engaged: a selection, a hover over a resting surface, a chip that is open.
-    static let fillActive = Color.primary.opacity(0.1)
+    static let fillActive = ink(0.1, increasedContrast: 0.2)
     /// Borders and field outlines.
-    static let strokeHairline = Color.primary.opacity(0.08)
+    static let strokeHairline = ink(0.08, increasedContrast: 0.3)
+
+    /// Text selection in the panel's editors: the accent, translucent so the glass
+    /// shows through and the glyphs keep their own ink on top of it.
+    static let textSelection = NSColor(name: nil) { appearance in
+        let match = appearance.bestMatch(from: [
+            .aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+        ])
+        let alpha: CGFloat = switch match {
+        case .darkAqua: 0.4
+        case .accessibilityHighContrastAqua: 0.4
+        case .accessibilityHighContrastDarkAqua: 0.55
+        default: 0.28
+        }
+        return NSColor.controlAccentColor.withAlphaComponent(alpha)
+    }
+
+    /// Primary ink (black in light, white in dark) at `opacity`, or at
+    /// `increasedContrast` under a high-contrast appearance. A dynamic `NSColor`, so it
+    /// resolves against whatever appearance the view is drawn in, like a system color.
+    private static func ink(_ opacity: CGFloat, increasedContrast: CGFloat) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [
+                .aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+            ])
+            let dark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+            let high = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua
+            return (dark ? NSColor.white : NSColor.black).withAlphaComponent(high ? increasedContrast : opacity)
+        })
+    }
 
     /// The panel's physical surface corner. Larger than any inner control radius so
     /// nested corners stay visually distinct.
@@ -60,58 +94,63 @@ enum Theme {
 
     /// Rows and inline surfaces: history rows, notices, fields.
     static let radiusStandard: CGFloat = 8
+    /// A settings group's surface: one step rounder than the fields it may contain.
+    static let radiusGroup: CGFloat = 10
 
     // MARK: - Settings page
     //
-    // The settings page keeps the design it had before the translator was reduced to
-    // three sizes. These tokens are its own; nothing in the translator should use them.
+    // The settings page has its own, slightly denser scale. Its floor is 11pt for text
+    // and 10pt for glyphs: 9–10pt Chinese is hard to read on a non-Retina display, and
+    // the page used to spend eight sizes on what is three levels of hierarchy.
 
-    /// 9pt — the smallest metadata.
-    static let caption2 = Font.system(size: 9)
-    /// 10pt — secondary labels, hints, field captions.
-    static let caption = Font.system(size: 10)
+    /// 10pt — small glyphs beside a label (lock, chevrons, status icons). Never text.
+    static let caption2 = Font.system(size: 10)
+    /// 11pt — secondary labels, hints, field captions.
+    static let caption = Font.system(size: 11)
     /// 11pt — compact controls and labels.
     static let footnote = Font.system(size: 11)
     /// 12pt — button text, compact labels, small icons.
     static let bodySmall = Font.system(size: 12)
-    /// 12.5pt — settings rows, field content.
-    static let body = Font.system(size: 12.5)
+    /// 13pt — settings rows, field content. The macOS body size.
+    static let body = Font.system(size: 13)
     /// 14pt — page headers (Settings, Shortcuts).
     static let title = Font.system(size: 14, weight: .semibold)
-    /// 9pt semibold.
-    static let caption2Semibold = Font.system(size: 9, weight: .semibold)
-    /// 10pt semibold.
-    static let captionSemibold = Font.system(size: 10, weight: .semibold)
-    /// 10.5pt medium — secondary action labels.
-    static let caption2Medium = Font.system(size: 10.5, weight: .medium)
+    /// 10pt semibold — chevron glyphs.
+    static let caption2Semibold = Font.system(size: 10, weight: .semibold)
+    /// 11pt semibold — the selected option in a segmented choice.
+    static let captionSemibold = Font.system(size: 11, weight: .semibold)
+    /// 11pt medium — secondary action labels, unselected segmented options.
+    static let caption2Medium = Font.system(size: 11, weight: .medium)
     /// 11pt medium — compact control labels.
     static let footnoteMedium = Font.system(size: 11, weight: .medium)
     /// 11pt semibold — section headers.
     static let footnoteSemibold = Font.system(size: 11, weight: .semibold)
-    /// 11.5pt medium — update status, recording state.
-    static let footnote2Medium = Font.system(size: 11.5, weight: .medium)
-    /// 11.5pt semibold — slot tab label.
-    static let footnote2Semibold = Font.system(size: 11.5, weight: .semibold)
+    /// 12pt medium — update status, recording state.
+    static let footnote2Medium = Font.system(size: 12, weight: .medium)
+    /// 12pt semibold — slot tab label.
+    static let footnote2Semibold = Font.system(size: 12, weight: .semibold)
     /// 12pt semibold — primary button text.
     static let bodySmallSemibold = Font.system(size: 12, weight: .semibold)
     /// 10.5pt bold — the copy button's icon.
     static let caption2Bold = Font.system(size: 10.5, weight: .bold)
     /// 10pt medium — the copy button's shortcut hint.
     static let captionMedium = Font.system(size: 10, weight: .medium)
-    /// 10.5pt semibold — the tone selector's selected label.
+    /// 10.5pt — the tone selector's labels, selected and resting. The selector keeps the
+    /// metrics it has had since 1.14.15; it does not follow the settings scale.
     static let toneLabel = Font.system(size: 10.5, weight: .semibold)
-    /// 12.5pt monospaced — code-like fields (base URL, model, key).
-    static let bodyMonospaced = Font.system(size: 12.5, design: .monospaced)
+    static let toneLabelResting = Font.system(size: 10.5, weight: .medium)
+    /// 13pt monospaced — code-like fields (base URL, model, key).
+    static let bodyMonospaced = Font.system(size: 13, design: .monospaced)
     /// 11.5pt medium, rounded — the shortcut combo pill in its resting state.
     static let shortcutCombo = Font.system(size: 11.5, weight: .medium, design: .rounded)
     /// 11.5pt medium, default — the same pill while a shortcut is being recorded.
     static let shortcutComboRecording = Font.system(size: 11.5, weight: .medium)
     /// The faintest resting surface.
-    static let fillFaint = Color.primary.opacity(0.025)
+    static let fillFaint = ink(0.025, increasedContrast: 0.08)
     /// Hover state for rows and pills.
-    static let fillHover = Color.primary.opacity(0.07)
+    static let fillHover = ink(0.07, increasedContrast: 0.16)
     /// The tone and language choice pills' Liquid Glass fallback on macOS < 26.
-    static let fillSelection = Color.primary.opacity(0.14)
+    static let fillSelection = ink(0.14, increasedContrast: 0.26)
     /// Small inline elements: badges, the shortcuts row hover.
     static let radiusSmall: CGFloat = 6
 
@@ -207,7 +246,20 @@ enum Theme {
     /// Evaluate the same cubic Bezier used by SwiftUI, with cancellable frame
     /// updates so editing can take over an in-flight window transition.
     static func windowResizeProgress(elapsed: Double) -> CGFloat {
-        let x = min(1, max(0, elapsed / (windowResizeDuration * animationScale)))
+        easedProgress(elapsed: elapsed, duration: windowResizeDuration)
+    }
+
+    static let inputResizeDuration: Double = 0.12
+
+    /// How long a hand-scrolled text area takes to settle onto the line grid after the
+    /// gesture ends. `.micro`'s duration: it is feedback on the user's own motion, and it
+    /// never travels more than half a line.
+    static let scrollSnapDuration: Double = 0.12
+
+    /// `curve` evaluated at `elapsed` over `duration` (both scaled by TUSI_SLOWMO), for
+    /// AppKit-side motion that has to follow the same shape as SwiftUI's.
+    static func easedProgress(elapsed: Double, duration: Double) -> CGFloat {
+        let x = min(1, max(0, elapsed / (duration * animationScale)))
         if x == 0 || x == 1 { return CGFloat(x) }
         func cubic(_ t: Double, _ a: Double, _ b: Double) -> Double {
             3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t
@@ -220,8 +272,6 @@ enum Theme {
         }
         return CGFloat(cubic((lower + upper) / 2, curve.1, curve.3))
     }
-
-    static let inputResizeDuration: Double = 0.12
 
     /// One frame clock drives both the editor's layout and the native window.
     static func inputResizeHeight(from: CGFloat, to: CGFloat, elapsed: Double) -> CGFloat {

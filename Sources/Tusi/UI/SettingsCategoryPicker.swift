@@ -4,8 +4,22 @@ import SwiftUI
 struct SettingsCategoryPicker: NSViewRepresentable {
     @Binding var selection: SettingsSection
 
+    /// The glass track is drawn from a backdrop layer. While the settings page fades in,
+    /// SwiftUI applies its opacity to this control's host layer, and Core Animation
+    /// flattens the host and its backdrop into one offscreen group first — the backdrop
+    /// then samples nothing, and the track shows black until the fade ends. Turning
+    /// group opacity off on the host makes the fade apply per layer instead.
+    final class Control: NSSegmentedControl {
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            guard let host = superview else { return }
+            host.wantsLayer = true
+            host.layer?.allowsGroupOpacity = false
+        }
+    }
+
     func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(
+        let control = Control(
             labels: SettingsSection.allCases.map(\.title),
             trackingMode: .selectOne,
             target: context.coordinator,

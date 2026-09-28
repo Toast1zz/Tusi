@@ -7,7 +7,7 @@ struct InstructionEditor: View {
     @State private var width: CGFloat = 0
 
     static func height(for text: String, width: CGFloat) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: 12.5)
+        let font = NSFont.systemFont(ofSize: 13)
         let layout = NSLayoutManager()
         let line = ceil(layout.defaultLineHeight(for: font))
         guard width > 10 else { return line * 2 }

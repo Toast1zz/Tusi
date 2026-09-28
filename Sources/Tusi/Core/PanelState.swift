@@ -22,6 +22,9 @@ final class PanelState: ObservableObject {
     @Published var inputResizeInProgress = false
     @Published var showSettings = false
     @Published var showShortcuts = false
+    /// The service detail page, pushed from its row in Settings ▸ Services. Which
+    /// service is `settingsProfileIndex`.
+    @Published var showServiceDetail = false
     @Published var settingsProfileIndex = 0
     @Published var settingsSection: SettingsSection = .services
     @Published var settingsAdvancedProfiles: Set<Int> = []

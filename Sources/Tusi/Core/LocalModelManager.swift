@@ -45,11 +45,11 @@ final class LocalModelManager: ObservableObject {
     var activeID: String { if case .ready(let id) = state { return id }; return "" }
     var status: String {
         switch state {
-        case .disabled: return L("已关闭，不占用模型内存")
-        case .starting: return L("正在加载本地模型…")
-        case .stopping: return L("正在关闭本地模型…")
-        case .ready: return L("已就绪，可用于本地翻译")
-        case .failed: return L("本地模型状态异常，请重试")
+        case .disabled: return L("已关闭")
+        case .starting: return L("正在加载…")
+        case .stopping: return L("正在关闭…")
+        case .ready: return L("已就绪")
+        case .failed: return L("出错了，请重试")
         }
     }
 

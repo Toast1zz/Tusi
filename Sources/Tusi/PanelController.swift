@@ -7,42 +7,94 @@ final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    private var resizeTask: Task<Void, Never>?
+    /// Every editor in the panel draws its selection as a translucent accent wash. The
+    /// system's opaque pastel `selectedTextBackgroundColor` is chosen for solid white
+    /// backgrounds; on the glass it reads as a chalky slab, worst when a dark window
+    /// behind greys the material out. SwiftUI's `TextEditor` exposes no selection color,
+    /// and focus is the one moment its `NSTextView` passes through our hands.
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let accepted = super.makeFirstResponder(responder)
+        if accepted, let text = responder as? NSTextView {
+            text.selectedTextAttributes[.backgroundColor] = Theme.textSelection
+        }
+        return accepted
+    }
+
+    /// The in-flight frame animation, clocked by the display rather than by a sleep loop.
+    /// A timer that sleeps 8ms drifts against an 8.33ms (ProMotion) or 16.7ms refresh,
+    /// and main-thread load delays each wake further, so frames were occasionally
+    /// dropped or shown twice. The display link fires once per refresh of the screen
+    /// this window is on and reports when that frame will reach the glass.
+    private var resizeLink: CADisplayLink?
+    /// Fallback clock. A display link does not tick while nothing is being drawn to
+    /// that display — the screen asleep or locked, the window on another Space — and an
+    /// animation that never ticks never reaches its destination. If the link has not
+    /// fired within a few frames, this takes over on the same curve.
+    private var resizeFallback: Task<Void, Never>?
+    private var resizeFrom = NSRect.zero
+    private var resizeTo = NSRect.zero
+    private var resizeStarted: CFTimeInterval?
 
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
         // Any direct update owns the frame immediately. A previous animation must
         // never write its old destination after an input-size update or a drag.
-        resizeTask?.cancel()
-        resizeTask = nil
+        stopResizeAnimation()
         super.setFrame(frameRect, display: flag)
     }
 
     func animateFrame(to destination: NSRect) {
-        resizeTask?.cancel()
-        let start = frame
-        resizeTask = Task { [weak self] in
-            let started = ProcessInfo.processInfo.systemUptime
+        stopResizeAnimation()
+        resizeFrom = frame
+        resizeTo = destination
+        resizeStarted = nil
+        let link = displayLink(target: self, selector: #selector(resizeStep(_:)))
+        link.add(to: .main, forMode: .common)
+        resizeLink = link
+        let started = ProcessInfo.processInfo.systemUptime
+        resizeFallback = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            guard let self, self.resizeStarted == nil else { return }
+            self.resizeLink?.invalidate()
+            self.resizeLink = nil
             while !Task.isCancelled {
                 let elapsed = ProcessInfo.processInfo.systemUptime - started
-                let progress = Theme.windowResizeProgress(elapsed: elapsed)
-                let rect = NSRect(x: start.minX + (destination.minX - start.minX) * progress,
-                                  y: start.minY + (destination.minY - start.minY) * progress,
-                                  width: start.width + (destination.width - start.width) * progress,
-                                  height: start.height + (destination.height - start.height) * progress)
-                self?.applyAnimationFrame(rect)
-                if progress >= 1 { return }
+                guard self.applyResizeProgress(Theme.windowResizeProgress(elapsed: elapsed)) else { return }
                 do { try await Task.sleep(for: .milliseconds(8)) } catch { return }
             }
         }
     }
 
-    private func applyAnimationFrame(_ rect: NSRect) {
+    @objc private func resizeStep(_ link: CADisplayLink) {
+        resizeFallback?.cancel()
+        resizeFallback = nil
+        // Progress is measured to the moment this frame is shown, not to when the
+        // callback happened to run, so a late callback lands on the right curve point.
+        let started = resizeStarted ?? link.timestamp
+        resizeStarted = started
+        if !applyResizeProgress(Theme.windowResizeProgress(elapsed: link.targetTimestamp - started)) {
+            stopResizeAnimation()
+        }
+    }
+
+    /// Writes the frame at `progress`; returns whether the animation has further to go.
+    private func applyResizeProgress(_ progress: CGFloat) -> Bool {
+        let rect = NSRect(x: resizeFrom.minX + (resizeTo.minX - resizeFrom.minX) * progress,
+                          y: resizeFrom.minY + (resizeTo.minY - resizeFrom.minY) * progress,
+                          width: resizeFrom.width + (resizeTo.width - resizeFrom.width) * progress,
+                          height: resizeFrom.height + (resizeTo.height - resizeFrom.height) * progress)
         super.setFrame(rect, display: true)
+        return progress < 1
+    }
+
+    private func stopResizeAnimation() {
+        resizeLink?.invalidate()
+        resizeLink = nil
+        resizeFallback?.cancel()
+        resizeFallback = nil
     }
 
     override func orderOut(_ sender: Any?) {
-        resizeTask?.cancel()
-        resizeTask = nil
+        stopResizeAnimation()
         super.orderOut(sender)
     }
 }
@@ -615,12 +667,14 @@ final class PanelController: NSObject, NSWindowDelegate {
             }
 
             // Close / back — configurable (default Esc). Backs out one level at a time:
-            // Shortcuts → Settings → Translator → hide. Backing out of a page matches
+            // Shortcuts or a service → Settings → Translator → hide. Backing out of a page matches
             // the on-screen back buttons; hiding the panel stays silent so the frequent
             // Esc-to-dismiss doesn't get noisy.
             if let combo = self.settings.shortcut(.close), combo.matches(event) {
                 if self.panelState.showShortcuts {
                     self.panelState.showShortcuts = false
+                } else if self.panelState.showServiceDetail {
+                    self.panelState.showServiceDetail = false
                 } else if self.panelState.showSettings {
                     self.panelState.showSettings = false
                 } else {

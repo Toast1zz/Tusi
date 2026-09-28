@@ -27,6 +27,7 @@ enum Page: Hashable {
     case translator
     case settings
     case shortcuts
+    case serviceDetail
 }
 
 struct RootView: View {
@@ -37,7 +38,8 @@ struct RootView: View {
 
     private var activePage: Page {
         guard panelState.showSettings else { return .translator }
-        return panelState.showShortcuts ? .shortcuts : .settings
+        if panelState.showShortcuts { return .shortcuts }
+        return panelState.showServiceDetail ? .serviceDetail : .settings
     }
 
     var body: some View {
@@ -45,6 +47,12 @@ struct RootView: View {
             if panelState.showSettings {
                 if panelState.showShortcuts {
                     ShortcutsView()
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: retreat(.trailing)
+                        ))
+                } else if panelState.showServiceDetail {
+                    SettingsView(mode: .service)
                         .transition(.asymmetric(
                             insertion: .move(edge: .trailing).combined(with: .opacity),
                             removal: retreat(.trailing)
@@ -78,6 +86,11 @@ struct RootView: View {
         .onPreferenceChange(ShortcutsHeightKey.self) { height in
             guard height > 0, activePage == .shortcuts else { return }
             HeightTrace.log("shortcuts \(height)")
+            onHeightChange(height)
+        }
+        .onPreferenceChange(ServiceDetailHeightKey.self) { height in
+            guard height > 0, activePage == .serviceDetail else { return }
+            HeightTrace.log("service detail destination \(height)")
             onHeightChange(height)
         }
         .onPreferenceChange(SettingsDesiredHeightKey.self) { height in

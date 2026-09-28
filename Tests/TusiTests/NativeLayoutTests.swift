@@ -73,7 +73,7 @@ final class NativeLayoutTests: XCTestCase {
     func testCompactNativeSurfacesRenderWithinHeightBudget() async throws {
         for width: CGFloat in [470, 700] {
             for dark in [false, true] {
-                for page in ["translator", "hold", "settings", "local", "jev", "advanced", "translation", "general", "shortcuts"] {
+                for page in ["translator", "hold", "settings", "service", "local", "jev", "advanced", "translation", "general", "shortcuts"] {
                     let settings = SettingsStore(preview: true)
                     settings.autoCopy = false
                     settings.soundEnabled = false
@@ -93,6 +93,7 @@ final class NativeLayoutTests: XCTestCase {
                     state.showSettings = page != "translator" && page != "hold"
                     if page == "hold" { state.returnHoldProgress = 0.5 }
                     state.showShortcuts = page == "shortcuts"
+                    state.showServiceDetail = ["service", "local", "jev", "advanced"].contains(page)
                     if page == "local" { state.settingsProfileIndex = SettingsStore.localProfileIndex }
                     if page == "jev" { state.settingsProfileIndex = SettingsStore.localProfileIndex + 1 }
                     if page == "translation" { state.settingsSection = .translation }
@@ -122,8 +123,9 @@ final class NativeLayoutTests: XCTestCase {
                     }
                     XCTAssertGreaterThan(measured, 0)
                     if page == "translator" { XCTAssertLessThanOrEqual(measured, 520) }
-                    if ["settings", "local", "jev", "advanced", "translation", "general"].contains(page) {
-                        XCTAssertGreaterThan(measured, 240)
+                    if ["settings", "service", "local", "jev", "advanced", "translation", "general"].contains(page) {
+                        // Jev's page is a key field and a test button; every other page is fuller.
+                        XCTAssertGreaterThan(measured, page == "jev" ? 120 : 240)
                         XCTAssertLessThanOrEqual(measured, SettingsView.maximumHeight(availableHeight: 520) + 1)
                         print("SETTINGS_LAYOUT \(page) width=\(width) height=\(measured)")
                     }
@@ -170,7 +172,8 @@ final class NativeLayoutTests: XCTestCase {
             }
             XCTAssertGreaterThan(measured, 180)
             XCTAssertLessThanOrEqual(measured, SettingsView.maximumHeight(availableHeight: 480) + 1)
-            if section == .general { XCTAssertLessThan(measured, 400) }
+            // Grouped rows: three groups, six rows. Still well under the page cap.
+            if section == .general { XCTAssertLessThan(measured, 460) }
 
 
             if section == .services {
@@ -499,6 +502,30 @@ final class NativeLayoutTests: XCTestCase {
         XCTAssertGreaterThan(resultHeight, natural.height + 100)
         try await settle()
         XCTAssertEqual(window.frame.height, resultHeight, accuracy: 1)
+    }
+
+    /// Whichever clock drives it — the display link, or the fallback that takes over
+    /// when the display is not drawing (asleep, locked, headless CI) — a window resize
+    /// passes through intermediate heights, moves monotonically, keeps its top edge, and
+    /// lands exactly on the destination.
+    func testWindowResizeReachesDestinationOnEitherClock() async throws {
+        let window = FloatingPanel(contentRect: NSRect(x: 200, y: 200, width: 470, height: 320),
+                                   styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .milliseconds(100))
+        let top = window.frame.maxY
+        PanelController.animateResize(window, to: NSRect(x: 200, y: top - 160, width: 470, height: 160))
+        var heights: [CGFloat] = []
+        for _ in 0..<60 {
+            try await Task.sleep(for: .milliseconds(8))
+            heights.append(window.frame.height)
+            XCTAssertEqual(window.frame.maxY, top, accuracy: 1)
+        }
+        XCTAssertEqual(window.frame.height, 160, accuracy: 0.5)
+        XCTAssertGreaterThan(Set(heights.filter { $0 > 160.5 && $0 < 319.5 }).count, 2, "Window must animate, not snap")
+        XCTAssertEqual(heights, heights.sorted(by: >), "Shrinking must be monotonic")
     }
 
     func testDirectInputResizeCancelsPreviousWindowAnimation() async throws {

@@ -5,12 +5,19 @@ struct ShortcutsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var panelState: PanelState
 
+    /// The row under the pointer. Clear and restore are one click with no undo, so they
+    /// show only on the row being pointed at instead of sitting beside every binding.
+    @State private var hoveredAction: ShortcutAction?
+
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 header
 
-                VStack(alignment: .leading, spacing: 8) {
+                // Rows carry their 8pt gap as 4pt of padding each, so the hover regions
+                // meet: with stack spacing, a pointer in the gap belonged to no row and
+                // the clear button blinked off between two rows.
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(ShortcutAction.allCases) { action in
                         shortcutRow(action)
                     }
@@ -19,11 +26,13 @@ struct ShortcutsView: View {
                         Text(error)
                             .font(Theme.caption)
                             .foregroundStyle(.orange)
+                            .padding(.top, 4)
                             .transition(.opacity)
                     }
 
                     if let pending = panelState.pendingBareShortcut {
                         bareShortcutConfirmation(pending)
+                            .padding(.top, 4)
                             .transition(.opacity)
                     }
                 }
@@ -36,11 +45,14 @@ struct ShortcutsView: View {
             }
             .background(
                 GeometryReader { proxy in
-                    Color.clear.preference(key: ShortcutsHeightKey.self, value: proxy.size.height + 36)
+                    Color.clear.preference(key: ShortcutsHeightKey.self, value: proxy.size.height + 32)
                 }
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            // The last row's own 4pt of padding makes up the rest of the 18.
+            .padding(.bottom, 14)
         }
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
@@ -123,6 +135,7 @@ struct ShortcutsView: View {
         let recording = panelState.recordingShortcut == action
         let combo = settings.shortcut(action)
         let isDefault = combo.map { KeyCombo.sameKey($0, action.defaultCombo) } ?? false
+        let revealed = hoveredAction == action
 
         return HStack(spacing: 8) {
             Text(action.label)
@@ -141,6 +154,8 @@ struct ShortcutsView: View {
                 }
                 .buttonStyle(.plain)
                 .help(L("清除此快捷键"))
+                .opacity(revealed ? 1 : 0)
+                .allowsHitTesting(revealed)
             }
 
             if !isDefault && !recording {
@@ -156,6 +171,8 @@ struct ShortcutsView: View {
                 // key SwiftUI would auto-generate for an interpolated LocalizedStringKey
                 // by hand (in Localizable.strings) is easy to get subtly wrong.
                 .help(String(format: L("恢复默认 %@"), action.defaultCombo.display))
+                .opacity(revealed ? 1 : 0)
+                .allowsHitTesting(revealed)
             }
 
             Button {
@@ -189,5 +206,11 @@ struct ShortcutsView: View {
             .buttonStyle(.plain)
             .help(recording ? "按 Esc 取消" : "点击后按下新的组合键")
         }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { hoveredAction = action } else if hoveredAction == action { hoveredAction = nil }
+        }
+        .motion(.micro, value: revealed)
     }
 }

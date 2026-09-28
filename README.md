@@ -17,7 +17,7 @@ target languages available when needed.
 - Hold Return for 1.5 seconds to translate a completed result again; an optional switch in
   Settings → Translation controls both the gesture and its progress hint
 - Two online services, used either primary-first or asked at the same time
-- Casual, Standard, and Formal tone presets, plus optional Auto tone using Jev; Auto
+- Casual, Standard, and Formal tone presets, plus optional Smart tone using Jev; Smart
   shows its choice with the result and falls back to Standard when it cannot decide
 - A standing instruction carried by every request — a glossary entry, a house style, a name
   to leave untranslated
@@ -36,7 +36,7 @@ target languages available when needed.
 - macOS 14+
 - An API key for any OpenAI-compatible service — or nothing but a local model
   (Ollama, LM Studio, llama.cpp-server), which needs none
-- A Jev API key to use Jev-driven Auto tone; without one, Auto uses Standard
+- A Jev API key to use Jev-driven Smart tone; without one, Smart uses Standard
 
 ## Install
 
@@ -50,9 +50,9 @@ blocks it (the app is not notarized), right-click the app and choose Open.
 
 ## Configuration
 
-Open Settings (⌘,) → Services. Choose a primary or backup online profile, the
-local-model slot, or the separate Jev tab. A selected translation tab shows its
-provider or host; unselected tabs show only their names. For an online profile, enter:
+Open Settings (⌘,) → Services. The page lists every service — primary, backup,
+local model, and Jev — with its provider and model or status; click one to open its
+own page. For an online profile, enter:
 
 - Base URL, e.g. `https://api.deepseek.com` or `https://openrouter.ai/api/v1`
 - Model, e.g. `deepseek-flash`
@@ -69,7 +69,7 @@ choice without starting the service; switching while enabled unloads the previou
 process first. The runtime and model files must already be installed. Other local
 servers can be configured manually under Advanced.
 
-Settings → Translation → Route controls how the three translation slots
+Settings → Services → Route controls how the three translation slots
 (primary, backup, and local) are used:
 
 - **Start with** — the local model, or an online service. Starting local does not
@@ -86,7 +86,7 @@ primary request that fails before producing any output can fail over to it. API
 keys are stored in the macOS Keychain rather than profile preferences, and each
 service has a connection test.
 
-The Jev tab holds a separate API key and Test Connection button. Choosing Auto tone sends
+Jev's page holds a separate API key and Test Connection button. Choosing Smart tone sends
 the source text to Jev once when translation starts, then uses the chosen Casual,
 Standard, or Formal preset for that request, including retries and higher-tier results.
 If the key is missing, Jev is unavailable, or the decision is unclear, translation
@@ -107,7 +107,7 @@ owner-only file permissions, without encryption.
 
 Two controls are available when you need them:
 
-- **Additional instructions (optional)** (Settings → Translation) — one instruction
+- **Standing instruction** (Settings → Translation) — one instruction
   added to every translation request, whichever profile answers it. Use it for a
   glossary rule, a house style, or a name that must remain untranslated. The field
   starts collapsed when empty.

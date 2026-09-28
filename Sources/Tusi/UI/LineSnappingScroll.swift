@@ -37,6 +37,7 @@ struct LineSnappingScroll: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.step = step
         context.coordinator.growingEditorLimit = growingEditorLimit
+        context.coordinator.reduceMotion = context.environment.accessibilityReduceMotion
         // Deferred: on the pass that creates this view neither it nor the scroll view it
         // claims is necessarily in a window yet, and the claim is geometric. Attaching is
         // idempotent, and SwiftUI calls this again on every update, so a first attempt
@@ -53,13 +54,21 @@ struct LineSnappingScroll: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(step: step) }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject {
         var step: CGFloat
         var growingEditorLimit: CGFloat?
+        /// From the SwiftUI environment: settle instantly instead of easing.
+        var reduceMotion = false
         private weak var scrollView: NSScrollView?
         private var observer: NSObjectProtocol?
         private var boundsObserver: NSObjectProtocol?
         private var restoringOrigin = false
+        private var startObserver: NSObjectProtocol?
+        /// The settle animation, clocked by the scroll view's display.
+        private var snapLink: CADisplayLink?
+        private var snapFrom: CGFloat = 0
+        private var snapTo: CGFloat = 0
+        private var snapStarted: CFTimeInterval?
 
         init(step: CGFloat) { self.step = step }
 
@@ -101,6 +110,15 @@ struct LineSnappingScroll: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.snap() }
             }
+            // A new gesture owns the viewport the moment it starts; a settle still in
+            // flight must not pull against it.
+            startObserver = NotificationCenter.default.addObserver(
+                forName: NSScrollView.willStartLiveScrollNotification,
+                object: found,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stopSnap() }
+            }
             boundsObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification, object: found.contentView, queue: .main
             ) { [weak self] _ in
@@ -138,6 +156,9 @@ struct LineSnappingScroll: NSViewRepresentable {
         }
 
         func detach() {
+            stopSnap()
+            if let startObserver { NotificationCenter.default.removeObserver(startObserver) }
+            startObserver = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
             observer = nil
@@ -171,8 +192,40 @@ struct LineSnappingScroll: NSViewRepresentable {
             guard current > 0.5, current < maxOffset - 0.5 else { return }
             let snapped = min(max((current / step).rounded() * step, 0), maxOffset)
             guard abs(snapped - current) > 0.5 else { return }
-            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: snapped))
+            // Eased, not jumped: momentum has just brought the text smoothly to rest, and
+            // an instant correction right after it reads as a twitch.
+            guard !reduceMotion else {
+                setOffset(snapped)
+                return
+            }
+            stopSnap()
+            snapFrom = current
+            snapTo = snapped
+            snapStarted = nil
+            let link = scrollView.displayLink(target: self, selector: #selector(snapStep(_:)))
+            link.add(to: .main, forMode: .common)
+            snapLink = link
+        }
+
+        @objc private func snapStep(_ link: CADisplayLink) {
+            let started = snapStarted ?? link.timestamp
+            snapStarted = started
+            let progress = Theme.easedProgress(elapsed: link.targetTimestamp - started,
+                                               duration: Theme.scrollSnapDuration)
+            setOffset(snapFrom + (snapTo - snapFrom) * progress)
+            if progress >= 1 { stopSnap() }
+        }
+
+        private func setOffset(_ y: CGFloat) {
+            guard let scrollView else { return stopSnap() }
+            let clip = scrollView.contentView
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
             scrollView.reflectScrolledClipView(clip)
+        }
+
+        private func stopSnap() {
+            snapLink?.invalidate()
+            snapLink = nil
         }
     }
 }
