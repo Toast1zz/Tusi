@@ -4,7 +4,8 @@ import SwiftUI
 // MARK: - TUSI_PREVIEW debug mode
 //
 // Screenshot/inspection runs set TUSI_PREVIEW to a scenario name and pin the panel with
-// sample content; TUSI_DARK forces dark appearance and TUSI_SLOWMO stretches animations.
+// sample content; TUSI_DARK / TUSI_LIGHT force an appearance and TUSI_SLOWMO stretches
+// animations.
 // Kept out of AppDelegate so production launch logic stays readable — this file is never
 // entered without the environment variable.
 
@@ -15,9 +16,22 @@ extension AppDelegate {
 
         if ProcessInfo.processInfo.environment["TUSI_DARK"] != nil {
             NSApp.appearance = NSAppearance(named: .darkAqua)
+        } else if ProcessInfo.processInfo.environment["TUSI_LIGHT"] != nil {
+            NSApp.appearance = NSAppearance(named: .aqua)
         }
         panelState.pinned = true
         panelController.show()
+        // show() opens settings while nothing is configured; translator scenarios want the
+        // translator page. "empty" keeps the first-run behavior on purpose.
+        if preview != "empty" { panelState.showSettings = false }
+        // A second Tusi's status item can land at the menu bar's far edge, pushing the
+        // panel against the screen edge where its shadow gets clipped in screenshots.
+        // Center it and drop it clear of the menu bar; later resizes keep the top edge.
+        if let panel = NSApp.windows.first(where: { $0 is FloatingPanel }),
+           let visible = panel.screen?.visibleFrame {
+            panel.setFrameOrigin(NSPoint(x: visible.midX - panel.frame.width / 2,
+                                         y: panel.frame.minY - 60))
+        }
         switch preview {
         case "settings", "update-available", "update-latest", "shortcuts", "settings-local",
              "service", "service-local", "service-jev":
@@ -142,12 +156,12 @@ extension AppDelegate {
             settings.setLocalModelReady(true)
             settings.routeStart = .local
             let local = TranslationEngine.ResultVersion(
-                text: "Maybe you could fill in this form every day, for Mitchelle.",
+                text: "Maybe you could fill in this form every day so we can track progress.",
                 slot: SettingsStore.localProfileIndex, tier: .local,
                 languageMismatch: false, capped: false, afterFailover: false
             )
             let online = TranslationEngine.ResultVersion(
-                text: "Perhaps you could fill out this form every day, for Mitchelle.",
+                text: "Perhaps you could fill out this form every day so we can track progress.",
                 slot: 0, tier: .online,
                 languageMismatch: false, capped: false, afterFailover: false
             )
@@ -164,7 +178,7 @@ extension AppDelegate {
             default: shown = [local]
             }
             engine.debugPreview(
-                input: "或许你每天可以填一下这份表格，为了 Mitchelle。",
+                input: "或许你每天可以填一下这份表格，方便我们跟进进度。",
                 output: shown[shown.count - 1].text,
                 versions: shown
             )

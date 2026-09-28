@@ -807,8 +807,8 @@ final class NativeLayoutTests: XCTestCase {
         let now = Date()
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
         let records = [
-            TranslationEngine.Record(id: UUID(), input: "或许你每天可以填一下这份表格，为了 Mitchelle。",
-                                     output: "Perhaps you could fill out this form every day, for Mitchelle.",
+            TranslationEngine.Record(id: UUID(), input: "或许你每天可以填一下这份表格，方便我们跟进进度。",
+                                     output: "Perhaps you could fill out this form every day so we can track progress.",
                                      sourceLabel: "中", source: .chinese, target: .english, tone: .standard, timestamp: now),
             TranslationEngine.Record(id: UUID(), input: "真的吗，你们的回答好官方。",
                                      output: "Really? Your answers sound so official.",
@@ -833,14 +833,14 @@ final class NativeLayoutTests: XCTestCase {
                 if scene == "result" {
                     state.pinned = true
                     let local = TranslationEngine.ResultVersion(
-                        text: "Maybe you could fill in this form every day, for Mitchelle.",
+                        text: "Maybe you could fill in this form every day so we can track progress.",
                         slot: SettingsStore.localProfileIndex, tier: .local,
                         languageMismatch: false, capped: false, afterFailover: false)
                     let online = TranslationEngine.ResultVersion(
-                        text: "Perhaps you could fill out this form every day, for Mitchelle.",
+                        text: "Perhaps you could fill out this form every day so we can track progress.",
                         slot: 0, tier: .online, languageMismatch: false, capped: false, afterFailover: false,
                         host: "api.deepseek.com", model: "deepseek-chat")
-                    engine.debugPreview(input: "或许你每天可以填一下这份表格，为了 Mitchelle。",
+                    engine.debugPreview(input: "或许你每天可以填一下这份表格，方便我们跟进进度。",
                                         output: online.text, versions: [local, online])
                 } else {
                     state.showHistory = true

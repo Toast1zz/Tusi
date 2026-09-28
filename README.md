@@ -1,8 +1,17 @@
 # Tusi
 
+**English** · [简体中文](README.zh-CN.md)
+
 A menubar translator for macOS. Type Chinese and get English; type another
 language and get Chinese. Tusi detects the direction automatically, with explicit
 target languages available when needed.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/translate-dark.png">
+    <img src="docs/screenshots/translate-light.png" width="550" alt="Tusi panel translating a Chinese sentence into English">
+  </picture>
+</p>
 
 ## Features
 
@@ -30,6 +39,10 @@ target languages available when needed.
 - Every shortcut is rebindable except ⌘, for Settings
 - The result appears complete, in one step — no token-by-token flicker, and local and remote
   models behave identically. Adapts to light/dark; Liquid Glass on macOS 26+
+
+| Local answer, then an online second opinion | Explicit target languages | Services at a glance |
+|---|---|---|
+| <img src="docs/screenshots/second-opinion.png" alt="Result with a switch between the local and online answers"> | <img src="docs/screenshots/target-picker.png" alt="Inline target-language picker"> | <img src="docs/screenshots/settings-services.png" alt="Settings page listing primary, backup, local and Jev services"> |
 
 ## Requirements
 
@@ -158,6 +171,9 @@ TUSI_ARCH=universal ./build.sh    # universal binary (arm64 + Intel)
 ./build.sh install --open         # build, install, and launch it
 ./build.sh release                # arm64 + universal release zips into dist/
 ```
+
+`scripts/readme-screenshots.sh` regenerates the images in `docs/screenshots` from the
+`TUSI_PREVIEW` sample scenarios; run it after `./build.sh`.
 
 The default version/build number comes from `VERSION`; CI or release scripts can override
 it with `TUSI_VERSION` and `TUSI_BUILD_NUMBER`.
