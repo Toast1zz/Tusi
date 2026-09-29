@@ -66,6 +66,22 @@ struct APIProfile: Equatable, Sendable {
     var isUsable: Bool { config.isUsable }
 }
 
+/// How long a translation stays in history. Raw values are days, so the stored setting
+/// reads the same as the option it names; `.never` (0) is the default and keeps the
+/// history bounded by count alone.
+enum HistoryRetention: Int, CaseIterable, Sendable {
+    case never = 0
+    case day = 1
+    case week = 7
+    case month = 30
+
+    /// A rolling window, not calendar days: a record expires a fixed time after it was
+    /// made, so "24 hours" never deletes something written five minutes ago.
+    var window: TimeInterval? {
+        self == .never ? nil : TimeInterval(rawValue) * 24 * 60 * 60
+    }
+}
+
 struct CredentialStorage {
     var load: () throws -> [Int: String]
     var save: ([Int: String]) throws -> Void
@@ -176,6 +192,9 @@ final class SettingsStore: ObservableObject {
     }
     @Published var saveHistoryEnabled: Bool {
         didSet { defaults.set(saveHistoryEnabled, forKey: "saveHistoryEnabled") }
+    }
+    @Published var historyRetention: HistoryRetention {
+        didSet { defaults.set(historyRetention.rawValue, forKey: "historyRetentionDays") }
     }
     @Published var saveDraftEnabled: Bool {
         didSet { defaults.set(saveDraftEnabled, forKey: "saveDraftEnabled") }
@@ -299,6 +318,7 @@ final class SettingsStore: ObservableObject {
         autoCopy = defaults.object(forKey: "autoCopy") as? Bool ?? true
         holdReturnToRetranslate = defaults.object(forKey: "holdReturnToRetranslate") as? Bool ?? true
         saveHistoryEnabled = defaults.object(forKey: "saveHistoryEnabled") as? Bool ?? true
+        historyRetention = HistoryRetention(rawValue: defaults.integer(forKey: "historyRetentionDays")) ?? .never
         saveDraftEnabled = defaults.object(forKey: "saveDraftEnabled") as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
         tone = Tone(rawValue: defaults.string(forKey: "tone") ?? "") ?? .standard

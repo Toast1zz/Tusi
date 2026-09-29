@@ -213,6 +213,9 @@ final class TranslationEngine: ObservableObject {
     @Published private(set) var persistenceError: String?
     @Published private(set) var canUndoHistoryDeletion = false
     private var historyUndoOutlivesExit = false
+    private var historyExpiryTask: Task<Void, Never>?
+    /// The clock behind automatic expiry. Tests replace it instead of sleeping.
+    var now: () -> Date = Date.init
     private var deletedRecords: [Record] = []
     private var translationTask: Task<Void, Never>?
     private var inputRevision: UInt = 0
@@ -323,6 +326,8 @@ final class TranslationEngine: ObservableObject {
             }.store(in: &preferences)
         settings.$saveHistoryEnabled.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.historyPreferenceChanged() }.store(in: &preferences)
+        settings.$historyRetention.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.pruneExpiredHistory() }.store(in: &preferences)
         settings.$saveDraftEnabled.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.draftPreferenceChanged() }.store(in: &preferences)
     }
@@ -1503,10 +1508,52 @@ final class TranslationEngine: ObservableObject {
     func undoHistoryDeletion() {
         guard settings.saveHistoryEnabled, canUndoHistoryDeletion else { return }
         let existing = Set(history.map(\.id))
-        history = Array((history + deletedRecords.filter { !existing.contains($0.id) })
+        // A record that has aged out since it was deleted stays deleted.
+        history = Array((history + deletedRecords.filter { !existing.contains($0.id) && !isExpired($0) })
             .sorted { $0.timestamp > $1.timestamp }.prefix(Self.historyCapacity))
         rememberDeletion([])
         saveHistory()
+    }
+
+    // MARK: - Automatic expiry
+
+    private func isExpired(_ record: Record) -> Bool {
+        guard settings.saveHistoryEnabled, let window = settings.historyRetention.window else { return false }
+        return record.timestamp <= now().addingTimeInterval(-window)
+    }
+
+    /// Deletes records older than the retention window. Expiry is not a deletion the user
+    /// made, so it offers no undo — and it takes what an undo could bring back with it,
+    /// otherwise "delete after 24 hours" would quietly keep text for longer.
+    func pruneExpiredHistory() {
+        defer { scheduleHistoryExpiry() }
+        let kept = history.filter { !isExpired($0) }
+        if kept.count != history.count {
+            history = kept
+            saveHistory()
+        }
+        let restorable = deletedRecords.filter { !isExpired($0) }
+        if restorable.count != deletedRecords.count {
+            let outlives = historyUndoOutlivesExit
+            rememberDeletion(restorable)
+            historyUndoOutlivesExit = outlives && !restorable.isEmpty
+        }
+    }
+
+    /// One timer, aimed at the oldest record's expiry. A menu-bar app runs for weeks, so
+    /// checking only at launch would leave a "24 hours" record readable for days. The wait
+    /// is capped at an hour so a clock change is corrected instead of trusted.
+    private func scheduleHistoryExpiry() {
+        historyExpiryTask?.cancel()
+        historyExpiryTask = nil
+        guard settings.saveHistoryEnabled, let window = settings.historyRetention.window,
+              let oldest = history.map(\.timestamp).min() else { return }
+        let wait = min(max(oldest.addingTimeInterval(window).timeIntervalSince(now()), 1), 3600)
+        historyExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled else { return }
+            self?.pruneExpiredHistory()
+        }
     }
 
     func historyPreferenceChanged() {
@@ -1609,11 +1656,13 @@ final class TranslationEngine: ObservableObject {
             persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("history write failed: \(error.localizedDescription, privacy: .public)")
         }
+        scheduleHistoryExpiry()
     }
 
     private func loadHistory() {
         let url = historyURL
         guard settings.saveHistoryEnabled else { saveHistory(); return }
+        defer { pruneExpiredHistory() }
         guard let data = loadData(url) else { return }
         if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
             history = normalizeLoadedHistory(decoded)

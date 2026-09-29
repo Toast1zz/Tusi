@@ -208,6 +208,11 @@
 /* Routing failures */
 "本机保存失败，请检查磁盘空间或文件权限" = "Could not save locally. Check disk space and file permissions.";
 "保存翻译历史" = "Save translation history";
+"自动删除历史" = "Delete history automatically";
+"从不" = "Never";
+"24 小时后" = "After 24 hours";
+"7 天后" = "After 7 days";
+"30 天后" = "After 30 days";
 "保留输入草稿" = "Keep input draft";
 "清除输入草稿" = "Clear input draft";
 "返回" = "Back";

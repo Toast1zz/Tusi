@@ -438,6 +438,97 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertTrue(engine.history.isEmpty)
     }
 
+    // MARK: - Automatic history expiry
+
+    private func record(_ text: String, age: TimeInterval, now: Date) -> TranslationEngine.Record {
+        TranslationEngine.Record(
+            id: UUID(), input: text, output: text, sourceLabel: "中文",
+            source: .chinese, target: .english, tone: .standard,
+            timestamp: now.addingTimeInterval(-age)
+        )
+    }
+
+    private func engine(
+        seeded records: [TranslationEngine.Record],
+        retention: HistoryRetention,
+        now: Date,
+        files: @escaping () -> [URL: Data],
+        write: @escaping (Data?, URL) -> Void
+    ) throws -> (TranslationEngine, SettingsStore) {
+        let settings = settings()
+        settings.historyRetention = retention
+        let seed = try JSONEncoder().encode(records)
+        let storage = TranslationStorage(read: { $0 == TranslationEngine.historyURL(preview: true) ? seed : files()[$0] }, write: { write($0, $1) })
+        let engine = TranslationEngine(settings: settings, storage: storage) { _, _, _, _, _ in
+            AsyncThrowingStream { $0.finish() }
+        }
+        engine.now = { now }
+        engine.pruneExpiredHistory()
+        return (engine, settings)
+    }
+
+    func testRetentionDropsOnlyRecordsPastTheWindowAndRewritesTheFile() throws {
+        let now = Date()
+        var files: [URL: Data] = [:]
+        let url = TranslationEngine.historyURL(preview: true)
+        let fresh = record("fresh", age: 23 * 3600, now: now)
+        let stale = record("stale", age: 25 * 3600, now: now)
+        let (engine, _) = try engine(seeded: [fresh, stale], retention: .day, now: now, files: { files }, write: { files[$1] = $0 })
+        XCTAssertEqual(engine.history.map(\.input), ["fresh"])
+        let saved = try JSONDecoder().decode([TranslationEngine.Record].self, from: try XCTUnwrap(files[url]))
+        XCTAssertEqual(saved.map(\.input), ["fresh"], "an expired record must leave the disk, not just the list")
+    }
+
+    func testRetentionNeverKeepsEverythingAndOffDoesNotDisableHistory() throws {
+        let now = Date()
+        let old = record("old", age: 400 * 24 * 3600, now: now)
+        let (engine, settings) = try engine(seeded: [old], retention: .never, now: now, files: { [:] }, write: { _, _ in })
+        XCTAssertEqual(engine.history.count, 1)
+        XCTAssertTrue(settings.saveHistoryEnabled)
+    }
+
+    func testShorteningRetentionPrunesImmediately() async throws {
+        let now = Date()
+        var files: [URL: Data] = [:]
+        let records = [record("today", age: 3600, now: now), record("lastWeek", age: 8 * 24 * 3600, now: now)]
+        let (engine, settings) = try engine(seeded: records, retention: .never, now: now, files: { files }, write: { files[$1] = $0 })
+        XCTAssertEqual(engine.history.count, 2)
+        settings.historyRetention = .week
+        try await wait { engine.history.count == 1 }
+        XCTAssertEqual(engine.history.first?.input, "today")
+        XCTAssertFalse(engine.canUndoHistoryDeletion, "automatic expiry is not a deletion the user can undo")
+    }
+
+    func testExpiredRecordCannotBeRestoredByUndo() throws {
+        let start = Date()
+        var current = start
+        var files: [URL: Data] = [:]
+        let keep = record("keep", age: 0, now: start)
+        let (engine, _) = try engine(seeded: [keep], retention: .day, now: start, files: { files }, write: { files[$1] = $0 })
+        engine.now = { current }
+        engine.deleteHistory(keep.id)
+        XCTAssertTrue(engine.canUndoHistoryDeletion)
+        current = start.addingTimeInterval(25 * 3600)
+        engine.pruneExpiredHistory()
+        XCTAssertFalse(engine.canUndoHistoryDeletion)
+        engine.undoHistoryDeletion()
+        XCTAssertTrue(engine.history.isEmpty)
+    }
+
+    func testExpiryTimerRemovesARecordWithoutAnyUserAction() async throws {
+        // Real clock: a record 0.5s from expiring is gone once the one-second timer floor passes.
+        let now = Date()
+        var files: [URL: Data] = [:]
+        let almost = record("almost", age: 24 * 3600 - 0.5, now: now)
+        let (engine, settings) = try engine(seeded: [almost], retention: .day, now: now, files: { files }, write: { files[$1] = $0 })
+        engine.now = Date.init
+        XCTAssertEqual(engine.history.count, 1)
+        settings.historyRetention = .day  // reschedule against the real clock
+        engine.pruneExpiredHistory()
+        for _ in 0..<400 where !engine.history.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(engine.history.isEmpty)
+    }
+
     func testDraftOptOutClearsStorageAndClipboardFailureIsVisible() async throws {
         var files: [URL: Data] = [:]
         var copied: [String] = []

@@ -114,7 +114,8 @@ marked. Right-click a record to delete it. Clear History returns to the translat
 shows an Undo row above its bottom bar. That undo lasts until a new translation starts,
 Settings opens, or history is opened and closed again. Deleting one record keeps history
 open with Undo beside Clear History until you leave history. History and draft saving can
-be disabled independently in Settings. Turning off saving deletes the corresponding saved
+be disabled independently in Settings. History can also delete itself after 24 hours,
+7 days, or 30 days (off by default); expired records are not undoable. Turning off saving deletes the corresponding saved
 data; clearing the input draft does not delete history. Text is stored locally with
 owner-only file permissions, without encryption.
 

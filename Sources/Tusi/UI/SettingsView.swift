@@ -251,6 +251,8 @@ struct SettingsView: View {
             SettingsGroup(title: L("隐私与数据")) {
                 toggleRow("保存翻译历史", isOn: $settings.saveHistoryEnabled)
                 GroupDivider()
+                historyRetentionRow
+                GroupDivider()
                 toggleRow("保留输入草稿", isOn: $settings.saveDraftEnabled)
                 GroupDivider()
                 HStack {
@@ -279,6 +281,53 @@ struct SettingsView: View {
                 footnote(L("全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出"), warning: true)
             }
         }
+    }
+
+    private var historyRetentionTitle: String {
+        switch settings.historyRetention {
+        case .never: L("从不")
+        case .day: L("24 小时后")
+        case .week: L("7 天后")
+        case .month: L("30 天后")
+        }
+    }
+
+    private var historyRetentionRow: some View {
+        HStack {
+            Text("自动删除历史")
+            Spacer(minLength: 8)
+            // The same quiet capsule as "检查更新"; the menu itself stays the system's.
+            Menu {
+                Picker("自动删除历史", selection: $settings.historyRetention) {
+                    Text("从不").tag(HistoryRetention.never)
+                    Text("24 小时后").tag(HistoryRetention.day)
+                    Text("7 天后").tag(HistoryRetention.week)
+                    Text("30 天后").tag(HistoryRetention.month)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 4) {
+                    Text(historyRetentionTitle)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .font(Theme.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Theme.fillQuiet))
+                .contentShape(Capsule())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(L("自动删除历史"))
+        }
+        .font(Theme.body)
+        .settingsRow()
+        .disabled(!settings.saveHistoryEnabled)
     }
 
     private func footnote(_ text: String, warning: Bool = false) -> some View {

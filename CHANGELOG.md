@@ -2,6 +2,12 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-09-29
+
+### Added
+
+- Settings ▸ General ▸ Delete history automatically: Never (default), After 24 hours, 7 days, or 30 days. Each record expires that long after it was made, checked at launch and by a timer aimed at the oldest record, so a long-running menu-bar session does not keep it around. Shortening the period deletes what is past it immediately. Expiry is not undoable, and a record you deleted by hand cannot be brought back by Undo once it has expired.
+
 ## [1.18.0] - 2026-09-28
 
 ### Fixed
