@@ -1,25 +1,15 @@
 import SwiftUI
 
-private struct SettingsBodyHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
-private struct SettingsHeaderHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
 struct SettingsDesiredHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
 }
 
 /// The service detail page's natural height; its own key for the same reason as
 /// `ShortcutsHeightKey`.
 struct ServiceDetailHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
 }
 
 /// Settings is two levels deep, like System Settings: an overview of grouped rows, and
@@ -49,16 +39,21 @@ struct SettingsView: View {
     @State private var jevTestState: JevTestState = .idle
     @State private var jevTestTask: Task<Void, Never>?
     @State private var jevTestGeneration = 0
-    @State private var headerHeight: CGFloat = 0
-    @State private var bodyHeight: CGFloat = 0
-
-    private var desiredHeight: CGFloat {
-        guard headerHeight > 0, bodyHeight > 0 else { return 0 }
-        return min(Self.maximumHeight(availableHeight: panelState.availableHeight), ceil(headerHeight + bodyHeight + 48))
-    }
 
     static func maximumHeight(availableHeight: CGFloat) -> CGFloat {
         min(560, max(180, availableHeight - 24))
+    }
+
+    private func settingsPage<Content: View>(active: Bool, @ViewBuilder content: () -> Content) -> some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 18) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .modifier(SettingsHeightPart(mode: mode, padding: 18 + 6, active: active))
+        }
+        .scrollIndicators(.never)
     }
 
     private enum FocusedField: Hashable {
@@ -123,44 +118,51 @@ struct SettingsView: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
-            .background(GeometryReader { proxy in
-                Color.clear.preference(key: SettingsHeaderHeightKey.self, value: proxy.size.height)
-            })
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 18) {
-                    if mode == .service {
-                        serviceDetail
-                    } else if panelState.settingsSection == .services {
-                        servicesOverview
-                    } else if panelState.settingsSection == .translation {
-                        translationOverview
-                    } else {
-                        generalOverview
+            // The panel's height is the header, the body and the page's own padding (18 above,
+            // 18 below, 12 between). Each part reports its half of that and the preference
+            // sums them, so the total lands in the same pass as the layout. Storing the
+            // parts in @State and reporting the sum from `body` cost two extra updates,
+            // ~13ms each, on every tab change — a stall before the window even moved.
+            .modifier(SettingsHeightPart(mode: mode, padding: 18 + 6))
+            // The three overview pages stay mounted and only the selected one shows. Remounting
+            // a page on every tab change rebuilt ~40 views in the same pass as the click — a
+            // 30-40ms stall before the window moved. Hidden pages report no height.
+            ZStack(alignment: .top) {
+                if mode == .service {
+                    settingsPage(active: true) { serviceDetail }
+                        .id("service-\(editingIndex)")
+                } else {
+                    ForEach(SettingsSection.allCases, id: \.self) { section in
+                        let active = section == panelState.settingsSection
+                        settingsPage(active: active) {
+                            switch section {
+                            case .services: servicesOverview
+                            case .translation: translationOverview
+                            case .general: generalOverview
+                            }
+                        }
+                        .opacity(active ? 1 : 0)
+                        .allowsHitTesting(active)
+                        .accessibilityHidden(!active)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .background(GeometryReader { proxy in
-                    Color.clear.preference(key: SettingsBodyHeightKey.self, value: proxy.size.height)
-                })
-                .id(mode == .overview ? panelState.settingsSection.rawValue : "service-\(editingIndex)")
             }
-            .scrollIndicators(.never)
             .frame(maxHeight: .infinity)
         }
         .padding(18)
         // The viewport follows the host window throughout its animation. Natural
         // content size is a destination request, never a second viewport constraint.
         .frame(maxHeight: .infinity, alignment: .top)
-        .onPreferenceChange(SettingsHeaderHeightKey.self) { if $0 > 0 { headerHeight = $0 } }
-        .onPreferenceChange(SettingsBodyHeightKey.self) { if $0 > 0 { bodyHeight = $0 } }
         // Each page reports on its own key, so the page leaving during a push can never
         // lend its height to the one arriving (see ShortcutsHeightKey).
-        .modifier(DesiredHeightReport(mode: mode, height: desiredHeight))
+        .modifier(DesiredHeightCap(mode: mode, availableHeight: panelState.availableHeight))
         .task {
             if !settings.isPreview { await localModels.refresh(settings: settings) }
         }
         .onChange(of: panelState.settingsSection) { _, _ in
+            // Pages stay mounted, so a text view the user was typing in is no longer
+            // destroyed by the switch; without this it would keep the keyboard while hidden.
+            NSApp.keyWindow?.makeFirstResponder(nil)
             focusedField = nil
             showKey = false
             cancelTests()
@@ -1345,15 +1347,35 @@ private extension View {
     }
 }
 
-/// Reports the settings page's height on the key belonging to its level.
-private struct DesiredHeightReport: ViewModifier {
+/// One part (header or body) of the settings page's height, reported on the key belonging
+/// to its level. `padding` is that part's share of the page's own padding and spacing.
+private struct SettingsHeightPart: ViewModifier {
     let mode: SettingsView.Mode
-    let height: CGFloat
+    let padding: CGFloat
+    var active = true
 
     func body(content: Content) -> some View {
+        content.background(GeometryReader { proxy in
+            let height = active ? proxy.size.height + padding : 0
+            switch mode {
+            case .overview: Color.clear.preference(key: SettingsDesiredHeightKey.self, value: height)
+            case .service: Color.clear.preference(key: ServiceDetailHeightKey.self, value: height)
+            }
+        })
+    }
+}
+
+/// Rounds the summed height and keeps it under what the screen allows, so what the page
+/// asks the window for never exceeds what the window can give.
+private struct DesiredHeightCap: ViewModifier {
+    let mode: SettingsView.Mode
+    let availableHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        let cap = SettingsView.maximumHeight(availableHeight: availableHeight)
         switch mode {
-        case .overview: content.preference(key: SettingsDesiredHeightKey.self, value: height)
-        case .service: content.preference(key: ServiceDetailHeightKey.self, value: height)
+        case .overview: content.transformPreference(SettingsDesiredHeightKey.self) { $0 = min(cap, ceil($0)) }
+        case .service: content.transformPreference(ServiceDetailHeightKey.self) { $0 = min(cap, ceil($0)) }
         }
     }
 }

@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.1] - 2026-09-29
+
+### Fixed
+
+- Switching Settings between Services / Translation / General no longer stalls the panel for 30-40ms before the window starts to move. The three pages now stay mounted instead of being rebuilt on every switch, and the page's height is reported in one pass instead of three. The stall is roughly halved (to about 20-25ms); the rest is SwiftUI's own commit.
+- The input in Translation ▸ Additional instructions gives up the keyboard when you switch tabs, so text can't be typed into a page that is no longer visible.
+
 ## [1.19.0] - 2026-09-29
 
 ### Added
