@@ -679,6 +679,12 @@ final class NativeLayoutTests: XCTestCase {
                 // placeholder and the history list sit above the same columns, and while the
                 // window catches up a history row is revealed right against the bar's top.
                 let band = max(0, bitmap.pixelsHigh - Int(36 * scale))..<bitmap.pixelsHigh
+                // The history glyph swaps clock ↔ clock.fill with a replace transition, which
+                // shrinks the old symbol to nothing in place and grows the new one. Mid-swap
+                // only a handful of pixels clear the ink threshold, and a centroid of one or
+                // two pixels lands anywhere on the ring (57 and 62 against a true 59.5). So a
+                // glyph counts as measured only with at least 16pt² of ink — half the settled
+                // outline clock — and a smaller one is in transition, not missing.
                 func glyphY(_ start: CGFloat, _ end: CGFloat) -> CGFloat? {
                     var total: CGFloat = 0
                     var count: CGFloat = 0
@@ -690,11 +696,14 @@ final class NativeLayoutTests: XCTestCase {
                             count += 1
                         }
                     }
-                    return count > 0 ? total / count : nil
+                    return count >= 16 * scale * scale ? total / count : nil
                 }
-                let clock = try XCTUnwrap(glyphY(width - 70, width - 56), "History glyph must remain visible")
                 let chip = try XCTUnwrap(glyphY(20, 60), "Direction chip must remain visible")
-                XCTAssertEqual(clock, chip, accuracy: 3, "History icon must travel with the rest of the bar")
+                if let clock = glyphY(width - 70, width - 56) {
+                    XCTAssertEqual(clock, chip, accuracy: 3, "History icon must travel with the rest of the bar")
+                } else {
+                    XCTAssertLessThan(sample, 29, "History glyph must be back once the toggle settles")
+                }
                 if [1, 5, 10].contains(sample) {
                     try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-history-toggle-\(expanded)-\(sample).png"))
                 }
