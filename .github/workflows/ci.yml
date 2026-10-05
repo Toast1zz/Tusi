@@ -8,13 +8,19 @@ on:
 jobs:
   test-and-build:
     runs-on: macos-26
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # maxim-lobanov/setup-xcode@v1.7.0 — fail the job if 26.6 is not on the image
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
+        with:
+          xcode-version: '26.6'
 
       - name: toolchain
         run: |
+          xcode-select -p
           xcodebuild -version
           swift --version
 
@@ -34,3 +40,14 @@ jobs:
 
       - name: release build gate (strict concurrency, warnings-as-errors)
         run: ./build.sh release
+
+      # Only reached when tests + release gate both succeed.
+      # actions/upload-artifact@v7.0.1
+      - name: upload release zips
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Tusi-release-zips
+          path: |
+            dist/Tusi-arm64.zip
+            dist/Tusi-universal.zip
+          if-no-files-found: error
