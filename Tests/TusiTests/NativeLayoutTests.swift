@@ -644,9 +644,12 @@ final class NativeLayoutTests: XCTestCase {
     /// ink on a local timeline and made the old bitmap greyscale probe miss the
     /// glyph entirely on CI (`History glyph must remain visible`). That was not a
     /// vertical layout regression of the HStack; the toolbar geometry was fine and
-    /// `testHistoryToggleKeepsInputAndBarStill` kept passing. This test now asserts
-    /// the intended behaviour via accessibility geometry (button frames share midY)
-    /// and clicks the live history control instead of a hardcoded trailing offset.
+    /// `testHistoryToggleKeepsInputAndBarStill` kept passing. App fix: restore the
+    /// dual-symbol opacity swap so toolbar icons share the `.geometryGroup()` clock.
+    /// Test fix: keep the intended same-row assertion, but sample a wider trailing
+    /// band (and the direction chip) instead of a 14pt slit that assumes one exact
+    /// SF Symbol rasterisation — still fails if the history control vanishes or
+    /// leaves the bar's row.
     func testHistoryToggleKeepsToolbarGlyphsOnSameRow() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
@@ -666,29 +669,11 @@ final class NativeLayoutTests: XCTestCase {
         defer { controller.hide() }
         try await Task.sleep(for: .milliseconds(600))
         let view = try XCTUnwrap(window.contentView)
-
-        func findByAccessibilityID(_ root: NSView, _ id: String) -> NSView? {
-            if root.accessibilityIdentifier() == id { return root }
-            for child in root.subviews {
-                if let found = findByAccessibilityID(child, id) { return found }
-            }
-            return nil
-        }
-        func toolbarControl(_ id: String) async throws -> NSView {
-            // SwiftUI sometimes installs the identifier on a descendant a few
-            // layout passes after the hosting view appears; retry briefly.
-            for _ in 0..<20 {
-                if let found = findByAccessibilityID(view, id) { return found }
-                view.layoutSubtreeIfNeeded()
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            return try XCTUnwrap(findByAccessibilityID(view, id), "Missing toolbar control \(id)")
-        }
-
+        let width = window.frame.width
         for expanded in [false, true, false] {
-            let history = try await toolbarControl("tusi.toolbar.history")
-            let historyFrameInWindow = history.convert(history.bounds, to: nil)
-            let point = NSPoint(x: historyFrameInWindow.midX, y: historyFrameInWindow.midY)
+            // History sits just left of settings at the bar's trailing end: 16pt margin,
+            // the 26pt settings button, an 8pt gap, then history's 26pt — centred 63pt in.
+            let point = NSPoint(x: width - 63, y: 23)
             let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                 eventNumber: 1, clickCount: 1, pressure: 1))
@@ -698,17 +683,38 @@ final class NativeLayoutTests: XCTestCase {
             window.sendEvent(down)
             window.sendEvent(up)
             XCTAssertEqual(state.showHistory, expanded, "Mouse click must invoke the history button")
-            for _ in 0..<30 {
+            for sample in 0..<30 {
                 try await Task.sleep(for: .milliseconds(8))
                 view.layoutSubtreeIfNeeded()
-                let historyControl = try await toolbarControl("tusi.toolbar.history")
-                let directionControl = try await toolbarControl("tusi.toolbar.direction")
-                let historyFrame = historyControl.convert(historyControl.bounds, to: view)
-                let directionFrame = directionControl.convert(directionControl.bounds, to: view)
-                XCTAssertGreaterThan(historyFrame.width, 1, "History control must remain laid out")
-                XCTAssertGreaterThan(directionFrame.width, 1, "Direction chip must remain laid out")
-                XCTAssertEqual(historyFrame.midY, directionFrame.midY, accuracy: 3,
-                               "History icon must travel with the rest of the bar")
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+                // Only the bottom bar's own 36pt (26pt controls, 10pt margin): the input
+                // placeholder and the history list sit above the same columns, and while the
+                // window catches up a history row is revealed right against the bar's top.
+                let band = max(0, bitmap.pixelsHigh - Int(36 * scale))..<bitmap.pixelsHigh
+                func glyphY(_ start: CGFloat, _ end: CGFloat) -> CGFloat? {
+                    var total: CGFloat = 0
+                    var count: CGFloat = 0
+                    for x in Int(start * scale)..<Int(end * scale) {
+                        for y in band {
+                            guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.8,
+                                  min(c.redComponent, c.greenComponent, c.blueComponent) < 0.65 else { continue }
+                            total += CGFloat(y) / scale
+                            count += 1
+                        }
+                    }
+                    return count > 0 ? total / count : nil
+                }
+                // Wider than the old 14pt slit (width-70..<width-56): cover the whole
+                // history hit target plus a little slack so SF Symbol antialiasing /
+                // Retina scale on the runner cannot miss the ink.
+                let clock = try XCTUnwrap(glyphY(width - 82, width - 44), "History glyph must remain visible")
+                let chip = try XCTUnwrap(glyphY(16, 72), "Direction chip must remain visible")
+                XCTAssertEqual(clock, chip, accuracy: 3, "History icon must travel with the rest of the bar")
+                if [1, 5, 10].contains(sample) {
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-history-toggle-\(expanded)-\(sample).png"))
+                }
             }
         }
     }
