@@ -1136,7 +1136,8 @@ struct TranslatorView: View {
                 help: panelState.pinned ? "取消固定" : "固定面板（点击外部不关闭）",
                 // The pin glyph is 14pt tall next to 13pt circles (clock/gearshape) at the
                 // same 12pt font size; nudge it down 0.5pt so its optical centre aligns.
-                glyphOffset: 0.5
+                glyphOffset: 0.5,
+                accessibilityID: "tusi.toolbar.pin"
             ) {
                 panelState.pinned.toggle()
             }
@@ -1148,12 +1149,14 @@ struct TranslatorView: View {
                 systemName: "clock",
                 activeSystemName: "clock.fill",
                 isActive: panelState.showHistory,
-                help: settings.commandLabel(panelState.showHistory ? L("关闭历史") : L("翻译历史"), action: .history)
+                help: settings.commandLabel(panelState.showHistory ? L("关闭历史") : L("翻译历史"), action: .history),
+                accessibilityID: "tusi.toolbar.history"
             ) {
                 panelState.showHistory.toggle()
             }
 
-            BarIconButton(systemName: "gearshape", help: "设置 (⌘,)") {
+            BarIconButton(systemName: "gearshape", help: "设置 (⌘,)",
+                          accessibilityID: "tusi.toolbar.settings") {
                 panelState.showSettings = true
             }
         }

@@ -52,17 +52,27 @@ struct BarIconButton: View {
     var isActive = false
     var help: String
     var glyphOffset: CGFloat = 0
+    /// Stable AX id for layout tests (toolbar pin/history/settings).
+    var accessibilityID: String? = nil
     let action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            // One symbol that is replaced, the same way the copy capsule swaps its glyph.
-            // It animates only when the toggle rides a timeline (history's `.layout`);
-            // the pin has none and swaps in place, as before.
-            Image(systemName: isActive ? (activeSystemName ?? systemName) : systemName)
-                .contentTransition(.symbolEffect(.replace))
+            // Keep both symbol identities mounted and cross-fade with opacity.
+            // A `.symbolEffect(.replace)` content transition morphs on the button's
+            // local timeline and can desync from the toolbar `.geometryGroup()`,
+            // which is exactly the snap the history-toggle regression test guards.
+            // (Copy capsule still uses replace — it is not part of that shared bar.)
+            ZStack {
+                Image(systemName: systemName)
+                    .opacity(activeSystemName != nil && isActive ? 0 : 1)
+                if let activeSystemName {
+                    Image(systemName: activeSystemName)
+                        .opacity(isActive ? 1 : 0)
+                }
+            }
                 .font(Theme.control)
                 .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .offset(y: glyphOffset)
@@ -80,6 +90,7 @@ struct BarIconButton: View {
         // own clock while the rest of the bar follows `.layout`.
         .accessibilityLabel(LocalizedStringKey(help))
         .help(LocalizedStringKey(help))
+        .accessibilityIdentifier(accessibilityID ?? "tusi.toolbar.icon")
     }
 }
 
@@ -134,6 +145,7 @@ struct DirectionChip: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(L("选择目标语言"))
+        .accessibilityIdentifier("tusi.toolbar.direction")
         .motion(.micro, value: hovering)
         .motion(.state, value: restingState)
     }

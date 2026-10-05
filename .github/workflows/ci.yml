@@ -8,13 +8,27 @@ on:
 jobs:
   test-and-build:
     runs-on: macos-26
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      # Prefer the same Xcode the project was validated against; fall back to the
+      # newest stable image install if 26.6 is ever removed from the runner.
+      - name: Select Xcode
+        id: xcode
+        uses: maxim-lobanov/setup-xcode@v1.7.0
+        with:
+          xcode-version: '26.6'
+        continue-on-error: true
+
+      - name: Select Xcode (fallback latest-stable)
+        if: steps.xcode.outcome != 'success'
+        uses: maxim-lobanov/setup-xcode@v1.7.0
+        with:
+          xcode-version: latest-stable
 
       - name: toolchain
         run: |
+          xcode-select -p
           xcodebuild -version
           swift --version
 
@@ -34,3 +48,14 @@ jobs:
 
       - name: release build gate (strict concurrency, warnings-as-errors)
         run: ./build.sh release
+
+      # Only reached when tests + release gate both succeed. Uploading the zips here
+      # means a red CI never produces downloadable CI artifacts for a release cut.
+      - name: upload release zips
+        uses: actions/upload-artifact@v7
+        with:
+          name: Tusi-release-zips
+          path: |
+            dist/Tusi-arm64.zip
+            dist/Tusi-universal.zip
+          if-no-files-found: error
