@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.2] - 2026-10-05
+
+### Fixed
+
+- The history-toolbar layout test no longer fails on CI while the history button's symbol replace transition is still running. Frames without dark-enough pixels are skipped; settled frames still require the history and direction glyphs to share a row.
+- GitHub Actions pins checkout, setup-xcode, and upload-artifact to commit SHAs, requires Xcode 26.6, and uploads release zips only after tests and the release build gate succeed. No app behavior change.
+
 ## [1.19.1] - 2026-09-29
 
 ### Fixed
