@@ -636,20 +636,9 @@ final class NativeLayoutTests: XCTestCase {
         XCTAssertEqual(window.frame.height, populated.height, accuracy: 1)
     }
 
-    /// History and the direction chip must stay on one toolbar row while history
-    /// opens and closes — including under real mouse-down/mouse-up, which used to
-    /// let the history glyph snap ahead of its neighbours on a separate clock.
-    ///
-    /// v1.18.0 swapped `BarIconButton` to `.symbolEffect(.replace)`, which morphs
-    /// ink on a local timeline and made the old bitmap greyscale probe miss the
-    /// glyph entirely on CI (`History glyph must remain visible`). That was not a
-    /// vertical layout regression of the HStack; the toolbar geometry was fine and
-    /// `testHistoryToggleKeepsInputAndBarStill` kept passing. App fix: restore the
-    /// dual-symbol opacity swap so toolbar icons share the `.geometryGroup()` clock.
-    /// Test fix: keep the intended same-row assertion, but sample a wider trailing
-    /// band (and the direction chip) instead of a 14pt slit that assumes one exact
-    /// SF Symbol rasterisation — still fails if the history control vanishes or
-    /// leaves the bar's row.
+    /// Mouse-toggles history and checks the history glyph stays on the same row as
+    /// the direction chip. History band is the full 26pt control (plus slack), not a
+    /// 14pt slit through the glyph centre.
     func testHistoryToggleKeepsToolbarGlyphsOnSameRow() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
@@ -706,11 +695,8 @@ final class NativeLayoutTests: XCTestCase {
                     }
                     return count > 0 ? total / count : nil
                 }
-                // Wider than the old 14pt slit (width-70..<width-56): cover the whole
-                // history hit target plus a little slack so SF Symbol antialiasing /
-                // Retina scale on the runner cannot miss the ink.
                 let clock = try XCTUnwrap(glyphY(width - 82, width - 44), "History glyph must remain visible")
-                let chip = try XCTUnwrap(glyphY(16, 72), "Direction chip must remain visible")
+                let chip = try XCTUnwrap(glyphY(20, 60), "Direction chip must remain visible")
                 XCTAssertEqual(clock, chip, accuracy: 3, "History icon must travel with the rest of the bar")
                 if [1, 5, 10].contains(sample) {
                     try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-history-toggle-\(expanded)-\(sample).png"))
@@ -719,6 +705,10 @@ final class NativeLayoutTests: XCTestCase {
         }
     }
 
+    /// A click on a segment selects it, once, and does not drag the panel. (XCTest's
+    /// synthetic `leftMouseDragged` events do not drive SwiftUI drag gestures — no
+    /// hardware button is down — so the drag itself is covered by the release rule below
+    /// and by hand.)
     /// Opening and closing history from a typed, untranslated input — the state it was
     /// reported to jitter in. Before the content was clipped above a bar that rides the
     /// window edge, the input jumped 43pt up and back on opening and the bar slid out of
