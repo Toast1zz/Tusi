@@ -636,10 +636,6 @@ final class NativeLayoutTests: XCTestCase {
         XCTAssertEqual(window.frame.height, populated.height, accuracy: 1)
     }
 
-    /// Mouse-toggles history and checks that, once both glyphs are visible, the
-    /// history icon stays on the same row as the direction chip. A few post-click
-    /// frames may lack dark-enough pixels while the symbol replace transition runs;
-    /// those frames are skipped. Fail if too few settled frames are observed.
     func testHistoryToggleKeepsToolbarGlyphsOnSameRow() async throws {
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
@@ -673,8 +669,7 @@ final class NativeLayoutTests: XCTestCase {
             window.sendEvent(down)
             window.sendEvent(up)
             XCTAssertEqual(state.showHistory, expanded, "Mouse click must invoke the history button")
-            var settledFrames = 0
-            for sample in 0..<45 {
+            for sample in 0..<30 {
                 try await Task.sleep(for: .milliseconds(8))
                 view.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
@@ -697,19 +692,13 @@ final class NativeLayoutTests: XCTestCase {
                     }
                     return count > 0 ? total / count : nil
                 }
-                // Full history hit target (26pt) plus slack, not a 14pt slit through centre.
-                // While the replace transition is still morphing, the dark-pixel centroid can
-                // drift a few points even though both glyphs are "visible"; skip those frames.
-                guard let clock = glyphY(width - 82, width - 44),
-                      let chip = glyphY(20, 60),
-                      abs(clock - chip) <= 3 else { continue }
-                settledFrames += 1
+                let clock = try XCTUnwrap(glyphY(width - 70, width - 56), "History glyph must remain visible")
+                let chip = try XCTUnwrap(glyphY(20, 60), "Direction chip must remain visible")
+                XCTAssertEqual(clock, chip, accuracy: 3, "History icon must travel with the rest of the bar")
                 if [1, 5, 10].contains(sample) {
                     try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/tusi-history-toggle-\(expanded)-\(sample).png"))
                 }
             }
-            XCTAssertGreaterThanOrEqual(settledFrames, 8,
-                "History and direction glyphs must be visible together after the toggle settles")
         }
     }
 
