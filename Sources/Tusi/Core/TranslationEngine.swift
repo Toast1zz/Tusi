@@ -587,7 +587,7 @@ final class TranslationEngine: ObservableObject {
             failureKind = .notConfigured
             state = .failed(settings.profiles[SettingsStore.localProfileIndex].isUsable
                 ? TranslationError.localModelUnavailable.localizedDescription
-                : L("还没有配置可用的翻译服务，请先在设置中填写"))
+                : L("未配置翻译服务"))
             return
         }
 

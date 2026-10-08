@@ -426,7 +426,9 @@ struct TranslatorView: View {
         return VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topLeading) {
                 if engine.input.isEmpty {
-                    Text(settings.commandLabel(L("输入中文或任意语言"), action: .translate))
+                    // No "(⏎)": a shortcut belongs in a tooltip or a menu, not in the text
+                    // the user is about to type over.
+                    Text(L("输入中文或任意语言"))
                         .font(Theme.contentFont)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
@@ -676,11 +678,11 @@ struct TranslatorView: View {
                     notice(String(format: L("没能取到在线结果 · %@"), escalationFailure), systemImage: "cloud.slash")
                 }
                 if engine.outputLanguageMismatch {
-                    notice(L("结果语言与目标不符，建议重试"), systemImage: "exclamationmark.triangle")
+                    notice(L("结果语言与目标不符"), systemImage: "exclamationmark.triangle")
                 } else if engine.interrupted {
-                    notice(L("已停止，结果不完整"), systemImage: "stop.circle")
+                    notice(L("已停止"), systemImage: "stop.circle")
                 } else if engine.outputCapped {
-                    notice(L("结果过长，已截断，仅保留开头部分"), systemImage: "scissors")
+                    notice(L("结果过长，已截断"), systemImage: "scissors")
                 } else if engine.restoredFromTruncatedHistory {
                     notice(L("历史仅保留部分内容"), systemImage: "scissors")
                 }
@@ -763,15 +765,17 @@ struct TranslatorView: View {
                 Button {
                     engine.escalate()
                 } label: {
-                    Text(settings.commandLabel(L("换在线重译"), action: .translate))
+                    // The shortcut lives in the tooltip. Inline, "(⏎)" sat one item away
+                    // from "长按 ⏎ 重新翻译" — two ⏎ on one line meaning two different things.
+                    Text(L("换在线重译"))
                         .font(Theme.meta)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 .buttonStyle(.plain)
-                .help(engine.escalationTargetLabel.map {
+                .help(settings.commandLabel(engine.escalationTargetLabel.map {
                     String(format: L("用 %@ 再翻一次，两个结果都会留着"), $0)
-                } ?? L("请求在线版本，两个结果都会留着"))
+                } ?? L("请求在线版本，两个结果都会留着"), action: .translate))
                 .transition(.opacity)
             }
 
@@ -830,7 +834,6 @@ struct TranslatorView: View {
     private struct HistoryDay: Identifiable {
         let id: Date
         let title: String
-        let detail: String
         var records: [TranslationEngine.Record]
     }
 
@@ -845,14 +848,14 @@ struct TranslatorView: View {
                 days[days.count - 1].records.append(record)
             } else {
                 days.append(HistoryDay(id: day, title: Self.dayTitle(day, calendar: calendar),
-                                       detail: Self.dayDetail(day, calendar: calendar), records: [record]))
+                                       records: [record]))
             }
         }
         return days
     }
 
-    /// 今天, 昨天, then a short date in the interface language (with the year only when
-    /// it is not this year).
+    /// 今天, 昨天, then a short date and weekday in the interface language (with the year
+    /// only when it is not this year).
     static func dayTitle(_ day: Date, calendar: Calendar = .current, now: Date = Date()) -> String {
         if calendar.isDate(day, inSameDayAs: now) { return L("今天") }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
@@ -863,20 +866,8 @@ struct TranslatorView: View {
         formatter.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans")
         formatter.calendar = calendar
         formatter.setLocalizedDateFormatFromTemplate(
-            calendar.isDate(day, equalTo: now, toGranularity: .year) ? "MMMd" : "yMMMd"
+            calendar.isDate(day, equalTo: now, toGranularity: .year) ? "MMMdEEE" : "yMMMdEEE"
         )
-        return formatter.string(from: day)
-    }
-
-    /// The other half of a day header: the date and weekday for 今天/昨天, the weekday
-    /// alone once the title is already a date.
-    static func dayDetail(_ day: Date, calendar: Calendar = .current, now: Date = Date()) -> String {
-        let named = calendar.isDate(day, inSameDayAs: now)
-            || calendar.date(byAdding: .day, value: -1, to: now).map { calendar.isDate(day, inSameDayAs: $0) } == true
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans")
-        formatter.calendar = calendar
-        formatter.setLocalizedDateFormatFromTemplate(named ? "MMMdEEE" : "EEE")
         return formatter.string(from: day)
     }
 
@@ -891,17 +882,37 @@ struct TranslatorView: View {
 
     /// Sized to the list's content up to a cap, so a short history doesn't sit in an
     /// empty viewport and a long one scrolls.
+    ///
+    /// A list longer than the cap does not stop wherever the cap happens to fall. Its
+    /// resting edge is placed under a translation's first line — a whole line, like the
+    /// result's own cap — where the bottom fade turns that line into "there is more". Cut at the cap, the edge could land in the 22pt
+    /// gap between two days: the fade then covered empty space and the next day's header
+    /// at near-zero opacity, and the list looked like it simply ended in a blank strip.
     private var historyViewportHeight: CGFloat? {
         guard !engine.history.isEmpty else { return nil }
-        let days = CGFloat(historyDays.count)
         let meta = Self.metaLineHeight
-        let rows = engine.history.reduce(0) { $0 + historyRowHeight(for: $1) }
-        let headers = days * (meta + Self.dayHeaderGap) + max(days - 1, 0) * Self.dayGap
         // The footer sits inside this height but outside the scroll view, so a long
         // history scrolls above it and the footer stays in view.
         let footer = Self.historyFooterGap + meta
-        return max(60, min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140,
-                           rows + headers + footer))
+        let cap = min(320, panelState.availableHeight - min(inputHeight, maxInputHeight) - 140)
+        let listCap = cap - footer
+
+        // Walk the list in the order it is laid out, keeping the deepest cut that still
+        // fits: right under a row's first translation line.
+        let cutInRow = Self.historyRowVerticalPadding + meta + Self.historyRowSpacing
+            + firstLineHeight
+        var y: CGFloat = 0
+        var restingCut: CGFloat?
+        for (index, day) in historyDays.enumerated() {
+            if index > 0 { y += Self.dayGap }
+            y += meta + Self.dayHeaderGap
+            for record in day.records {
+                if y + cutInRow <= listCap { restingCut = y + cutInRow }
+                y += historyRowHeight(for: record)
+            }
+        }
+        let list = y <= listCap ? y : (restingCut ?? listCap)
+        return max(60, list + footer)
     }
 
     private var historyList: some View {
@@ -919,21 +930,16 @@ struct TranslatorView: View {
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(days) { day in
-                            // The day as a full-width row — its name on the left, the date
-                            // on the right — so the boundary between days is drawn by the
-                            // header itself and the space above it, not by a rule.
-                            HStack(spacing: 8) {
-                                Text(day.title)
-                                    .font(Theme.metaMedium)
-                                    .foregroundStyle(.secondary)
-                                Spacer(minLength: 8)
-                                Text(day.detail)
-                                    .font(Theme.meta)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, Self.resultNoticeInset)
-                            .padding(.top, day.id == days.first?.id ? 0 : Self.dayGap)
-                            .padding(.bottom, Self.dayHeaderGap)
+                            // The day's name alone: 今天, 昨天, or the date with its weekday.
+                            // The boundary between days is drawn by the space above it,
+                            // not by a rule.
+                            Text(day.title)
+                                .font(Theme.metaMedium)
+                                .foregroundStyle(Theme.inkSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, Self.resultNoticeInset)
+                                .padding(.top, day.id == days.first?.id ? 0 : Self.dayGap)
+                                .padding(.bottom, Self.dayHeaderGap)
                             ForEach(day.records) { record in
                                 HistoryRecordRow(record: record) {
                                     engine.restoreHistory(record)
@@ -966,16 +972,18 @@ struct TranslatorView: View {
         .frame(height: historyViewportHeight, alignment: .top)
     }
 
-    /// One row under the list that never scrolls away: how much history keeps on the
-    /// left, the commands on the right. Undo appears on the right too, beside Clear History
+    /// One row under the list that never scrolls away: the commands on the right, and on
+    /// the left only a state worth saying (the list was just emptied). No standing note
+    /// about how much history is kept — the retention setting already says it, and a fixed
+    /// "last 50" contradicted a 24-hour retention. Undo appears on the right too, beside Clear History
     /// after a single deletion, so the way back is where the click just was. It stays until
     /// history is left. Clearing everything leaves history at once and takes its undo along.
     private var historyFooter: some View {
         HStack(spacing: 12) {
-            Text(engine.history.isEmpty
-                 ? L("历史已清空")
-                 : String(format: L("只保留最近 %d 条"), TranslationEngine.historyCapacity))
-                .foregroundStyle(.tertiary)
+            if engine.history.isEmpty {
+                Text(L("历史已清空"))
+                    .foregroundStyle(.tertiary)
+            }
             Spacer(minLength: 8)
             if engine.canUndoHistoryDeletion {
                 Button(L("撤销")) { engine.undoHistoryDeletion() }
@@ -1010,9 +1018,17 @@ struct TranslatorView: View {
     /// characters showing instead of erroring — that's happened for real in this exact
     /// row once already. Scrolling degrades instead of destroying legibility, and costs
     /// nothing at any width where everything already fits.
+    ///
+    /// When the row fits, it is laid out without the scroll view so its `Spacer` can
+    /// actually expand and put 「互换」— an action, not a target — at the trailing edge.
+    /// Inside a horizontal ScrollView the spacer only ever got its 4pt minimum, which read
+    /// as a slightly-off gap rather than a separate group.
     private var languagePickerRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ViewThatFits(in: .horizontal) {
             languagePickerPills
+            ScrollView(.horizontal, showsIndicators: false) {
+                languagePickerPills
+            }
         }
     }
 
@@ -1184,15 +1200,17 @@ private struct HistoryRecordRow: View {
             Button(action: action) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
+                        // Plain colors, not .secondary/.tertiary: the list is masked (see
+                        // `Theme.inkSecondary`).
                         Text(record.input)
                             .font(Theme.meta)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.inkSecondary)
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         if record.isTruncated {
                             Image(systemName: "scissors")
                                 .font(Theme.meta)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(Theme.inkTertiary)
                                 .help(L("历史仅保留部分内容"))
                                 .opacity(hovering ? 0 : 1)
                         }
@@ -1224,7 +1242,7 @@ private struct HistoryRecordRow: View {
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(Theme.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.inkSecondary)
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }

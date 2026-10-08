@@ -2,6 +2,20 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.2] - 2026-10-08
+
+### Fixed
+
+- In dark mode the day titles and source lines in History were nearly invisible; they are readable now. The list's fade flattened their translucent ink, so they use plain system secondary and tertiary colors.
+- The Test Connection buttons no longer look clickable while disabled.
+- A long History list no longer ends in a blank strip when its bottom edge fell between two days. The list now stops under a translation's first line, which fades to show there is more.
+
+### Changed
+
+- Fewer words around the result: the shortcut is gone from the input placeholder and from "Translate online" (it stays in the tooltip), the standing "Only the last 50 are kept" note is removed from History, and each day shows one heading ("Today", "Yesterday", or a date with its weekday) instead of a name and a repeated date.
+- Shorter messages: "No translation service configured", "Result isn't in the target language", "Stopped", "Result too long, truncated", and "Backup" for an answer from the backup service. The update link reads "Download 1.3.0".
+- The language row puts Swap at the trailing edge when everything fits.
+
 ## [1.19.1] - 2026-09-29
 
 ### Fixed

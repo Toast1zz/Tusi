@@ -312,7 +312,7 @@ struct SettingsView: View {
                 HStack(spacing: 4) {
                     Text(historyRetentionTitle)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(Theme.caption2Semibold)
                 }
                 .font(Theme.footnote)
                 .foregroundStyle(.secondary)
@@ -841,7 +841,7 @@ struct SettingsView: View {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(Theme.footnote)
-                        Text(String(format: L("有新版本 %@，点击下载"), version))
+                        Text(String(format: L("下载 %@"), version))
                             .font(Theme.footnote2Medium)
                     }
                     .foregroundStyle(Theme.accent)
@@ -1021,9 +1021,9 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Group {
                         if showJevKey {
-                            TextField("Jev API Key", text: $settings.jevAPIKey, prompt: Self.placeholder("Jev API Key"))
+                            TextField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""))
                         } else {
-                            SecureField("Jev API Key", text: $settings.jevAPIKey, prompt: Self.placeholder("Jev API Key"))
+                            SecureField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""))
                         }
                     }
                     .textFieldStyle(.plain)
@@ -1063,7 +1063,7 @@ struct SettingsView: View {
                         }
                         Text("测试连接")
                     }
-                    .foregroundStyle(Theme.accent)
+                    .modifier(AccentWhenEnabled())
                 }
                 .controlSize(.large)
                 .disabled(jevTestState == .testing || settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1195,7 +1195,7 @@ struct SettingsView: View {
                 }
                 Text("测试连接")
             }
-            .foregroundStyle(Theme.accent)
+            .modifier(AccentWhenEnabled())
         }
         .controlSize(.large)
         .disabled(testState == .testing || !settings.isSlotAvailable(safeEditingIndex))
@@ -1272,6 +1272,17 @@ struct SettingsView: View {
             }
         }
         testTasks[index] = task
+    }
+}
+
+/// Accent ink on an enabled control, tertiary on a disabled one. A fixed
+/// `.foregroundStyle(Theme.accent)` overrides the system's disabled dimming, which left a
+/// disabled Test Connection looking exactly as clickable as an enabled one.
+private struct AccentWhenEnabled: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(isEnabled ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
     }
 }
 

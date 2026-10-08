@@ -70,6 +70,16 @@ enum Theme {
         })
     }
 
+    /// Secondary and tertiary ink as plain colors, for text inside a masked view.
+    ///
+    /// `.secondary` and `.tertiary` are vibrant on the panel's material: they blend with
+    /// what is behind the window. A `.mask` flattens its content into one layer first,
+    /// which drops that blending — in dark mode the history list's day titles and source
+    /// lines came out dark grey on dark grey. These system colors carry their own alpha
+    /// and read the same masked or not.
+    static let inkSecondary = Color(nsColor: .secondaryLabelColor)
+    static let inkTertiary = Color(nsColor: .tertiaryLabelColor)
+
     /// The panel's physical surface corner. Larger than any inner control radius so
     /// nested corners stay visually distinct.
     static let panelCornerRadius: CGFloat = 20

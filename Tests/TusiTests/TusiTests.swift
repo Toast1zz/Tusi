@@ -957,7 +957,7 @@ final class TusiTests: XCTestCase {
         engine.input = "hi"
         engine.translate()
         if case .failed(let message) = engine.state {
-            XCTAssertTrue(message.contains("还没有配置可用的翻译服务"), message)
+            XCTAssertTrue(message.contains("未配置翻译服务"), message)
         } else {
             XCTFail("expected failed state, got \(engine.state)")
         }

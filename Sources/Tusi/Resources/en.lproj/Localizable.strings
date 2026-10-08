@@ -18,9 +18,9 @@
 "输入中文或任意语言，⏎ 翻译" = "Type Chinese or any language, ⏎ to translate";
 "翻译文风 · 当前模型：%@" = "Tone · Model: %@";
 "停止" = "Stop";
-"已停止，结果不完整" = "Stopped — result is incomplete";
-"结果过长，已截断，仅保留开头部分" = "Result was too long and was truncated — only the beginning is kept";
-"结果语言与目标不符，建议重试" = "Result isn’t in the target language — try again";
+"已停止" = "Stopped";
+"结果过长，已截断" = "Result too long, truncated";
+"结果语言与目标不符" = "Result isn’t in the target language";
 "⏎ 翻译" = "⏎ Translate";
 "取消固定" = "Unpin";
 "固定面板（点击外部不关闭）" = "Pin panel (stays open when you click outside)";
@@ -54,7 +54,7 @@
 "检查更新" = "Check for Updates";
 "已是最新" = "Up to date";
 "检查失败" = "Check failed";
-"有新版本 %@，点击下载" = "New version %@ available — click to download";
+"下载 %@" = "Download %@";
 "有新版本 %@ →" = "New version %@ →";
 "全局呼出快捷键注册失败，可能被其他应用占用；换一个组合键，或点菜单栏图标呼出" = "The global summon shortcut couldn't be registered — another app may already be using it. Try a different combination, or use the menu-bar icon instead.";
 "API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务" = "Stored only in your Keychain and sent only to the API service you configure";
@@ -200,7 +200,6 @@
 "用更强的模型再翻一次，两个结果都会留着" = "Translate again with a stronger model — both answers are kept";
 "在线重译中…" = "Retranslating online…";
 "没能取到在线结果 · %@" = "Couldn't get an online answer · %@";
-"%@ · 主用失败后接手" = "%@ · took over after the primary failed";
 "结果来自 %@" = "Answered by %@";
 "显示 %@ 的翻译" = "Show the translation from %@";
 "复制失败" = "Copy failed";
@@ -249,7 +248,7 @@
 "本地服务未就绪" = "Local service is not ready";
 "当前使用：%@" = "Active: %@";
 "使用与翻译相同的协议策略，最多发送 2 个短测试请求" = "Uses the same protocol strategy as translation, with up to two short test requests.";
-"还没有配置可用的翻译服务，请先在设置中填写" = "No usable translation service configured yet — fill one in Settings";
+"未配置翻译服务" = "No translation service configured";
 "本地和在线都失败了 · %@" = "Both the local model and the online service failed · %@";
 "两套在线服务都失败了 · %@" = "Both online services failed · %@";
 "长按 ⏎ 重新翻译" = "Hold ⏎ to translate again";
@@ -268,7 +267,6 @@
 "今天" = "Today";
 "昨天" = "Yesterday";
 "还没有翻译记录" = "No translations yet";
-"只保留最近 %d 条" = "Only the last %d are kept";
 "历史已清空" = "History cleared";
 
 "启用本地模型" = "Enable local model";

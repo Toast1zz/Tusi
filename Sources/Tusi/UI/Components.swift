@@ -508,12 +508,13 @@ struct StreamingPlaceholder: View {
 /// no icon, and the full model and host on hover.
 struct ResultProvenance: View {
     let label: String
-    /// This answer exists only because the slot ahead of it failed.
+    /// This answer exists only because the slot ahead of it failed. Shown as "备用": the
+    /// tooltip names the service, and why it answered needs no sentence.
     let afterFailover: Bool
     let detail: String
 
     var body: some View {
-        Text(afterFailover ? String(format: L("%@ · 主用失败后接手"), label) : label)
+        Text(afterFailover ? L("备用") : label)
             .font(Theme.meta)
             // Secondary, not tertiary: which service answered is information the user
             // reads, and tertiary ink measured 2:1 against the panel.
