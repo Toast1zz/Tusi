@@ -119,14 +119,12 @@ struct SettingsView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             // The panel's height is the header, the body and the page's own padding (18 above,
-            // 18 below, 12 between). Each part reports its half of that and the preference
-            // sums them, so the total lands in the same pass as the layout. Storing the
-            // parts in @State and reporting the sum from `body` cost two extra updates,
-            // ~13ms each, on every tab change — a stall before the window even moved.
+            // 18 below, 12 between). Each part reports its share and the preference sums
+            // them, so the total lands in the same pass as the layout.
             .modifier(SettingsHeightPart(mode: mode, padding: 18 + 6))
-            // The three overview pages stay mounted and only the selected one shows. Remounting
-            // a page on every tab change rebuilt ~40 views in the same pass as the click — a
-            // 30-40ms stall before the window moved. Hidden pages report no height.
+            // The three overview pages stay mounted and only the selected one shows, so a tab
+            // change does not rebuild a page in the same pass as the click. Hidden pages
+            // report no height.
             ZStack(alignment: .top) {
                 if mode == .service {
                     settingsPage(active: true) { serviceDetail }
@@ -160,8 +158,8 @@ struct SettingsView: View {
             if !settings.isPreview { await localModels.refresh(settings: settings) }
         }
         .onChange(of: panelState.settingsSection) { _, _ in
-            // Pages stay mounted, so a text view the user was typing in is no longer
-            // destroyed by the switch; without this it would keep the keyboard while hidden.
+            // Pages stay mounted, so a text view the user was typing in would otherwise keep
+            // the keyboard while hidden.
             NSApp.keyWindow?.makeFirstResponder(nil)
             focusedField = nil
             showKey = false
@@ -314,7 +312,7 @@ struct SettingsView: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(Theme.caption2Semibold)
                 }
-                .font(Theme.footnote)
+                .font(Theme.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 3)
@@ -493,69 +491,100 @@ struct SettingsView: View {
                         .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                         .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                 } content: {
-                    HStack(spacing: 6) {
-                        Group {
-                            if showKey {
-                                TextField("API Key", text: $settings.profiles[safeEditingIndex].apiKey, prompt: Self.placeholder("sk-…"))
-                            } else {
-                                SecureField("API Key", text: $settings.profiles[safeEditingIndex].apiKey, prompt: Self.placeholder("sk-…"))
-                            }
-                        }
-                        .textFieldStyle(.plain)
-                        .font(Theme.bodyMonospaced)
-                        .focused($focusedField, equals: .apiKey)
-
-                        if settings.keychainSaved {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(Theme.footnote)
-                                .foregroundStyle(.green)
-                                .transition(.opacity)
-                        }
-
-                        Button {
-                            showKey.toggle()
-                        } label: {
-                            Image(systemName: showKey ? "eye.slash" : "eye")
-                                .font(Theme.footnote)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(showKey ? "隐藏" : "显示")
-                        .accessibilityLabel(showKey ? "隐藏" : "显示")
-                    }
-                    // `.state`, not `.micro`: this is a confirmation appearing, not
-                    // hover feedback. It used to scale up from 0.7 over 0.12s, which
-                    // is not an element arriving — it is a flash.
-                    .motion(.state, value: settings.keychainSaved)
-                    .accessibilityLabel("API Key")
+                    secretField("API Key", text: $settings.profiles[safeEditingIndex].apiKey,
+                                prompt: Self.placeholder("sk-…"), revealed: $showKey, focus: .apiKey)
+                        .accessibilityLabel("API Key")
                 }
             }
 
-            if let error = settings.keychainError {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(error)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    // Only for failures a second attempt can actually clear (locked
-                    // device, denied prompt). A corrupt item would fail identically,
-                    // so offering retry there would just teach the button to lie.
-                    if settings.keychainErrorIsRetryable {
-                        Button("重试") { settings.retryLoadKeys() }
-                            .buttonStyle(.plain)
-                            .font(Theme.bodySmallSemibold)
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-                .font(Theme.caption)
-                .foregroundStyle(.orange)
-            }
+            keychainErrorRow
         }
+    }
+
+    /// A key field with a show/hide toggle and the brief saved-to-Keychain check.
+    private func secretField(
+        _ title: String,
+        text: Binding<String>,
+        prompt: Text,
+        revealed: Binding<Bool>,
+        focus: FocusedField
+    ) -> some View {
+        HStack(spacing: 6) {
+            Group {
+                if revealed.wrappedValue {
+                    TextField(title, text: text, prompt: prompt)
+                } else {
+                    SecureField(title, text: text, prompt: prompt)
+                }
+            }
+            .textFieldStyle(.plain)
+            .font(Theme.bodyMonospaced)
+            .focused($focusedField, equals: focus)
+
+            if settings.keychainSaved {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            }
+
+            Button {
+                revealed.wrappedValue.toggle()
+            } label: {
+                Image(systemName: revealed.wrappedValue ? "eye.slash" : "eye")
+                    .font(Theme.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help(revealed.wrappedValue ? "隐藏" : "显示")
+            .accessibilityLabel(revealed.wrappedValue ? "隐藏" : "显示")
+        }
+        // `.state`, not `.micro`: this is a confirmation appearing, not hover feedback.
+        .motion(.state, value: settings.keychainSaved)
+    }
+
+    @ViewBuilder
+    private var keychainErrorRow: some View {
+        if let error = settings.keychainError {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Only for failures a second attempt can actually clear (locked device,
+                // denied prompt); a corrupt item would fail identically.
+                if settings.keychainErrorIsRetryable {
+                    Button("重试") { settings.retryLoadKeys() }
+                        .buttonStyle(.plain)
+                        .font(Theme.controlSemibold)
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .font(Theme.caption)
+            .foregroundStyle(.orange)
+        }
+    }
+
+    private func testConnectionButton(testing: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if testing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "bolt.fill")
+                }
+                Text("测试连接")
+            }
+            .modifier(AccentWhenEnabled())
+        }
+        .controlSize(.large)
+        .disabled(testing || !enabled)
+        .modifier(TestConnectionButtonStyle())
     }
 
     private func backButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "chevron.left")
-                .font(Theme.bodySmallSemibold)
+                .font(Theme.controlSemibold)
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 24)
                 .background(Circle().fill(Theme.fillQuiet))
@@ -576,7 +605,7 @@ struct SettingsView: View {
         .settingsRow()
     }
 
-    // MARK: - Header
+    // MARK: - Local model
 
     private var localModelPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -585,7 +614,7 @@ struct SettingsView: View {
                 set: { localModels.setEnabled($0, settings: settings) }
             )) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("启用本地模型").font(Theme.bodySmallSemibold)
+                    Text("启用本地模型").font(Theme.controlSemibold)
                     HStack(spacing: 5) {
                         if localModels.isSwitching {
                             ProgressView().controlSize(.mini)
@@ -608,7 +637,7 @@ struct SettingsView: View {
             .overlay(RoundedRectangle(cornerRadius: Theme.radiusStandard, style: .continuous).strokeBorder(Theme.strokeHairline, lineWidth: 1))
 
             HStack {
-                Text("使用的模型").font(Theme.footnoteMedium).foregroundStyle(.secondary)
+                Text("使用的模型").font(Theme.captionMedium).foregroundStyle(.secondary)
                 Spacer()
                 Button { Task { await localModels.refresh(settings: settings) } } label: {
                     Image(systemName: "arrow.clockwise")
@@ -641,6 +670,8 @@ struct SettingsView: View {
             }
         }
     }
+
+    // MARK: - Header
 
     @ViewBuilder
     private var categoryPicker: some View {
@@ -698,19 +729,14 @@ struct SettingsView: View {
     private func roleActionButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(.plain)
-            .font(Theme.footnoteMedium)
+            .font(Theme.captionMedium)
             .foregroundStyle(Theme.accent)
     }
 
     // MARK: - Routing
 
-    /// The two questions that used to be four booleans.
-    ///
-    /// They were never independent: the race path read the same resolved chain that
-    /// `fallbackEnabled` gated, so switching racing on with fallback off did nothing at
-    /// all — silently, with both switches showing as on. And `useLocalModel` overrode
-    /// every one of them. Two segmented choices, each shown only when it is a real
-    /// choice, can't produce that state.
+    /// Two segmented choices — where to start, and what to do with two online
+    /// services — each shown only when it is a real choice.
     @ViewBuilder
     private var routingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -790,7 +816,7 @@ struct SettingsView: View {
                 SoundPlayer.shared.previewSuccess()
             } label: {
                 Image(systemName: "play.circle")
-                    .font(Theme.bodySmall)
+                    .font(Theme.control)
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
@@ -820,7 +846,7 @@ struct SettingsView: View {
                     updateChecker.check(manual: true)
                 } label: {
                     Text("检查更新")
-                        .font(Theme.footnote)
+                        .font(Theme.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
@@ -840,9 +866,9 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.down.circle.fill")
-                            .font(Theme.footnote)
+                            .font(Theme.caption)
                         Text(String(format: L("下载 %@"), version))
-                            .font(Theme.footnote2Medium)
+                            .font(Theme.controlMedium)
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -922,9 +948,8 @@ struct SettingsView: View {
         }
     }
 
-    /// Provider routing only matters for a handful of gateways and is empty for almost
-    /// everyone — collapsed by default so it doesn't cost every user a field + two lines
-    /// of explanation.
+    /// The output protocol and provider order matter for a handful of gateways only, so
+    /// they stay folded away by default.
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -932,7 +957,7 @@ struct SettingsView: View {
             } label: {
                 HStack(spacing: 5) {
                     Text("高级选项")
-                        .font(Theme.footnoteMedium)
+                        .font(Theme.captionMedium)
                         .foregroundStyle(.secondary)
                     Image(systemName: "chevron.right")
                         .font(Theme.caption2Semibold)
@@ -960,7 +985,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("输出协议")
-                                .font(Theme.footnoteMedium)
+                                .font(Theme.captionMedium)
                                 .foregroundStyle(.secondary)
                             Spacer(minLength: 8)
                             Picker("输出协议", selection: $settings.profiles[safeEditingIndex].outputProtocolPreference) {
@@ -999,11 +1024,7 @@ struct SettingsView: View {
             }
         }
         // The chevron, the fields and the panel's own height all move on this one
-        // timeline. Both of these sections used to animate nothing but the chevron and
-        // let the content pop in at full opacity, because the window was easing an
-        // already-eased height and visibly lagged anything that moved. With the window
-        // mirroring instead of easing (see PanelController.setContentHeight), there is
-        // nothing left to work around.
+        // timeline.
         .motion(.layout, value: showAdvanced)
     }
 
@@ -1018,56 +1039,16 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .help(L("Key 保存在本机钥匙串；选择智能文风时将待译文本发送给 Jev"))
             } content: {
-                HStack(spacing: 6) {
-                    Group {
-                        if showJevKey {
-                            TextField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""))
-                        } else {
-                            SecureField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""))
-                        }
-                    }
-                    .textFieldStyle(.plain)
-                    .font(Theme.bodyMonospaced)
-                    .focused($focusedField, equals: .jevAPIKey)
-
-                    if settings.keychainSaved {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    }
-                    Button {
-                        showJevKey.toggle()
-                    } label: {
-                        Image(systemName: showJevKey ? "eye.slash" : "eye")
-                            .font(Theme.footnote)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(showJevKey ? "隐藏" : "显示")
-                    .accessibilityLabel(showJevKey ? "隐藏" : "显示")
-                }
+                secretField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""),
+                            revealed: $showJevKey, focus: .jevAPIKey)
             }
-            if let error = settings.keychainError {
-                Text(error)
-                    .font(Theme.caption)
-                    .foregroundStyle(.orange)
-            }
+            keychainErrorRow
             HStack(spacing: 10) {
-                Button {
-                    testJevConnection()
-                } label: {
-                    HStack(spacing: 5) {
-                        if jevTestState == .testing {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: "bolt.fill")
-                        }
-                        Text("测试连接")
-                    }
-                    .modifier(AccentWhenEnabled())
-                }
-                .controlSize(.large)
-                .disabled(jevTestState == .testing || settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .modifier(TestConnectionButtonStyle())
+                testConnectionButton(
+                    testing: jevTestState == .testing,
+                    enabled: !settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    action: testJevConnection
+                )
 
                 Spacer(minLength: 8)
                 switch jevTestState {
@@ -1084,7 +1065,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .font(Theme.footnote)
+            .font(Theme.caption)
         }
     }
 
@@ -1116,19 +1097,16 @@ struct SettingsView: View {
     // MARK: - Fields
 
     /// A field's example value. Verbatim, because a `LocalizedStringKey` is parsed as
-    /// Markdown and a bare URL in it becomes a blue link — which is how the empty base
-    /// URL field used to look like it had already been filled in. Tertiary, so an
-    /// example can never be mistaken for a value.
+    /// Markdown and a bare URL in it becomes a blue link that looks like a filled-in
+    /// value. Tertiary, so an example can never be mistaken for a value.
     static func placeholder(_ example: String) -> Text {
         Text(verbatim: example).foregroundStyle(.tertiary)
     }
 
-    // `label`/`hint` arrive as plain String params — literals live at each call site, one
-    // level removed from these Text()s — so LocalizedStringKey(...) does the lookup that
+    // `label` arrives as a plain String, so LocalizedStringKey(...) does the lookup that
     // Text(label) alone wouldn't.
     private func labeledField(
         _ label: String,
-        hint: String? = nil,
         focused: Bool = false,
         @ViewBuilder trailing: () -> some View = { EmptyView() },
         @ViewBuilder content: () -> some View
@@ -1136,7 +1114,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(LocalizedStringKey(label))
-                    .font(Theme.footnoteMedium)
+                    .font(Theme.captionMedium)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 trailing()
@@ -1155,12 +1133,6 @@ struct SettingsView: View {
                             lineWidth: focused ? 1.5 : 1
                         )
                 )
-            if let hint {
-                Text(LocalizedStringKey(hint))
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 
@@ -1184,39 +1156,27 @@ struct SettingsView: View {
     }
 
     private var connectionTestCommand: some View {
-        Button {
-            runTest()
-        } label: {
-            HStack(spacing: 5) {
-                if testState == .testing {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: "bolt.fill")
-                }
-                Text("测试连接")
-            }
-            .modifier(AccentWhenEnabled())
-        }
-        .controlSize(.large)
-        .disabled(testState == .testing || !settings.isSlotAvailable(safeEditingIndex))
+        testConnectionButton(
+            testing: testState == .testing,
+            enabled: settings.isSlotAvailable(safeEditingIndex),
+            action: runTest
+        )
         .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
         .accessibilityHint(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
     }
 
     private var testRow: some View {
         HStack(spacing: 10) {
-            connectionTestCommand.modifier(TestConnectionButtonStyle())
+            connectionTestCommand
 
             Spacer(minLength: 8)
 
-            // The Keychain reassurance now lives up by the API Key label itself — this
-            // slot is only for test-in-flight/result feedback, so it's empty until then.
             switch testState {
             case .idle:
                 EmptyView()
             case .testing:
                 Text("连接中…")
-                    .font(Theme.footnote)
+                    .font(Theme.caption)
                     .foregroundStyle(.tertiary)
             case .success(let result):
                 HStack(spacing: 4) {
@@ -1228,7 +1188,7 @@ struct SettingsView: View {
                         result.outputProtocol.statusLabel
                     ))
                 }
-                .font(Theme.footnote2Medium)
+                .font(Theme.controlMedium)
                 .foregroundStyle(.secondary)
                 .transition(.opacity)
             case .failure(let message):
@@ -1239,7 +1199,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                .font(Theme.footnote)
+                .font(Theme.caption)
                 .foregroundStyle(.secondary)
                 .transition(.opacity)
             }
@@ -1300,19 +1260,16 @@ private struct TestConnectionButtonStyle: ViewModifier {
 
 // MARK: - Grouped rows
 
-/// A titled group of rows on one rounded surface, as in System Settings: the title says
-/// what the rows are about, the footer says what they do, and the surface says they
-/// belong together — no divider lines between sections needed.
+/// A titled group of rows on one rounded surface, as in System Settings.
 private struct SettingsGroup<Content: View>: View {
     var title: String? = nil
-    var footer: String? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let title {
                 Text(title)
-                    .font(Theme.footnoteMedium)
+                    .font(Theme.captionMedium)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
             }
@@ -1326,13 +1283,6 @@ private struct SettingsGroup<Content: View>: View {
                 RoundedRectangle(cornerRadius: Theme.radiusGroup, style: .continuous)
                     .strokeBorder(Theme.strokeHairline, lineWidth: 1)
             )
-            if let footer {
-                Text(footer)
-                    .font(Theme.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-            }
         }
     }
 }

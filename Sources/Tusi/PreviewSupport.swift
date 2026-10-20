@@ -165,8 +165,7 @@ extension AppDelegate {
                 slot: 0, tier: .online,
                 languageMismatch: false, capped: false, afterFailover: false
             )
-            // "fallback": one online answer that only exists because the primary failed —
-            // what the old "已用备用翻译" toast used to say for 2.4 seconds.
+            // "fallback": one online answer that only exists because the primary failed.
             let backup = TranslationEngine.ResultVersion(
                 text: online.text, slot: 1, tier: .online,
                 languageMismatch: false, capped: false, afterFailover: true

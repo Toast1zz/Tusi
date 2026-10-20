@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds Tusi.app into ./build. Usage: ./build.sh [--open]  |  ./build.sh release
+# Builds Tusi.app into ./build.
+# Usage: ./build.sh [install] [--open] [keychain-unpin]  |  ./build.sh release
 #
 # Architecture is controlled by TUSI_ARCH (default: native, i.e. whatever this Mac is):
 #   TUSI_ARCH=arm64      swift build --arch arm64
@@ -82,6 +83,10 @@ case "$ARCH_MODE" in
         # Both release zips, packed with ditto (zip -r would sprinkle __MACOSX/ junk
         # through the archive). Each slice is built by recursing into this script with
         # the matching TUSI_ARCH; the last build (arm64) is what build/Tusi.app holds.
+        #
+        # --norsrc: macOS stamps system-managed metadata (com.apple.provenance,
+        # com.apple.macl) on fresh files that xattr cannot remove. Archived, it becomes
+        # AppleDouble ._* files that break strict signature verification after extraction.
         mkdir -p dist
         # The identity has to be passed down explicitly. The recursive calls see
         # TUSI_ARCH=universal/arm64, not "release", so on their own they would pick the
@@ -94,7 +99,7 @@ case "$ARCH_MODE" in
         TUSI_ARCH=arm64 "$0"
         ditto -c -k --norsrc --keepParent "$APP" "dist/Tusi-arm64.zip"
         echo "✓ 已生成 dist/Tusi-arm64.zip 与 dist/Tusi-universal.zip"
-        # release 已完成全部打包；显式退出，跳过公共尾部的重复签名/echo。
+        # Packaging is done; skip the shared signing tail below.
         exit 0
         ;;
     *)
@@ -162,9 +167,8 @@ BUNDLE_ID="com.tusi.app"
 # --- Keychain authorization ----------------------------------------------------
 #
 # Signing with a stable identity is necessary but NOT sufficient to stop the app
-# being re-authorized after every install, and the comment that used to sit here
-# claimed otherwise for months. Two independent mechanisms guard a login-keychain
-# item, and they behave differently:
+# being re-authorized after every install. Two independent mechanisms guard a
+# login-keychain item, and they behave differently:
 #
 #   1. The ACL's trusted-application list. For a signed app this matches by
 #      designated requirement, so a rebuild signed with the same certificate is
@@ -175,14 +179,8 @@ BUNDLE_ID="com.tusi.app"
 #      ID, and `cdhash:<hash>` when there is none. A Team ID is stable across
 #      rebuilds; a cdhash changes with every build.
 #
-# That is the whole story, and it is why an ordinary Xcode-signed app never shows this
-# behavior. A self-signed certificate has no Team ID (`TeamIdentifier=not set`), so
-# macOS falls back to pinning the exact binary — and every click of 「始终允许」 only
-# appends that one build's cdhash. Tusi's item had accumulated eleven of them.
-#
-# Verified directly: the same probe signed with a self-signed identity gets
-# `cdhash:…` and is denied after a rebuild; signed with an identity carrying a Team ID
-# it gets `teamid:…` and is granted after a rebuild. Nothing else changed.
+# A self-signed certificate has no Team ID (`TeamIdentifier=not set`), so macOS pins
+# the exact binary, and every 「始终允许」 only appends that one build's cdhash.
 #
 # So local builds sign with a Team-ID-carrying identity (see below), and an item that
 # still holds a stale cdhash list is repointed once via `./build.sh keychain-unpin`.
@@ -200,44 +198,22 @@ keychain_partition_hint() {
 HINT
 }
 
-# Sign with a stable identity when one is available, otherwise ad-hoc.
+# Signing identity, in order of preference:
+#   1. TUSI_SIGN_IDENTITY, when set. `release` sets it to the anonymous self-signed
+#      "Tusi Dev Signing": a Development certificate embeds the developer's name and
+#      email, which `codesign -dvvv` would expose on every published zip.
+#   2. An "Apple Development" identity, whose Team ID keeps the Keychain partition
+#      stable across rebuilds (see above). Signed with the hardened runtime and a
+#      secure timestamp, like every app installed on the development machine.
+#   3. "Tusi Dev Signing", then ad-hoc — a fresh clone needs no certificate.
 #
-# Release archives are packed with ditto --norsrc (see the `ditto` calls in the
-# release case): macOS stamps filesystem metadata (com.apple.provenance,
-# com.apple.macl) on freshly created files, and those attributes are system-managed
-# — xattr -d/-c silently no-ops on them. ditto would otherwise archive them as
-# AppleDouble entries, and zip tools that can't restore forks would leave stray ._*
-# files behind, making the extracted bundle fail strict signature verification.
-# Omitting the metadata at archive time keeps every extraction clean instead.
-#
-# An ad-hoc signature's designated requirement is the binary's cdhash, so it changes on
-# every build. Signing with a real identity pins the requirement to the certificate
-# instead, which is what lets the ACL's trusted-application check survive a rebuild.
-# That check is only half the story — see the partition-ID note above for the other
-# half, which is what actually decides whether the app gets re-authorized.
-#
-# Anyone building this from a clone just falls through to ad-hoc: no certificate needed,
-# and the result works exactly as before.
-#
-# The default identity is Tusi's own signing certificate (a self-signed cert in the
-# dedicated tusi-dev.keychain-db). find-identity without -v is used for the presence
-# check on purpose: -v filters to *trusted* identities, which would hide a perfectly
-# usable self-signed certificate and silently fall back to ad-hoc.
-#
-# The identity resolves through the default keychain search list — normally the login
-# keychain, which macOS unlocks automatically at login, so builds never ask for a
-# keychain password. The dedicated-keychain override below is kept for machines that
-# keep the identity in its own keychain:
+# Identities resolve through the default keychain search list (normally the login
+# keychain). Machines that keep the identity in its own keychain can unlock it first:
 #   TUSI_SIGN_KEYCHAIN=~/Library/Keychains/tusi-dev.keychain-db \
 #   TUSI_SIGN_KEYCHAIN_PW_FILE=~/.dsh/tusi-signing.pw ./build.sh
-# Local builds prefer an identity that carries a Team ID, because that is what decides
-# whether macOS re-authorizes the Keychain item after every install (see the partition-ID
-# note above). Release archives deliberately do NOT use it: a Development certificate
-# embeds the developer's name and email in the binary, and `codesign -dvvv` on a published
-# zip would hand that to anyone who downloads it. Release keeps the anonymous self-signed
-# identity, and its users type the API key once into a build they keep.
-# (The `release` mode never reaches here: it recurses per architecture and exits. It
-# pins TUSI_SIGN_IDENTITY to the anonymous identity before recursing — see that branch.)
+#
+# find-identity runs without -v on purpose: -v keeps only *trusted* identities, which
+# would hide the self-signed certificate and silently fall back to ad-hoc.
 if [[ -n "${TUSI_SIGN_IDENTITY:-}" ]]; then
     IDENTITY="$TUSI_SIGN_IDENTITY"
 else
@@ -252,9 +228,13 @@ fi
 
 AVAILABLE_IDENTITIES="$(security find-identity -p codesigning 2>/dev/null || true)"
 if grep -F "\"$IDENTITY\"" >/dev/null <<< "$AVAILABLE_IDENTITIES"; then
+    SIGN_FLAGS=(--force --sign "$IDENTITY")
+    if [[ "$IDENTITY" == "Apple Development:"* ]]; then
+        SIGN_FLAGS+=(--options runtime --timestamp)
+    fi
     # Identity exists but signing fails (e.g. the keychain is locked): fail loudly
     # instead of installing an ad-hoc build that would re-trigger the Keychain prompt.
-    codesign --force --sign "$IDENTITY" "$APP" || {
+    codesign "${SIGN_FLAGS[@]}" "$APP" || {
         echo "✗ 签名失败：身份「${IDENTITY}」存在但无法使用（钥匙串是否已解锁？）" >&2
         exit 1
     }
@@ -274,7 +254,7 @@ for arg in "$@"; do
             DO_OPEN=1
             ;;
         install)
-            # 调试循环：装到 /Applications。
+            # Debug loop: install into /Applications.
             rm -rf /Applications/Tusi.app
             cp -R "$APP" /Applications/Tusi.app
             INSTALLED=1

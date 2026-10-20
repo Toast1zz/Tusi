@@ -1,6 +1,14 @@
 import Foundation
 import os
 
+/// Which silence the stream watchdog gave up on.
+enum WatchdogStage: Equatable, Sendable {
+    /// Nothing arrived after the connection was established.
+    case firstToken
+    /// The stream started and then went quiet.
+    case idle
+}
+
 enum TranslationError: LocalizedError, Equatable {
     case emptyKey
     case emptyResponse
@@ -8,7 +16,7 @@ enum TranslationError: LocalizedError, Equatable {
     /// The local watchdog cancelled a stream after the server went silent. This is
     /// deliberately distinct from HTTP 0: no HTTP response failure occurred, and the
     /// retry policy can safely classify this as a transport timeout.
-    case watchdogTimeout(stage: String)
+    case watchdogTimeout(WatchdogStage)
     case invalidResponse
     case invalidURL
     case insecureURL
@@ -24,7 +32,7 @@ enum TranslationError: LocalizedError, Equatable {
         case .truncatedStream:
             return L("翻译结果不完整，连接提前中断")
         case .watchdogTimeout(let stage):
-            return stage == "idle"
+            return stage == .idle
                 ? L("服务器长时间未返回新内容，连接已中断，请重试")
                 : L("服务器长时间无响应，请稍后重试")
         case .invalidResponse:
@@ -97,13 +105,8 @@ enum TranslationService {
     }
 
     #if DEBUG
-    /// Test-only injection point. Never set outside of tests.
-    ///
-    /// Marked `nonisolated(unsafe)` because it is global mutable state — Swift 6
-    /// forbids that by default. It is only ever written from tests, which XCTest runs
-    /// serially, and read from `session` (also within the test's `withMockSession`
-    /// scope), so there is no cross-thread access in practice. Do not set it from
-    /// concurrent code.
+    /// Test-only injection points. `nonisolated(unsafe)` because they are global mutable
+    /// state; XCTest writes them serially and never from concurrent code.
     nonisolated(unsafe) static var sessionOverride: URLSession?
     nonisolated(unsafe) static var protocolRegistryOverride: TranslationProtocolRegistry?
     #endif
@@ -268,10 +271,8 @@ enum TranslationService {
         return prompt
     }
 
-    /// Removes protocol wrappers occasionally echoed by smaller/local chat models. Older
-    /// Tusi builds wrapped user text in `<translate>`; even after removing that prompt
-    /// pattern, this boundary-only cleanup keeps results sane with cached templates or
-    /// gateways that inject the old wrapper. Tags inside the translation are preserved.
+    /// Removes a `<translate>` wrapper that smaller/local chat models occasionally echo
+    /// around the whole result. Tags inside the translation are preserved.
     static func sanitizeModelOutput(_ raw: String) -> String {
         var value = raw
         let openings = ["<translate>", "&lt;translate&gt;"]
@@ -350,18 +351,12 @@ enum TranslationService {
         return body
     }
 
-    /// Seconds to wait for the first streamed token after the connection is established.
-    /// A server that accepts the request but never produces data (model queueing, a hung
-    /// gateway) must not leave the user staring at an endless "working" state —
-    /// URLSession's request timeout only covers waiting for the response headers, not
-    /// the streaming body that follows. `var` (not `let`) so tests can shorten it.
+    /// Seconds to wait for the first streamed token (see the watchdog in `stream`).
+    /// `var` so tests can shorten it.
     nonisolated(unsafe) static var firstTokenTimeout: TimeInterval = 30
 
-    /// Seconds of silence allowed between chunks once streaming has already started.
-    /// The first-token watchdog above only guards the "nothing ever arrived" case; a
-    /// server that sends a few tokens and then goes quiet mid-response has no other
-    /// backstop besides URLSession's 300s resource timeout, which leaves the user
-    /// staring at stalled output for minutes. `var` so tests can shorten it.
+    /// Seconds of silence allowed between chunks once streaming has started. `var` so
+    /// tests can shorten it.
     nonisolated(unsafe) static var idleTimeout: TimeInterval = 45
 
     static func stream(
@@ -398,7 +393,6 @@ enum TranslationService {
                 do {
                     func performAttempt(_ selectedProtocol: TranslationOutputProtocol) async throws {
                         structuredAttempt = selectedProtocol != .plainText
-                        var receivedBytes = 0
                         func deliver(_ piece: String) throws {
                             if case .dropped = continuation.yield(piece) {
                                 throw TranslationError.invalidResponse
@@ -430,111 +424,26 @@ enum TranslationService {
                             let reason = Self.httpFailureReason(status: http.statusCode, message: message)
                             // Only fixed diagnostic labels are public. Provider messages
                             // can echo input or credentials and must remain private.
-                            Log.translation.error("HTTP rejected: status=\(http.statusCode, privacy: .public) reason=\(reason, privacy: .public) host=\(config.displayHost, privacy: .public)")
+                            Log.translation.error("HTTP rejected: status=\(http.statusCode, privacy: .public) reason=\(reason.rawValue, privacy: .public) host=\(config.displayHost, privacy: .public)")
                             throw TranslationError.http(http.statusCode, message)
                         }
 
-                        let decoder = JSONDecoder()
-                        var sawDone = false
-                        var sawFinish = false
-                        var structuredContent = ""
-                        var toolAccumulator = TranslationToolCallAccumulator()
-                        var sawRefusal = false
+                        var parser = StreamParser(outputProtocol: selectedProtocol)
                         var lineData = Data()
-                        func processLine(_ rawLine: String) throws -> Bool {
-                            let line = rawLine.trimmingCharacters(in: .whitespaces)
-                            guard line.hasPrefix("data:") else { return false }
-                            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                            if payload == "[DONE]" {
-                                sawDone = true
-                                return true
-                            }
-                            guard let data = payload.data(using: .utf8) else {
-                                throw TranslationError.invalidResponse
-                            }
-                            let chunk: StreamChunk
-                            do {
-                                chunk = try decoder.decode(StreamChunk.self, from: data)
-                            } catch {
-                                throw TranslationError.invalidResponse
-                            }
-                            if let error = chunk.error {
-                                throw TranslationError.http(0, error.message)
-                            }
-                            guard let choices = chunk.choices else {
-                                throw TranslationError.invalidResponse
-                            }
-                            // Usage trailers are valid metadata, not a completion marker.
-                            if choices.isEmpty {
-                                guard chunk.usage?.isValid == true else {
-                                    throw TranslationError.invalidResponse
-                                }
-                                return false
-                            }
-                            guard choices.count == 1, let choice = choices.first,
-                                  choice.delta != nil || choice.finishReason != nil else {
-                                throw TranslationError.invalidResponse
-                            }
-                            if let reason = choice.finishReason, !reason.isEmpty {
-                                switch reason {
-                                case "stop": break
-                                case "tool_calls" where selectedProtocol == .forcedToolCall: break
-                                case "length": throw TranslationError.truncatedStream
-                                case "content_filter": throw TranslationStructuredOutputError.modelRefusal
-                                default: throw TranslationError.invalidResponse
-                                }
-                                sawFinish = true
-                            }
-                            var madeProgress = false
-                            if let refusal = choice.delta?.refusal, !refusal.isEmpty {
-                                sawRefusal = true
-                                madeProgress = true
-                            }
-                            if let piece = choice.delta?.content, !piece.isEmpty {
-                                receivedBytes += piece.utf8.count
-                                guard receivedBytes <= TranslationEnvelopeDecoder.maxRawBytes else {
-                                    throw TranslationStructuredOutputError.outputTooLarge
-                                }
-                                madeProgress = true
-                                switch selectedProtocol {
-                                case .plainText:
-                                    try deliver(piece)
-                                case .strictJSONSchema, .jsonObject:
-                                    structuredContent += piece
-                                    guard structuredContent.utf8.count <= TranslationEnvelopeDecoder.maxRawBytes else {
-                                        throw TranslationStructuredOutputError.outputTooLarge
-                                    }
-                                case .forcedToolCall:
-                                    toolAccumulator.noteAssistantContent(piece)
-                                }
-                            }
-                            if let toolCalls = choice.delta?.toolCalls, !toolCalls.isEmpty {
-                                madeProgress = true
-                                if selectedProtocol == .forcedToolCall {
-                                    for toolCall in toolCalls {
-                                        guard let index = toolCall.index else {
-                                            throw TranslationStructuredOutputError.invalidEnvelope
-                                        }
-                                        try toolAccumulator.append(TranslationToolCallFragment(
-                                            index: index,
-                                            id: toolCall.id,
-                                            name: toolCall.function?.name,
-                                            arguments: toolCall.function?.arguments
-                                        ))
-                                    }
-                                }
-                            }
-                            if madeProgress {
+                        func handle(_ line: Data) throws -> Bool {
+                            let result = try parser.process(String(decoding: line, as: UTF8.self))
+                            if let text = result.text { try deliver(text) }
+                            if result.madeProgress {
                                 gotData.withLock { $0 = true }
                                 lastChunkAt.withLock { $0 = Date() }
                             }
-                            return false
+                            return result.done
                         }
 
                         for try await byte in bytes {
                             try Task.checkCancellation()
                             if byte == 0x0A {
-                                if try processLine(String(decoding: lineData, as: UTF8.self)) { break }
+                                if try handle(lineData) { break }
                                 lineData.removeAll(keepingCapacity: true)
                             } else {
                                 lineData.append(byte)
@@ -543,24 +452,11 @@ enum TranslationService {
                                 }
                             }
                         }
-                        if !sawDone, !lineData.isEmpty {
-                            _ = try processLine(String(decoding: lineData, as: UTF8.self))
+                        if !parser.sawDone, !lineData.isEmpty {
+                            _ = try handle(lineData)
                         }
-                        guard sawDone || sawFinish else { throw TranslationError.truncatedStream }
-                        if sawRefusal {
-                            throw TranslationStructuredOutputError.modelRefusal
-                        }
-                        switch selectedProtocol {
-                        case .plainText:
-                            break
-                        case .strictJSONSchema, .jsonObject:
-                            try deliver(try TranslationEnvelopeDecoder.decode(structuredContent))
-                        case .forcedToolCall:
-                            let payload = try toolAccumulator.finalize()
-                            if payload.discardedAssistantContent {
-                                Log.translation.notice("discarded assistant content outside translation tool call (host \(config.displayHost, privacy: .public))")
-                            }
-                            try deliver(payload.translation)
+                        if let payload = try parser.finish(host: config.displayHost) {
+                            try deliver(payload)
                         }
                     }
 
@@ -601,14 +497,13 @@ enum TranslationService {
                     }
                     continuation.finish()
                 } catch {
-                    // A watchdog-initiated cancellation (server silent for
-                    // firstTokenTimeout) is a timeout, not a user cancel: surface it as
-                    // an actionable error. Genuine consumer cancels fall through as
+                    // A watchdog cancellation is a timeout, not a user cancel: surface it
+                    // as an actionable error. Consumer cancels fall through as
                     // CancellationError.
                     if didTimeOut.withLock({ $0 }) {
                         let hadStarted = gotData.withLock { $0 }
                         Log.translation.error("stream timed out \(hadStarted ? "mid-stream (idle)" : "waiting for first token", privacy: .public) (host \(config.displayHost, privacy: .public))")
-                        let error = TranslationError.watchdogTimeout(stage: hadStarted ? "idle" : "first-token")
+                        let error = TranslationError.watchdogTimeout(hadStarted ? .idle : .firstToken)
                         continuation.finish(throwing: structuredAttempt && hadStarted ? PartialTranslationFailure(underlying: error) : error)
                     } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
                         Log.translation.debug("stream cancelled by consumer")
@@ -621,11 +516,8 @@ enum TranslationService {
                     }
                 }
             }
-            // Watchdog lives outside the task so it can hold a reference to it. Loops
-            // rather than sleeping once: each chunk pushes `lastChunkAt` forward, so on
-            // waking the watchdog re-checks how much idle time is actually left and
-            // either fires or sleeps the remainder — it self-corrects instead of racing
-            // a single fixed timer against however many chunks arrived during the sleep.
+            // Lives outside the task so it can cancel it. Each wake re-reads `lastChunkAt`
+            // and either fires or sleeps the remainder.
             let watchdog = Task {
                 while !Task.isCancelled {
                     let elapsed = Date().timeIntervalSince(lastChunkAt.withLock { $0 })
@@ -649,17 +541,24 @@ enum TranslationService {
         }
     }
 
-    static func httpFailureReason(status: Int, message: String) -> String {
+    /// A fixed diagnostic label for a rejected request. Provider messages can echo input
+    /// or credentials, so only these labels are ever logged publicly.
+    enum HTTPFailureReason: String {
+        case missingOpenCodeSession = "missing_opencode_session"
+        case providerRejectedRequest = "provider_rejected_request"
+    }
+
+    static func httpFailureReason(status: Int, message: String) -> HTTPFailureReason {
         let lower = message.lowercased()
         if status == 400, lower.contains("x-opencode-session"), lower.contains("missing") {
-            return "missing_opencode_session"
+            return .missingOpenCodeSession
         }
-        return "provider_rejected_request"
+        return .providerRejectedRequest
     }
 
     private static func isOutputProtocolCompatibilityError(_ error: Error) -> Bool {
         if case .http(let code, let message) = error as? TranslationError {
-            return code == 400 && httpFailureReason(status: code, message: message) != "missing_opencode_session"
+            return code == 400 && httpFailureReason(status: code, message: message) != .missingOpenCodeSession
         }
         guard let structured = error as? TranslationStructuredOutputError else {
             return false
@@ -714,6 +613,128 @@ enum TranslationService {
         }
         if let message = json["message"] as? String { return message }
         return body.prefix(200).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// One attempt's SSE payload lines, parsed and assembled into its translation.
+    /// Plain-text pieces are handed back line by line; structured protocols accumulate
+    /// until `finish` validates and decodes the whole payload.
+    private struct StreamParser {
+        struct LineResult {
+            /// Plain text to deliver now.
+            var text: String?
+            /// Whether the line carried model output, which re-arms the watchdog.
+            var madeProgress = false
+            /// The `[DONE]` marker.
+            var done = false
+        }
+
+        let outputProtocol: TranslationOutputProtocol
+        private(set) var sawDone = false
+        private var sawFinish = false
+        private var sawRefusal = false
+        private var receivedBytes = 0
+        private var structuredContent = ""
+        private var toolAccumulator = TranslationToolCallAccumulator()
+        private let decoder = JSONDecoder()
+
+        init(outputProtocol: TranslationOutputProtocol) {
+            self.outputProtocol = outputProtocol
+        }
+
+        mutating func process(_ rawLine: String) throws -> LineResult {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("data:") else { return LineResult() }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" {
+                sawDone = true
+                return LineResult(done: true)
+            }
+            guard let data = payload.data(using: .utf8),
+                  let chunk = try? decoder.decode(StreamChunk.self, from: data) else {
+                throw TranslationError.invalidResponse
+            }
+            if let error = chunk.error {
+                throw TranslationError.http(0, error.message)
+            }
+            guard let choices = chunk.choices else {
+                throw TranslationError.invalidResponse
+            }
+            // Usage trailers are valid metadata, not a completion marker.
+            if choices.isEmpty {
+                guard chunk.usage?.isValid == true else { throw TranslationError.invalidResponse }
+                return LineResult()
+            }
+            guard choices.count == 1, let choice = choices.first,
+                  choice.delta != nil || choice.finishReason != nil else {
+                throw TranslationError.invalidResponse
+            }
+            if let reason = choice.finishReason, !reason.isEmpty {
+                switch reason {
+                case "stop": break
+                case "tool_calls" where outputProtocol == .forcedToolCall: break
+                case "length": throw TranslationError.truncatedStream
+                case "content_filter": throw TranslationStructuredOutputError.modelRefusal
+                default: throw TranslationError.invalidResponse
+                }
+                sawFinish = true
+            }
+            var result = LineResult()
+            if let refusal = choice.delta?.refusal, !refusal.isEmpty {
+                sawRefusal = true
+                result.madeProgress = true
+            }
+            if let piece = choice.delta?.content, !piece.isEmpty {
+                receivedBytes += piece.utf8.count
+                guard receivedBytes <= TranslationEnvelopeDecoder.maxRawBytes else {
+                    throw TranslationStructuredOutputError.outputTooLarge
+                }
+                result.madeProgress = true
+                switch outputProtocol {
+                case .plainText:
+                    result.text = piece
+                case .strictJSONSchema, .jsonObject:
+                    structuredContent += piece
+                case .forcedToolCall:
+                    toolAccumulator.noteAssistantContent(piece)
+                }
+            }
+            if let toolCalls = choice.delta?.toolCalls, !toolCalls.isEmpty {
+                result.madeProgress = true
+                if outputProtocol == .forcedToolCall {
+                    for toolCall in toolCalls {
+                        guard let index = toolCall.index else {
+                            throw TranslationStructuredOutputError.invalidEnvelope
+                        }
+                        try toolAccumulator.append(TranslationToolCallFragment(
+                            index: index,
+                            id: toolCall.id,
+                            name: toolCall.function?.name,
+                            arguments: toolCall.function?.arguments
+                        ))
+                    }
+                }
+            }
+            return result
+        }
+
+        /// Validates how the stream ended. Returns the decoded translation for structured
+        /// protocols, nil for plain text (already delivered line by line).
+        mutating func finish(host: String) throws -> String? {
+            guard sawDone || sawFinish else { throw TranslationError.truncatedStream }
+            if sawRefusal { throw TranslationStructuredOutputError.modelRefusal }
+            switch outputProtocol {
+            case .plainText:
+                return nil
+            case .strictJSONSchema, .jsonObject:
+                return try TranslationEnvelopeDecoder.decode(structuredContent)
+            case .forcedToolCall:
+                let payload = try toolAccumulator.finalize()
+                if payload.discardedAssistantContent {
+                    Log.translation.notice("discarded assistant content outside translation tool call (host \(host, privacy: .public))")
+                }
+                return payload.translation
+            }
+        }
     }
 
     private struct StreamChunk: Decodable {

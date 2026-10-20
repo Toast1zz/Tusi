@@ -3,8 +3,6 @@ import SwiftUI
 /// The translator's natural height, reported in parts — the content above the bottom bar
 /// and the bar itself — and summed, so both land in one preference delivery.
 struct PanelHeightKey: PreferenceKey {
-    // `let`, not `var`: the protocol only needs a getter, and a mutable static is a
-    // data-race error under the Swift 6 language mode.
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value += nextValue()
@@ -107,10 +105,8 @@ struct RootView: View {
         .onChange(of: panelState.showSettings) { _, showing in
             if showing { engine.discardHistoryUndo() }
         }
-        // No background, corner radius or border here — those belong to the window and are
-        // drawn by PanelContainerView. Sizing them from the content instead means they
-        // animate on the content's timeline while the window resizes on AppKit's, and the
-        // gap between the two timelines is where the corners flash square.
+        // No background or corner radius here: PanelContainerView draws them from the
+        // window's bounds.
     }
 
     /// The outgoing page's half of a page-push transition: it travels half as far and

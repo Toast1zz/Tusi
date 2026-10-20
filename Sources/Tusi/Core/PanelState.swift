@@ -30,11 +30,9 @@ final class PanelState: ObservableObject {
     @Published var settingsAdvancedProfiles: Set<Int> = []
     @Published var recordingShortcut: ShortcutAction?
     @Published var shortcutError: String?
-    /// A recorded combo that would take a plain letter or digit away from typing. It is
-    /// held here instead of being bound: warning after the fact used to leave the user
-    /// with a keyboard that can no longer type that character, and the way out (open the
-    /// panel, whose own close key may be the one just broken) is worse than one extra
-    /// click. Confirming binds it; dismissing throws it away.
+    /// A recorded combo that would take a plain letter or digit away from typing, held
+    /// here until the user confirms it: undoing a binding that already broke typing is
+    /// worse than one extra click. Confirming binds it; dismissing throws it away.
     @Published var pendingBareShortcut: PendingShortcut?
     @Published var globalHotkeyFailed = false
     /// When true, the result area shows translation history instead of the current output.

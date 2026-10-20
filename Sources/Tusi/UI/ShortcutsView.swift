@@ -73,7 +73,7 @@ struct ShortcutsView: View {
                 panelState.showShortcuts = false
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(Theme.bodySmallSemibold)
+                    .font(Theme.controlSemibold)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Theme.fillQuiet))
@@ -107,14 +107,14 @@ struct ShortcutsView: View {
                     panelState.pendingBareShortcut = nil
                 }
                 .buttonStyle(.plain)
-                .font(Theme.bodySmallSemibold)
+                .font(Theme.controlSemibold)
                 .foregroundStyle(Theme.accent)
 
                 Button(L("取消")) {
                     panelState.pendingBareShortcut = nil
                 }
                 .buttonStyle(.plain)
-                .font(Theme.bodySmall)
+                .font(Theme.control)
                 .foregroundStyle(.secondary)
             }
         }
@@ -149,7 +149,7 @@ struct ShortcutsView: View {
                     panelState.shortcutError = nil
                 } label: {
                     Image(systemName: "xmark.circle")
-                        .font(Theme.footnote)
+                        .font(Theme.caption)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)

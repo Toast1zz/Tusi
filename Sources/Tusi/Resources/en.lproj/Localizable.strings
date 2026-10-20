@@ -91,7 +91,7 @@
 "翻译结果不完整，连接提前中断" = "Translation was cut short — the connection ended before it finished";
 "翻译失败" = "Translation failed";
 
-/* MARK: - Components (direction chip, copy button, fallback toast, error box) */
+/* MARK: - Components (direction chip, copy button, error box) */
 "自动" = "Auto";
 "已复制" = "Copied";
 "复制" = "Copy";
@@ -167,7 +167,7 @@
 "钥匙串当前不可用，请稍后重试" = "The Keychain is unavailable right now — try again in a moment";
 "钥匙串数据损坏，请在设置中重新保存 API Key" = "The Keychain data is corrupted — save the API key again in Settings";
 
-/* Routing — the two questions that replaced four tangled switches */
+/* Routing */
 "翻译路线" = "Route";
 "从哪开始" = "Start with";
 "本地模型" = "Local model";
@@ -262,7 +262,7 @@
 
 "翻译文风 · 当前服务：%@ · 当前模型：%@" = "Translation tone · Current provider: %@ · Current model: %@";
 
-/* MARK: - Wabi-sabi redesign: history and panel */
+/* MARK: - History and panel */
 "翻译文风" = "Tone";
 "今天" = "Today";
 "昨天" = "Yesterday";
@@ -278,7 +278,7 @@
 "本地模型未启用或尚未就绪" = "The local model is off or not ready yet.";
 "当前翻译使用在线服务" = "Translations currently use online services.";
 
-/* MARK: - Settings groups (2026-09-25 layout) */
+/* MARK: - Settings groups */
 "翻译服务" = "Translation services";
 "附加要求" = "Standing instruction";
 "翻译完成后" = "After translating";

@@ -9,12 +9,8 @@ import Foundation
 /// `scifi` pack, copied to `Resources/Sounds/scifi/success.mp3`.
 @MainActor
 final class SoundPlayer {
-    static let pack = "scifi"
-
-    /// The one cue the product uses. Validated against the uisfx catalog.
-    enum Cue: String {
-        case success
-    }
+    private static let assetDirectory = "Sounds/scifi"
+    private static let assetName = "success"
 
     static let shared = SoundPlayer()
 
@@ -61,17 +57,7 @@ final class SoundPlayer {
         // assert). The enabled guard above means a disabled player never records.
         hasPlayedSuccess = true
         #endif
-        guard let audio = audioPlayer() else { return nil }
-        current?.stop()
-        let handle = Handle(player: audio)
-        handle.onCompletion = { [weak self, weak handle] in
-            guard let self, let handle, self.current === handle else { return }
-            self.current = nil
-        }
-        configure(audio)
-        guard audio.play() else { return nil }
-        current = handle
-        return handle
+        return play()
     }
 
     /// Preview helper for the Settings "试听" button: plays the completion cue even
@@ -81,17 +67,7 @@ final class SoundPlayer {
         #if DEBUG
         hasPreviewed = true
         #endif
-        guard let audio = audioPlayer() else { return nil }
-        current?.stop()
-        let handle = Handle(player: audio)
-        handle.onCompletion = { [weak self, weak handle] in
-            guard let self, let handle, self.current === handle else { return }
-            self.current = nil
-        }
-        configure(audio)
-        guard audio.play() else { return nil }
-        current = handle
-        return handle
+        return play()
     }
 
     /// Stops anything playing and releases the cached player (final teardown).
@@ -101,19 +77,27 @@ final class SoundPlayer {
         cached = nil
     }
 
-    private func configure(_ audio: AVAudioPlayer) {
+    /// Restarts the cue from the top; only one can be audible at a time.
+    private func play() -> Handle? {
+        guard let audio = audioPlayer() else { return nil }
+        current?.stop()
+        let handle = Handle(player: audio)
+        handle.onCompletion = { [weak self, weak handle] in
+            guard let self, let handle, self.current === handle else { return }
+            self.current = nil
+        }
         audio.currentTime = 0
         audio.numberOfLoops = 0
+        guard audio.play() else { return nil }
+        current = handle
+        return handle
     }
 
     private func audioPlayer() -> AVAudioPlayer? {
         if let cached { return cached }
-        guard let url = Bundle.main.url(
-            forResource: Cue.success.rawValue,
-            withExtension: "mp3",
-            subdirectory: "Sounds/\(Self.pack)"
-        ) else {
-            Log.sound.error("completion cue asset missing: Sounds/\(Self.pack)/\(Cue.success.rawValue).mp3")
+        guard let url = Bundle.main.url(forResource: Self.assetName, withExtension: "mp3",
+                                        subdirectory: Self.assetDirectory) else {
+            Log.sound.error("completion cue asset missing: \(Self.assetDirectory)/\(Self.assetName).mp3")
             return nil
         }
         guard let player = try? AVAudioPlayer(contentsOf: url) else {

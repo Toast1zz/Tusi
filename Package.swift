@@ -3,8 +3,8 @@ import PackageDescription
 
 let package = Package(
     name: "Tusi",
-    // macOS 14 is the real floor: the UI uses `.snappy` animations throughout,
-    // which are macOS 14+ APIs (no #available guards at the call sites).
+    // macOS 14 is the real floor: the UI uses macOS 14 APIs such as `.geometryGroup()`
+    // and two-parameter `.onChange` without #available guards.
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(

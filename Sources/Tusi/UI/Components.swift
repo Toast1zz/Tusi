@@ -36,10 +36,6 @@ final class PanelContainerView: NSVisualEffectView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unused") }
-
-    func installContent(_ view: NSView) {
-        addSubview(view)
-    }
 }
 
 // MARK: - Small controls
@@ -59,8 +55,7 @@ struct BarIconButton: View {
     var body: some View {
         Button(action: action) {
             // One symbol that is replaced, the same way the copy capsule swaps its glyph.
-            // It animates only when the toggle rides a timeline (history's `.layout`);
-            // the pin has none and swaps in place, as before.
+            // It animates only when the toggle rides a timeline (history's `.layout`).
             Image(systemName: isActive ? (activeSystemName ?? systemName) : systemName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(Theme.control)
@@ -209,7 +204,7 @@ struct ToneSelector: View {
                         .padding(.vertical, 3.5)
                         .background {
                             if selected {
-                                SelectionPill().matchedGeometryEffect(id: "tonePill", in: pill)
+                                GlassSelectionPill().matchedGeometryEffect(id: "tonePill", in: pill)
                             }
                         }
                         .contentShape(Capsule())
@@ -225,14 +220,15 @@ struct ToneSelector: View {
         .background(Capsule().fill(Theme.fillQuiet))
         .motion(.selection, value: tone)
     }
+}
 
-    private struct SelectionPill: View {
-        var body: some View {
-            if #available(macOS 26.0, *) {
-                Capsule().fill(.clear).glassEffect(.clear, in: Capsule())
-            } else {
-                Capsule().fill(Theme.fillSelection)
-            }
+/// The selected segment's sliding pill: Liquid Glass on macOS 26, a matte fill before.
+private struct GlassSelectionPill: View {
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            Capsule().fill(.clear).glassEffect(.clear, in: Capsule())
+        } else {
+            Capsule().fill(Theme.fillSelection)
         }
     }
 }
@@ -256,7 +252,6 @@ struct WeightStableLabel: View {
     }
 }
 
-/// Primary copy button — flat solid capsule that morphs into a green check.
 /// The copy command, in the result's own footer. The one solid accent capsule in the
 /// translator: it is the next thing most translations are for, and it has to read at a
 /// glance — including whether the copy worked (green) or failed (orange).
@@ -272,6 +267,22 @@ struct CopyButton: View {
 
     private enum Phase: CaseIterable {
         case idle, copied, failed
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .failed: return "复制失败"
+            case .copied: return "已复制"
+            case .idle: return "复制"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .failed: return "exclamationmark.triangle.fill"
+            case .copied: return "checkmark"
+            case .idle: return "doc.on.doc"
+            }
+        }
     }
 
     private var phase: Phase {
@@ -287,22 +298,10 @@ struct CopyButton: View {
         }
     }
 
-    private var accessibilityTitle: LocalizedStringKey {
-        switch phase {
-        case .failed: return "复制失败"
-        case .copied: return "已复制"
-        case .idle: return "复制"
-        }
-    }
-
     var body: some View {
         Button(action: action) {
-            // Every phase is laid out, only one is drawn: the capsule is therefore as
-            // wide as its widest wording and never changes size. It used to swap
-            // "复制 ⇧⌘C" for "已复制", which is a different string and a different
-            // number of children — so confirming a copy resized the control, and the
-            // bottom bar shifted under the cursor that had just clicked it. A control
-            // confirming itself should look like the same control.
+            // Every phase is laid out, only one is drawn, so the capsule is as wide as
+            // its widest wording and confirming a copy never resizes it under the cursor.
             ZStack {
                 ForEach(Phase.allCases, id: \.self) { candidate in
                     label(for: candidate)
@@ -315,15 +314,12 @@ struct CopyButton: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Capsule().fill(fill))
-            // Brightness only. This used to also scale to 1.03 on hover, which made it
-            // the one control in the app that grows under the cursor — every other
-            // hover state in the panel is a fill or brightness change, and the odd one
-            // out reads as a glitch rather than as emphasis.
+            // Brightness only, like every other hover state in the panel.
             .brightness(hovering && phase == .idle ? 0.06 : 0)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .accessibilityLabel(accessibilityTitle)
+        .accessibilityLabel(phase.title)
         .motion(.state, value: phase)
         .motion(.micro, value: hovering)
     }
@@ -331,30 +327,18 @@ struct CopyButton: View {
     @ViewBuilder
     private func label(for phase: Phase) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: {
-                switch phase {
-                case .failed: return "exclamationmark.triangle.fill"
-                case .copied: return "checkmark"
-                case .idle: return "doc.on.doc"
-                }
-            }())
-                .font(Theme.caption2Bold)
+            Image(systemName: phase.symbol)
+                .font(Theme.copyGlyph)
                 // A symbol swapping for another symbol, animated as exactly that. The
                 // alternative (fade one out, fade the other in) reads as two separate
                 // glyphs rather than one control confirming itself.
                 .contentTransition(.symbolEffect(.replace))
-            Text({
-                switch phase {
-                case .failed: return LocalizedStringKey("复制失败")
-                case .copied: return LocalizedStringKey("已复制")
-                case .idle: return LocalizedStringKey("复制")
-                }
-            }())
-                .font(Theme.bodySmallSemibold)
+            Text(phase.title)
+                .font(Theme.controlSemibold)
                 .lineLimit(1)
             if phase == .idle, let shortcutHint, !shortcutHint.isEmpty {
                 Text(shortcutHint)
-                    .font(Theme.captionMedium)
+                    .font(Theme.copyHint)
                     .opacity(0.65)
                     .lineLimit(1)
             }
@@ -380,8 +364,6 @@ struct StopButton: View {
             }
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: true, vertical: false)
-            // The copy capsule's metrics, so the footer keeps its height when one replaces
-            // the other.
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Capsule().fill(hovering ? Theme.fillActive : Theme.fillQuiet))
@@ -403,15 +385,11 @@ struct DisclosureHeightKey: PreferenceKey {
     }
 }
 
-/// The app's one way to fold content away, and the reason the window no longer needs a
-/// second timeline.
+/// The app's one way to fold content away.
 ///
-/// `if expanded { … }` inside a stack changes that stack's height in a single step, so
-/// the panel could only ever cut to the new size — which is why the settings folds used
-/// to animate nothing but their chevron and let the field pop in at full opacity. Here
+/// `if expanded { … }` inside a stack changes that stack's height in a single step. Here
 /// the content is always laid out at its natural size and the *container's* height is
-/// what animates, so the height passes through every value in between, SwiftUI stays the
-/// only timeline, and the window has something continuous to mirror.
+/// what animates, so the height passes through every value in between.
 ///
 /// `.fixedSize(vertical:)` is load-bearing: it makes the content report its ideal height
 /// even while the frame around it is proposing zero. Without it the measurement collapses
@@ -460,7 +438,7 @@ struct SoftDivider: View {
     }
 }
 
-/// Skeleton shown while waiting for the first streamed token.
+/// Skeleton shown while a translation is in flight.
 struct StreamingPlaceholder: View {
     @State private var pulsing = false
 
@@ -484,8 +462,7 @@ struct StreamingPlaceholder: View {
             pulsing = true
         }
         // Turning the setting on mid-pulse has to stop it, not wait for the next
-        // translation — which is the whole reason Reduce Motion is read from the
-        // environment now instead of straight off NSWorkspace.
+        // translation.
         .onChange(of: reduceMotion) { _, isOn in
             pulsing = !isOn
         }
@@ -528,8 +505,8 @@ struct ResultProvenance: View {
 
 // MARK: - Error box
 
-/// A failed translation. Not a box any more: one orange mark, the message in secondary
-/// ink, and the action that addresses it as a link.
+/// A failed translation: one orange mark, the message in secondary ink, and the action
+/// that addresses it as a link.
 struct ErrorBox: View {
     let message: String
     /// The action that actually addresses this failure. "Retry" is right for a dropped
@@ -565,12 +542,9 @@ struct ErrorBox: View {
 /// A row-wide segmented choice: a title, the options, and one caption that describes
 /// what the *selected* option actually does.
 ///
-/// Deliberately not a switch. A switch answers "on or off", and every routing question
-/// in this app is "which of these", which a switch can only express by pairing with
-/// another switch — the arrangement that let racing be silently disabled by the
-/// fallback toggle. The caption belongs to the selection, not to the control, so the
-/// page always states the behavior the user is about to get rather than the one the
-/// label happens to name.
+/// Deliberately not a switch: every routing question here is "which of these", and
+/// paired switches can contradict each other. The caption belongs to the selection, so
+/// the page states the behavior the user is about to get.
 struct SegmentedChoice: View {
     struct Option: Identifiable, Equatable {
         var id: String
@@ -617,7 +591,7 @@ struct SegmentedChoice: View {
                     onSelect(option.id)
                 } label: {
                     WeightStableLabel(text: option.label, selected: selected,
-                                      selectedFont: Theme.captionSemibold, restingFont: Theme.caption2Medium)
+                                      selectedFont: Theme.captionSemibold, restingFont: Theme.captionMedium)
                         .foregroundStyle(
                             disabled ? AnyShapeStyle(.tertiary)
                                 : selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
@@ -626,7 +600,7 @@ struct SegmentedChoice: View {
                         .padding(.vertical, 4)
                         .background {
                             if selected {
-                                ChoicePill().matchedGeometryEffect(id: "choicePill", in: pill)
+                                GlassSelectionPill().matchedGeometryEffect(id: "choicePill", in: pill)
                             }
                         }
                         .contentShape(Capsule())
@@ -640,15 +614,5 @@ struct SegmentedChoice: View {
         .padding(2)
         .background(Capsule().fill(Theme.fillQuiet))
         .motion(.selection, value: selection)
-    }
-
-    private struct ChoicePill: View {
-        var body: some View {
-            if #available(macOS 26.0, *) {
-                Capsule().fill(.clear).glassEffect(.clear, in: Capsule())
-            } else {
-                Capsule().fill(Theme.fillSelection)
-            }
-        }
     }
 }

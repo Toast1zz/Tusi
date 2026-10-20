@@ -126,21 +126,15 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var emptyResizeTask: Task<Void, Never>?
 
     /// The width the panel should actually use: the user's preference, inside the design
-    /// bounds. The bottom bar no longer grows with state or language, so the content never
-    /// needs to push it wider.
+    /// bounds.
     private var effectiveWidth: CGFloat {
         min(max(settings.panelWidth, Theme.panelMinWidth), Theme.panelMaxWidth)
     }
     private var hasShownOnce = false
 
     /// The floor under the panel's height. Its only job is to reject a nonsense
-    /// measurement (a view mid-teardown reporting nothing), so it has to sit *below* the
-    /// smallest height the panel legitimately wants — which is an empty one-line input
-    /// plus the bottom bar, measured at 86pt. The floor used to be 100pt: taller than
-    /// the real thing, so the emptiest state of the panel was padded by 14pt of nothing.
-    /// Split evenly above and below the content that read as slightly loose spacing;
-    /// once content was anchored to the top it read as the bottom bar sitting too high,
-    /// which is what it had always been.
+    /// measurement (a view mid-teardown reporting nothing), so it sits below the smallest
+    /// real height — an empty one-line input plus the bottom bar, 86pt.
     static let minimumPanelHeight: CGFloat = 60
 
     static func clampedPanelHeight(desired: CGFloat, visibleHeight: CGFloat) -> CGFloat {
@@ -148,14 +142,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         return min(max(desired, minimumPanelHeight), upperBound)
     }
 
-    /// Whether the window has to move for a content height of `target`.
-    ///
-    /// `actual` is the window's own height — never the last height this controller
-    /// *asked* for. The two come apart whenever a resize does not land (an animation
-    /// interrupted by a panel drag, a frame set while the panel was ordered out), and an
-    /// intent-against-intent comparison discards precisely the report that would put
-    /// them back together, leaving the panel wrong until the content height happens to
-    /// change again.
+    /// Whether the window has to move for a content height of `target`. `actual` is the
+    /// window's own height, never the last height asked for — see `applyHeight`.
     static func heightNeedsApply(actual: CGFloat, target: CGFloat) -> Bool {
         abs(actual - target) > 0.5
     }
@@ -200,19 +188,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         .environmentObject(settings)
         .environmentObject(panelState)
         .environmentObject(updateChecker)
-        // NSHostingView centres a root view shorter than its bounds, which turns any
-        // window/content height mismatch into padding (or clipping) split evenly across
-        // the top and bottom edges. The panel is anchored at its top edge everywhere
-        // else — `position()`, `applyHeight` — so anchor the content there too: slack
-        // then collects harmlessly at the bottom instead of eating the input's padding.
-        //
-        // `minHeight: 0` is what makes that hold in the other direction. With only
-        // `maxHeight`, the frame grows to its content whenever the content is the taller
-        // one — which it briefly is at the start of every expansion, because the view's
-        // height lands a layout pass before the window's — and NSHostingView then centres
-        // the oversized root, pushing the input up by half the difference and dropping
-        // back as the window catches up. Measured at 43pt when opening history. Pinned to
-        // exactly the window's height, the overflow is only ever clipped at the bottom.
+        // NSHostingView centres a root view that does not match its bounds, splitting any
+        // window/content mismatch across the top and bottom edges. Pin the root to the
+        // window's height and anchor it at the top, like the window itself: slack and
+        // overflow then only ever land at the bottom.
         .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
 
         let container = PanelContainerView(cornerRadius: Theme.panelCornerRadius)
@@ -222,7 +201,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         let hosting = NSHostingView(rootView: root)
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
-        container.installContent(hosting)
+        container.addSubview(hosting)
         panel.contentView = container
         contentHost = hosting
 
@@ -236,11 +215,6 @@ final class PanelController: NSObject, NSWindowDelegate {
         installResignObserver()
 
     }
-    /// `@MainActor deinit` (Swift 5.10+): the deinit runs on the main actor, so it can
-    /// safely access the main-actor-isolated `keyMonitor`/`resignObserver` properties.
-    /// This is required for Swift 6 language mode, which otherwise rejects touching
-    /// actor-isolated state from a nonisolated deinit. AppKit observers are removed
-    /// here because the panel's monitors must be torn down with it.
     @MainActor
     deinit {
         emptyResizeTask?.cancel()
@@ -267,19 +241,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         position()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        // The one animation in the app that cannot go through `.motion`: `alphaValue`
-        // belongs to the window, not to any view. It is still driven by Theme's curve
-        // and duration so the summon shares the app's motion character.
-        //
-        // `hide()` has no counterpart on purpose: a summon should feel like the panel
-        // was already there, a dismissal like it is already gone. Fading out would put
-        // a translucent panel over whatever the user just turned back to look at.
-        //
-        // Reduce Motion skips the fade entirely rather than shortening it — this is the
-        // app's most frequent animation (⌥Space, dozens of times a day), and a user who
-        // turned the setting on wants the panel there, not a brief cross-fade every
-        // single time. Read from NSWorkspace rather than the environment because there
-        // is no SwiftUI view here to read one from.
+        // Fade in only (see `Theme.panelAppearDuration`): a dismissal should feel like the
+        // panel is already gone. Reduce Motion skips the fade entirely; it is read from
+        // NSWorkspace because there is no SwiftUI environment here.
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.alphaValue = 1
         } else {
@@ -310,10 +274,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         emptyResizeTask?.cancel()
         cancelReturnHold()
         guard panel.isVisible else { return }
-        // Deliberately NOT NSApp.hide(nil): that call hands activation back to whichever
-        // app was frontmost before Tusi took it — exactly like ⌘H — which is what made the
-        // *previous* app's window jump forward on the second click (e.g. Telegram). Ordering
-        // the panel out is enough; the next real click elsewhere activates that app normally.
+        // Deliberately not NSApp.hide(nil): like ⌘H it hands activation back to the
+        // previously frontmost app, whose window then jumps forward.
         panel.orderOut(nil)
     }
 
@@ -409,17 +371,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Checks, once the dust has settled, that the window is actually the size its
     /// content needs — measured independently of the chain that reported the height.
     ///
-    /// Every hop from the result text to this window is a preference feeding a `@State`
-    /// that sets the next hop's frame, and SwiftUI does not promise to redeliver a
-    /// preference for the layout its own state write caused. A link that goes quiet
-    /// cannot report that it went quiet; the window simply keeps the height it had while
-    /// the content grows past the bottom edge, taking the bottom bar with it. `fittingSize`
-    /// asks AppKit what the hosted content measures right now, which is the one question
-    /// a missing preference cannot corrupt.
-    ///
-    /// Delayed past `windowResizeDuration` so it audits the settled state rather than
-    /// racing the resize it was scheduled by, and debounced so a streaming translation
-    /// runs it once at the end instead of once per chunk.
+    /// SwiftUI does not promise to redeliver a height preference, and a lost report
+    /// leaves the window at its old height. `fittingSize` asks AppKit what the hosted
+    /// content measures right now, which a missing preference cannot corrupt (see
+    /// `HeightTrace`). Delayed past `windowResizeDuration` so it audits the settled state,
+    /// and debounced to one run per burst of changes.
     private func scheduleFitAudit(confirmingShrink: Bool = false) {
         fitAudit?.cancel()
         if !confirmingShrink { pendingShrinkHeight = nil }
@@ -489,15 +445,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// Moves the window to `target`, keeping the top edge anchored.
     ///
     /// The early-out compares against the window's *actual* height, never against
-    /// `desiredHeight`. Those two can come apart — a resize animation interrupted by a
-    /// panel drag (this window is `isMovableByWindowBackground`, and a pinned panel gets
-    /// dragged around while it resizes), a frame set while the panel was ordered out, a
-    /// screen clamp in `position()` — and comparing intent against intent means the one
-    /// report that could repair the split is exactly the one that gets swallowed. The
-    /// window then stays at the wrong height until the content height happens to change
-    /// again, and because `NSHostingView` centres content that is shorter than its
-    /// bounds, the error shows up split evenly across the top and bottom edges: the
-    /// panel looks stretched, or looks like it is crushing its own padding.
+    /// `desiredHeight`: the two come apart when a resize does not land (an animation
+    /// interrupted by a drag, a frame set while ordered out), and comparing intent
+    /// against intent would swallow the one report that could repair it.
     private func applyHeight(_ target: CGFloat) {
         HeightTrace.log("window \(panel.frame.height) -> \(target) (translating \(engine.isTranslating))")
         guard Self.heightNeedsApply(actual: panel.frame.height, target: target) else {
@@ -510,27 +460,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         frame.size.height = target
         frame.origin.y = top - target
 
-        // How the window and the content stay together, and why this is not a second
-        // timeline in disguise:
-        //
-        // SwiftUI does not hand out interpolated heights. A `GeometryReader` preference
-        // fires *once* per transition, carrying the final value, about one layout pass
-        // after the action starts — measured directly, not assumed. So this method never
-        // sees the frames of the animation the view layer is running; it sees its
-        // destination. The window therefore has to animate there itself, and the only way
-        // for the two to look like one motion is for them to be the same animation:
-        // `Theme.windowResizeDuration` is the duration of `.layout` (the one token
-        // allowed to move the panel's height), and `caTimingFunction` is the same
-        // curve `Theme.timed` builds from. Same start, same shape, same end.
-        //
-        // Two cases genuinely must not animate:
-        //
-        // - Streaming. Line growth arrives in a burst, and a fresh 0.22s animation per
-        //   line would stack dozens of overlapping resizes and lag the text behind its
-        //   own tokens. Nothing animates this in the view layer either, so setting the
-        //   frame directly keeps both sides consistent.
-        // - Reduce Motion. This panel resizes constantly; animating through that setting
-        //   is a standing annoyance rather than a nicety.
+        // The window animates to the destination on the same curve and duration as the
+        // view layer's `.layout` (Theme rule 3). Set directly instead while the input
+        // editor drives its own height frame by frame, while a translation is in flight,
+        // and under Reduce Motion.
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if panelState.inputResizeInProgress || engine.isTranslating || reduceMotion {
             panel.setFrame(frame, display: true)

@@ -28,76 +28,9 @@ struct TranslationLanguage: Codable, Equatable, Hashable {
         apiName: "natural, idiomatic Korean",
         symbol: "한"
     )
-    static let french = TranslationLanguage(
-        displayName: "Français",
-        apiName: "natural, idiomatic French",
-        symbol: "FR"
-    )
-    static let german = TranslationLanguage(
-        displayName: "Deutsch",
-        apiName: "natural, idiomatic German",
-        symbol: "DE"
-    )
-    static let spanish = TranslationLanguage(
-        displayName: "Español",
-        apiName: "natural, idiomatic Spanish",
-        symbol: "ES"
-    )
-    static let portuguese = TranslationLanguage(
-        displayName: "Português",
-        apiName: "natural, idiomatic Portuguese",
-        symbol: "PT"
-    )
-    static let italian = TranslationLanguage(
-        displayName: "Italiano",
-        apiName: "natural, idiomatic Italian",
-        symbol: "IT"
-    )
-    static let russian = TranslationLanguage(
-        displayName: "Русский",
-        apiName: "natural, idiomatic Russian",
-        symbol: "RU"
-    )
-    static let arabic = TranslationLanguage(
-        displayName: "العربية",
-        apiName: "natural, idiomatic Arabic",
-        symbol: "AR"
-    )
-    static let hindi = TranslationLanguage(
-        displayName: "हिन्दी",
-        apiName: "natural, idiomatic Hindi",
-        symbol: "HI"
-    )
-    static let vietnamese = TranslationLanguage(
-        displayName: "Tiếng Việt",
-        apiName: "natural, idiomatic Vietnamese",
-        symbol: "VI"
-    )
-    static let thai = TranslationLanguage(
-        displayName: "ไทย",
-        apiName: "natural, idiomatic Thai",
-        symbol: "TH"
-    )
-    static let indonesian = TranslationLanguage(
-        displayName: "Bahasa Indonesia",
-        apiName: "natural, idiomatic Indonesian",
-        symbol: "ID"
-    )
-    static let turkish = TranslationLanguage(
-        displayName: "Türkçe",
-        apiName: "natural, idiomatic Turkish",
-        symbol: "TR"
-    )
-    static let dutch = TranslationLanguage(
-        displayName: "Nederlands",
-        apiName: "natural, idiomatic Dutch",
-        symbol: "NL"
-    )
 
-    /// All preset languages, used for the language picker in multi-language mode.
-    /// Deliberately a short list: translation quality and intent are clearest for these
-    /// four; anything else can still be *detected* as a source, but is not offered as a
-    /// target.
+    /// The targets the language picker offers. Anything else can still be *detected* as
+    /// a source (see `fromNLLanguage`), but is not offered as a target.
     static let presets: [TranslationLanguage] = [
         .english, .chinese, .japanese, .korean
     ]
@@ -162,10 +95,7 @@ enum Tone: String, CaseIterable, Identifiable, Codable {
 /// instead of a silent data race.
 @MainActor
 enum LanguageDetector {
-    private static let recognizer: NLLanguageRecognizer = {
-        // NLLanguageRecognizer is designed for reuse — create once, reset() between uses.
-        NLLanguageRecognizer()
-    }()
+    private static let recognizer = NLLanguageRecognizer()
 
     /// Detects the source language of the input text. In simple (CN↔EN) mode the
     /// caller derives the target from the source; in multi-language mode the caller

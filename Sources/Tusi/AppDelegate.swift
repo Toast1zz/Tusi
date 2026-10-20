@@ -19,8 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         engine.flushPendingDraftSave()
         settings.flushPendingSaves()
-        // Shut the sound engine down: stop loops, silence anything in flight, release
-        // cached players (uisfx `ui.destroy()` equivalent for the native player).
+        // Silence anything still playing and release the cached player.
         settings.shutdownSound()
     }
 
@@ -109,9 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            // `translate` is an SF Symbols 6 / macOS 15 symbol; on macOS 13–14 it's nil
-            // and we fall back to the filled speech bubble (the hollow one looked too faint
-            // in the menu bar).
+            // `translate` is a macOS 15 symbol; on macOS 14 fall back to the filled speech
+            // bubble (the hollow one looks too faint in the menu bar).
             let image = NSImage(systemSymbolName: "translate", accessibilityDescription: "Tusi")
                 ?? NSImage(systemSymbolName: "character.bubble.fill", accessibilityDescription: "Tusi")
             image?.isTemplate = true
@@ -239,7 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: L("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
-
 
         NSApp.mainMenu = mainMenu
     }

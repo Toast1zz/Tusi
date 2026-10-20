@@ -88,7 +88,7 @@ struct CredentialStorage {
 
     static var live: CredentialStorage {
         CredentialStorage(
-            load: { try Keychain.migrateLegacyKeysIfNeeded() ?? Keychain.loadKeys() },
+            load: { try Keychain.loadKeys() },
             save: { try Keychain.saveKeys($0) }
         )
     }
@@ -106,21 +106,15 @@ final class SettingsStore: ObservableObject {
     /// too, so preview runs keep their history in a scratch location as well.
     let isPreview: Bool
 
-    /// Three slots: index 0 and 1 are the primary/backup pair used by ordinary
-    /// automatic translation (and the race feature below); index 2 is a standalone
-    /// local-model slot that never participates in that automatic flow — see
-    /// `localProfileIndex`.
+    /// Three slots: index 0 and 1 are the online primary/backup pair; index 2 is the
+    /// local model (`localProfileIndex`).
     @Published var profiles: [APIProfile] {
         didSet { persistProfiles(previous: oldValue) }
     }
 
-    /// The dedicated local-model slot. Deliberately outside the primary/backup pair:
-    /// it is never part of `resolvedChain`, never raced, never a failover target —
-    /// invoked only by the user explicitly asking to translate with it. Having a
-    /// dedicated slot means primary/backup are expected to be online providers by
-    /// convention, not just by the runtime `requiresAuth` check `raceFastestEnabled`
-    /// still does defensively (nothing stops a user from typing a loopback URL into
-    /// slot 0/1 anyway — that check stays as the real guarantee).
+    /// The dedicated local-model slot. It forms its own `.local` tier in `route`, so it
+    /// is never raced against or a failover target for the online pair. Slots 0/1 may
+    /// still hold a loopback URL; `concurrentAvailable` checks for that.
     static let localProfileIndex = 2
 
     /// Set when a Keychain write failed. The pending snapshot is retained so a later
@@ -136,10 +130,10 @@ final class SettingsStore: ObservableObject {
     /// typed key was actually persisted, instead of leaving them guessing.
     @Published private(set) var keychainSaved = false
 
-    private var keychainSaveTask: Task<Void, Never>?
+    private let keychainSave = Debouncer(delay: .milliseconds(250))
     private var keychainSavedTask: Task<Void, Never>?
     private var pendingKeychainKeys: [Int: String]?
-    private var profileSaveTask: Task<Void, Never>?
+    private let profileSave = Debouncer(delay: .milliseconds(250))
     private var pendingProfiles: [APIProfile]?
 
     @Published var panelWidth: CGFloat = Theme.panelMinWidth {
@@ -150,9 +144,7 @@ final class SettingsStore: ObservableObject {
     }
     /// Which tier a translation starts at. `.local` does not mean "local only" — it
     /// means the local model answers first and the online tier stays one keystroke
-    /// away (see `TranslationRoute` and `TranslationEngine.escalate`). This replaced
-    /// `useLocalModel`, a standing mode that made the local slot bypass every other
-    /// code path in the app.
+    /// away (see `TranslationRoute` and `TranslationEngine.escalate`).
     @Published var routeStart: RouteStart {
         didSet { defaults.set(routeStart.rawValue, forKey: "routeStart") }
     }
@@ -170,11 +162,7 @@ final class SettingsStore: ObservableObject {
 
     func setLocalModelReady(_ ready: Bool) { localModelReady = ready && localModelEnabled }
 
-    /// What to do when both online slots are filled in. Replaced the
-    /// `fallbackEnabled` / `raceFastestEnabled` pair, which were never actually
-    /// independent: `resolvedChain` gated the backup on `fallbackEnabled`, and the
-    /// race path required a two-slot chain — so racing with fallback switched off did
-    /// nothing at all, silently, with both switches showing as on.
+    /// What to do when both online slots are filled in.
     ///
     /// `.concurrent` is only ever *offered* when both online slots are non-loopback
     /// (see `concurrentAvailable`): a loopback slot's near-zero network latency wins
@@ -228,7 +216,7 @@ final class SettingsStore: ObservableObject {
             SoundPlayer.shared.enabled = soundEnabled
         }
     }
-    /// All five rebindable shortcuts. Missing entries fall back to the action's default.
+    /// Every rebindable shortcut. Missing entries fall back to the action's default.
     @Published var shortcuts: [ShortcutAction: KeyCombo] {
         didSet { persistShortcuts() }
     }
@@ -301,6 +289,12 @@ final class SettingsStore: ObservableObject {
     init(preview: Bool? = nil, credentialStorage: CredentialStorage? = nil, defaultsOverride: UserDefaults? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         self.credentialStorage = credentialStorage ?? (isPreview ? nil : .live)
+        #if DEBUG
+        // A test that reaches the real Keychain blocks the whole run on an authorization
+        // prompt (the test runner is not in the item's partition list). Fail it instead.
+        assert(credentialStorage != nil || isPreview || NSClassFromString("XCTestCase") == nil,
+               "Tests must inject credentialStorage instead of reading the user's Keychain")
+        #endif
         if let defaultsOverride {
             defaults = defaultsOverride
         } else if isPreview {
@@ -402,19 +396,6 @@ final class SettingsStore: ObservableObject {
     // MARK: - Shortcut persistence
 
     private static func loadShortcuts(defaults: UserDefaults) -> [ShortcutAction: KeyCombo] {
-        // The old single-shortcut layout stored copy under "copyShortcut.*"; fold it into
-        // the new per-action layout so existing users keep their custom copy key.
-        if !defaults.bool(forKey: "didMigrateShortcuts") {
-            defaults.set(true, forKey: "didMigrateShortcuts")
-            if defaults.object(forKey: "copyShortcut.keyCode") != nil,
-               let display = defaults.string(forKey: "copyShortcut.display") {
-                let base = "shortcut.\(ShortcutAction.copy.rawValue)"
-                defaults.set(defaults.integer(forKey: "copyShortcut.keyCode"), forKey: "\(base).keyCode")
-                defaults.set(defaults.integer(forKey: "copyShortcut.modifiers"), forKey: "\(base).modifiers")
-                defaults.set(display, forKey: "\(base).display")
-            }
-        }
-
         var result: [ShortcutAction: KeyCombo] = [:]
         for action in ShortcutAction.allCases {
             let base = "shortcut.\(action.rawValue)"
@@ -458,18 +439,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Persistence
 
     private static func loadProfiles(defaults: UserDefaults, storage: CredentialStorage) -> (profiles: [APIProfile], keychainError: String?, retryable: Bool, keys: [Int: String]?) {
-        // Pre-slot installs kept the primary's URL and model under unsuffixed keys.
-        if !defaults.bool(forKey: "didMigrateProfiles") {
-            defaults.set(true, forKey: "didMigrateProfiles")
-            if let oldBase = defaults.string(forKey: "baseURL"), !oldBase.isEmpty {
-                defaults.set(oldBase, forKey: "baseURL.0")
-                defaults.set(defaults.string(forKey: "model") ?? "", forKey: "model.0")
-                defaults.removeObject(forKey: "baseURL")
-                defaults.removeObject(forKey: "model")
-            }
-        }
-
-        // One read for both slots — see Keychain for why that matters.
+        // One read for every key — see Keychain for why that matters.
         let keys: [Int: String]
         let snapshot: [Int: String]?
         let keychainError: String?
@@ -547,17 +517,8 @@ final class SettingsStore: ObservableObject {
     }
 
     private func scheduleProfileSave() {
-        profileSaveTask?.cancel()
-        guard let profiles = pendingProfiles else { return }
-        profileSaveTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-            } catch {
-                return
-            }
-            guard let self, !Task.isCancelled else { return }
-            self.saveProfiles(profiles)
-        }
+        guard let profiles = pendingProfiles else { return profileSave.cancel() }
+        profileSave.schedule { [weak self] in self?.saveProfiles(profiles) }
     }
 
     private func saveProfiles(_ profiles: [APIProfile]) {
@@ -583,17 +544,8 @@ final class SettingsStore: ObservableObject {
     }
 
     private func scheduleKeychainSave() {
-        keychainSaveTask?.cancel()
-        guard let keys = pendingKeychainKeys else { return }
-        keychainSaveTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-            } catch {
-                return
-            }
-            guard let self, !Task.isCancelled else { return }
-            self.saveKeychain(keys)
-        }
+        guard let keys = pendingKeychainKeys else { return keychainSave.cancel() }
+        keychainSave.schedule { [weak self] in self?.saveKeychain(keys) }
     }
 
     private func saveKeychain(_ keys: [Int: String]) {
@@ -642,8 +594,7 @@ final class SettingsStore: ObservableObject {
     func retryLoadKeys() {
         guard let credentialStorage else { return }
         if let pendingKeychainKeys {
-            keychainSaveTask?.cancel()
-            keychainSaveTask = nil
+            keychainSave.cancel()
             saveKeychain(pendingKeychainKeys)
             return
         }
@@ -682,14 +633,12 @@ final class SettingsStore: ObservableObject {
 
     /// Flushes debounced profile and Keychain writes before the app exits.
     func flushPendingSaves() {
-        profileSaveTask?.cancel()
-        profileSaveTask = nil
+        profileSave.cancel()
         if let profiles = pendingProfiles {
             saveProfiles(profiles)
         }
 
-        keychainSaveTask?.cancel()
-        keychainSaveTask = nil
+        keychainSave.cancel()
         keychainSavedTask?.cancel()
         keychainSavedTask = nil
         if let keys = pendingKeychainKeys {
@@ -730,9 +679,7 @@ final class SettingsStore: ObservableObject {
     /// Whether either online slot is filled in.
     var onlineAvailable: Bool { isSlotAvailable(0) || isSlotAvailable(1) }
 
-    /// Whether there is any usable slot at all. Unlike the old `isConfigured`, a
-    /// filled-in local slot counts: it is a normal route start now, not a manual-only
-    /// mode that left ⏎ unconfigured.
+    /// Whether there is any usable slot at all, the local one included.
     var isConfigured: Bool { !route.isEmpty }
 
     /// Whether "同时请求" is a real choice right now. Both online slots must be filled
@@ -765,7 +712,7 @@ final class SettingsStore: ObservableObject {
 
     /// The stages this translation may pass through, in order. Everything the engine
     /// needs to know about routing is here: which slots, in what order, under what
-    /// strategy, at which tier — so `translate()` no longer branches on preferences.
+    /// strategy, at which tier — so `translate()` never branches on preferences.
     ///
     /// A `.local` start with no usable local slot is not an error state to report; the
     /// route simply begins online, exactly as it would if the preference were unset.
@@ -785,10 +732,8 @@ final class SettingsStore: ObservableObject {
         profiles[profiles.indices.contains(slot) ? slot : 0].config
     }
 
-    /// Slot label for the tabs: the provider's short name (e.g. "deepseek",
-    /// "commandcode") rather than the full host — the tabs now share the row equally
-    /// (see SettingsView.slotTab), so a full domain like "api.commandcode.ai" ate a
-    /// disproportionate share of a tab that also has to fit a role label and dot.
+    /// A slot's display name: the provider's short name ("deepseek") rather than the
+    /// full host, shortened further when it would crowd a one-line row.
     func label(for index: Int) -> String {
         let host = profiles[index].config.displayHost
         guard !host.isEmpty else { return L("未配置") }

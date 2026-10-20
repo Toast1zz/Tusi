@@ -81,22 +81,15 @@ final class SoundTests: XCTestCase {
     // MARK: - Preference
 
     func testSoundPreferencePersistsAndRestores() {
-        // Preview stores wipe their own suite on init, so the persistence round-trip
-        // must go through the real UserDefaults.standard. Save the current values and
-        // restore them afterwards so the test never clobbers a real user's prefs.
-        let defaults = UserDefaults.standard
-        let savedEnabled = defaults.object(forKey: "soundEnabled")
-        defer {
-            if let savedEnabled {
-                defaults.set(savedEnabled, forKey: "soundEnabled")
-            } else {
-                defaults.removeObject(forKey: "soundEnabled")
-            }
-        }
-
+        // A scratch suite and stub credentials: a real store would read the user's
+        // Keychain, which blocks the test run on an authorization prompt.
+        let name = "TusiTests.sound.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
         defaults.set(false, forKey: "soundEnabled")
 
-        let settings = SettingsStore(preview: false)
+        let settings = SettingsStore(preview: false,
+            credentialStorage: CredentialStorage(load: { [:] }, save: { _ in }), defaultsOverride: defaults)
         XCTAssertFalse(settings.soundEnabled)
         // The shared player picked up the restored preference too.
         XCTAssertFalse(player.enabled)

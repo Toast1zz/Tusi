@@ -11,7 +11,8 @@ import SwiftUI
 /// - Three sizes in the translator: 15 for the text itself, 12 for controls, 11 for
 ///   metadata. The settings page keeps the scale it was designed with (see "Settings
 ///   page" below) — those tokens belong to it alone.
-/// - Two weights: regular and medium. No rounded or light variants.
+/// - Two weights: regular and medium (the copy capsule's semibold label is the one
+///   exception). No rounded or light variants.
 /// - The accent color marks focus, text selection, links — and the copy button, which
 ///   keeps its solid blue/green/orange capsule so its state reads at a glance. Orange is
 ///   otherwise reserved for failures the user has to act on.
@@ -28,7 +29,6 @@ enum Theme {
     //
     // Three steps, each meaning one thing. Anything that rests on `fillQuiet` hovers to
     // `fillActive`; anything that rests on nothing hovers to `fillQuiet`.
-
     //
     // Each is ink at a low opacity, with a second, stronger opacity for Increase Contrast
     // (System Settings ▸ Accessibility ▸ Display). At 5–10% these surfaces are all but
@@ -110,43 +110,30 @@ enum Theme {
     // MARK: - Settings page
     //
     // The settings page has its own, slightly denser scale. Its floor is 11pt for text
-    // and 10pt for glyphs: 9–10pt Chinese is hard to read on a non-Retina display, and
-    // the page used to spend eight sizes on what is three levels of hierarchy.
+    // and 10pt for glyphs: 9–10pt Chinese is hard to read on a non-Retina display.
 
     /// 10pt — small glyphs beside a label (lock, chevrons, status icons). Never text.
     static let caption2 = Font.system(size: 10)
-    /// 11pt — secondary labels, hints, field captions.
+    /// 10pt semibold — chevron glyphs.
+    static let caption2Semibold = Font.system(size: 10, weight: .semibold)
+    /// 11pt — secondary labels, hints, field captions, compact controls.
     static let caption = Font.system(size: 11)
-    /// 11pt — compact controls and labels.
-    static let footnote = Font.system(size: 11)
-    /// 12pt — button text, compact labels, small icons.
-    static let bodySmall = Font.system(size: 12)
+    /// 11pt medium — field and group titles, secondary actions, resting segments.
+    static let captionMedium = Font.system(size: 11, weight: .medium)
+    /// 11pt semibold — the selected option in a segmented choice.
+    static let captionSemibold = Font.system(size: 11, weight: .semibold)
+    /// 12pt semibold — primary buttons and the copy capsule's label.
+    static let controlSemibold = Font.system(size: 12, weight: .semibold)
     /// 13pt — settings rows, field content. The macOS body size.
     static let body = Font.system(size: 13)
     /// 14pt — page headers (Settings, Shortcuts).
     static let title = Font.system(size: 14, weight: .semibold)
-    /// 10pt semibold — chevron glyphs.
-    static let caption2Semibold = Font.system(size: 10, weight: .semibold)
-    /// 11pt semibold — the selected option in a segmented choice.
-    static let captionSemibold = Font.system(size: 11, weight: .semibold)
-    /// 11pt medium — secondary action labels, unselected segmented options.
-    static let caption2Medium = Font.system(size: 11, weight: .medium)
-    /// 11pt medium — compact control labels.
-    static let footnoteMedium = Font.system(size: 11, weight: .medium)
-    /// 11pt semibold — section headers.
-    static let footnoteSemibold = Font.system(size: 11, weight: .semibold)
-    /// 12pt medium — update status, recording state.
-    static let footnote2Medium = Font.system(size: 12, weight: .medium)
-    /// 12pt semibold — slot tab label.
-    static let footnote2Semibold = Font.system(size: 12, weight: .semibold)
-    /// 12pt semibold — primary button text.
-    static let bodySmallSemibold = Font.system(size: 12, weight: .semibold)
     /// 10.5pt bold — the copy button's icon.
-    static let caption2Bold = Font.system(size: 10.5, weight: .bold)
+    static let copyGlyph = Font.system(size: 10.5, weight: .bold)
     /// 10pt medium — the copy button's shortcut hint.
-    static let captionMedium = Font.system(size: 10, weight: .medium)
-    /// 10.5pt — the tone selector's labels, selected and resting. The selector keeps the
-    /// metrics it has had since 1.14.15; it does not follow the settings scale.
+    static let copyHint = Font.system(size: 10, weight: .medium)
+    /// 10.5pt — the tone selector's labels, selected and resting. Deliberately outside
+    /// the settings scale.
     static let toneLabel = Font.system(size: 10.5, weight: .semibold)
     static let toneLabelResting = Font.system(size: 10.5, weight: .medium)
     /// 13pt monospaced — code-like fields (base URL, model, key).
@@ -157,12 +144,8 @@ enum Theme {
     static let shortcutComboRecording = Font.system(size: 11.5, weight: .medium)
     /// The faintest resting surface.
     static let fillFaint = ink(0.025, increasedContrast: 0.08)
-    /// Hover state for rows and pills.
-    static let fillHover = ink(0.07, increasedContrast: 0.16)
     /// The tone and language choice pills' Liquid Glass fallback on macOS < 26.
     static let fillSelection = ink(0.14, increasedContrast: 0.26)
-    /// Small inline elements: badges, the shortcuts row hover.
-    static let radiusSmall: CGFloat = 6
 
     // MARK: - Motion
     //
@@ -192,11 +175,8 @@ enum Theme {
     //    own Spotlight/menus/popovers read as crisp for exactly this reason.
     //    `.selection` is the single deliberate exception.
 
-    /// The one curve every non-spring animation uses: the standard ease-out shape
-    /// (the same control points macOS/CSS/CA's own `easeOut` uses), not a hand-picked
-    /// one. An earlier version used (0.2, 0.8, 0.3, 1.0), which covers 80% of the
-    /// distance in the first 20% of the duration and then crawls — mathematically zero
-    /// overshoot, but it reads as "snap, then creep", which is worse than a bounce.
+    /// The one curve every non-spring animation uses: the standard ease-out shape (CSS
+    /// `ease`'s control points). Steeper curves read as "snap, then creep".
     private static let curve: (Double, Double, Double, Double) = (0.25, 0.1, 0.25, 1.0)
 
     /// TUSI_SLOWMO stretches every animation so transitions can be inspected frame by
@@ -204,9 +184,7 @@ enum Theme {
     static let animationScale: Double = ProcessInfo.processInfo.environment["TUSI_SLOWMO"] != nil ? 10 : 1
 
     /// What caused the change. The only vocabulary call sites get: no durations, no
-    /// curves, no raw `Animation` values. Adding a sixth case should feel expensive —
-    /// the last token to be removed (`historyTransition`, 0.26) existed only to mask
-    /// the window-lag described in rule 3, and had nothing left to do once that went.
+    /// curves, no raw `Animation` values. Adding a sixth case should feel expensive.
     enum Motion: Hashable {
         /// Hover and press feedback — the fastest, most frequent thing in the app.
         case micro
@@ -242,19 +220,11 @@ enum Theme {
     }
 
     /// How long the window itself takes to reach a new height, and therefore how long
-    /// every height-changing animation in the view layer takes.
-    ///
-    /// This is a shared constant rather than the window copying whatever SwiftUI is
-    /// doing, because SwiftUI will not tell it. Preferences are not interpolated: a
-    /// height measured through a `GeometryReader` reaches `PanelController` exactly once
-    /// per transition, carrying the final value, roughly one layout pass after the action
-    /// begins. The window therefore has to run its own animation to that value — so the
-    /// two are kept identical by construction instead, and the small arrival delay is the
-    /// only difference left between them.
+    /// every height-changing animation in the view layer takes (rule 3).
     static let windowResizeDuration: Double = 0.22
 
-    /// Evaluate the same cubic Bezier used by SwiftUI, with cancellable frame
-    /// updates so editing can take over an in-flight window transition.
+    /// `curve` at `elapsed` over `windowResizeDuration`, for the window's own frame
+    /// animation in `FloatingPanel`.
     static func windowResizeProgress(elapsed: Double) -> CGFloat {
         easedProgress(elapsed: elapsed, duration: windowResizeDuration)
     }
@@ -283,7 +253,8 @@ enum Theme {
         return CGFloat(cubic((lower + upper) / 2, curve.1, curve.3))
     }
 
-    /// One frame clock drives both the editor's layout and the native window.
+    /// The input editor's per-frame height while it grows or shrinks. The window follows
+    /// these frames directly, so both move on one clock.
     static func inputResizeHeight(from: CGFloat, to: CGFloat, elapsed: Double) -> CGFloat {
         let t = min(1, max(0, elapsed / (inputResizeDuration * animationScale)))
         let progress = t * t * (3 - 2 * t)
@@ -292,15 +263,12 @@ enum Theme {
 
     // MARK: - Panel summon (AppKit)
 
-    /// The panel's fade-in is the only animation left outside SwiftUI: `alphaValue`
-    /// belongs to the window, not to any view, so it cannot go through `.motion`.
-    /// It is deliberately faster than any in-panel token — this is the app's most-seen
-    /// animation (⌥Space, dozens of times a day) and a summon should feel like the
-    /// panel was already there, not like it is arriving.
+    /// The panel's fade-in. `alphaValue` belongs to the window, so it cannot go through
+    /// `.motion`. Deliberately faster than any in-panel token — this is the app's
+    /// most-seen animation, and a summon should feel like the panel was already there.
     static let panelAppearDuration: Double = 0.14
 
-    /// AppKit form of `curve`, for the summon above. Nothing else in the app uses
-    /// `NSAnimationContext` — see rule 3.
+    /// AppKit form of `curve`, for the window's own alpha and frame animations.
     static var caTimingFunction: CAMediaTimingFunction {
         CAMediaTimingFunction(controlPoints: Float(curve.0), Float(curve.1), Float(curve.2), Float(curve.3))
     }
@@ -312,8 +280,7 @@ enum Theme {
 /// `NSWorkspace.accessibilityDisplayShouldReduceMotion` read: an environment value
 /// establishes a real SwiftUI dependency, so toggling the system setting re-renders
 /// the panel immediately instead of taking effect whenever a body next happens to be
-/// evaluated. This app animates a lot — pushes, folds, resizes, toasts — so ignoring
-/// the setting is a standing annoyance rather than a missing nicety.
+/// evaluated.
 struct MotionModifier<V: Equatable>: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let motion: Theme.Motion

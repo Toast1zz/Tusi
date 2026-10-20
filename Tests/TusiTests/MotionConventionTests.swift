@@ -149,7 +149,7 @@ final class MotionConventionTests: XCTestCase {
     /// exists to prevent.
     func testAppKitAnimationIsConfinedToTheWindowItself() throws {
         assertNone(
-            try scan(rule: "NSAnimationContext is banned (the window mirrors SwiftUI, it does not ease)") {
+            try scan(rule: "NSAnimationContext is banned outside the window's own alpha and frame") {
                 $0.contains("NSAnimationContext")
             },
             "Animate it in SwiftUI with `.motion(_:value:)` instead; only the window's own alpha and frame are exempt."

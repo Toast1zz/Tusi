@@ -76,8 +76,7 @@ struct LineSnappingScroll: NSViewRepresentable {
         ///
         /// Not by walking up from the anchor: a `.background` is not a sibling of the
         /// thing it backs in the AppKit tree, so the subtree above it does not contain the
-        /// scroll view (measured — the first version of this attached to nothing and
-        /// silently did nothing at all). It is, however, laid out *on top of* it, and the
+        /// scroll view. It is, however, laid out *on top of* it, and the
         /// panel's two text scrollers never overlap. So collect the candidates from the
         /// window and claim the one this anchor's centre falls inside, which is the
         /// editor or result it was attached to and cannot be the other one.
@@ -231,8 +230,16 @@ struct LineSnappingScroll: NSViewRepresentable {
 }
 
 extension View {
-    /// Applies `LineSnappingScroll` to the text scroll view inside this view.
-    func snapsScrollToLines(step: CGFloat, growingEditorLimit: CGFloat? = nil) -> some View {
-        background(LineSnappingScroll(step: step, growingEditorLimit: growingEditorLimit).frame(width: 0, height: 0))
+    /// A text scroller on a whole-line grid. No system scroller: with a mouse attached,
+    /// macOS draws legacy scrollers as an opaque gutter against the transparent panel.
+    /// The grid's trailing gap sits under the last line, so the scrolled-to-end position
+    /// keeps room under the text and lands the viewport's top edge on a line boundary.
+    /// And a hand scroll, which can stop anywhere, settles onto whole lines.
+    func lineGridScroll(step: CGFloat, trailingGap: CGFloat, growingEditorLimit: CGFloat? = nil) -> some View {
+        scrollIndicators(.never)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: trailingGap)
+            }
+            .background(LineSnappingScroll(step: step, growingEditorLimit: growingEditorLimit).frame(width: 0, height: 0))
     }
 }

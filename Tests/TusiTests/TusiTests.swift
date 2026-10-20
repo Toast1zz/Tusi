@@ -1462,7 +1462,7 @@ final class TusiTests: XCTestCase {
             calls += 1
             return AsyncThrowingStream { continuation in
                 if calls == 1 {
-                    continuation.finish(throwing: TranslationError.watchdogTimeout(stage: "first-token"))
+                    continuation.finish(throwing: TranslationError.watchdogTimeout(.firstToken))
                 } else {
                     continuation.yield("你好")
                     continuation.finish()
@@ -2741,7 +2741,7 @@ final class TusiTests: XCTestCase {
                     XCTFail("expected TranslationError.watchdogTimeout, got \(error)")
                     return
                 }
-                XCTAssertEqual(stage, "first-token")
+                XCTAssertEqual(stage, .firstToken)
             }
         }
     }
@@ -3202,18 +3202,6 @@ final class TusiTests: XCTestCase {
         )
     }
 
-    /// The window no longer decides whether to animate a height change — it mirrors what
-    /// SwiftUI reports, always — so the predicate this test used to pin is gone along
-    /// with the three special cases it arbitrated between. What replaced it is
-    /// `MotionConventionTests`, which checks the invariant that makes mirroring safe:
-    /// nothing outside `Theme` starts an animation of its own.
-    func testPanelSummonIsTheFastestMotionInTheApp() {
-        XCTAssertEqual(Theme.panelAppearDuration, 0.14, accuracy: 0.001)
-        for motion in [Theme.Motion.micro, .state, .layout, .page] {
-            XCTAssertNotNil(motion.animation)
-        }
-    }
-
     func testBareLetterShortcutsRequireConfirmationButFunctionKeysDoNot() {
         // A plain letter or digit is a character the user still has to be able to type
         // into the panel, so binding it needs a second yes.
@@ -3346,7 +3334,7 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(FailureKind.classify(TranslationError.insecureURL), .configuration)
         XCTAssertEqual(FailureKind.classify(TranslationError.invalidResponse), .configuration)
         XCTAssertEqual(FailureKind.classify(TranslationError.emptyKey), .notConfigured)
-        XCTAssertEqual(FailureKind.classify(TranslationError.watchdogTimeout(stage: "idle")), .transient)
+        XCTAssertEqual(FailureKind.classify(TranslationError.watchdogTimeout(.idle)), .transient)
         XCTAssertEqual(FailureKind.classify(URLError(.networkConnectionLost)), .transient)
 
         // Only the kinds a second identical request could actually resolve.

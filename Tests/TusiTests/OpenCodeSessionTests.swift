@@ -75,8 +75,8 @@ final class OpenCodeSessionTests: XCTestCase {
             }
         }
         XCTAssertEqual(count, 1)
-        XCTAssertEqual(TranslationService.httpFailureReason(status: 400, message: missingSession), "missing_opencode_session")
-        XCTAssertEqual(TranslationService.httpFailureReason(status: 400, message: "private source or key"), "provider_rejected_request")
+        XCTAssertEqual(TranslationService.httpFailureReason(status: 400, message: missingSession), .missingOpenCodeSession)
+        XCTAssertEqual(TranslationService.httpFailureReason(status: 400, message: "private source or key"), .providerRejectedRequest)
     }
 
     func testEngineKeepsSessionAcrossTransportRetryAndRotatesForNewTranslation() async throws {

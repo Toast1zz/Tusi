@@ -17,18 +17,14 @@ enum TranslationTier: String, Codable, Equatable, Sendable, Comparable {
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rank < rhs.rank }
 }
 
-/// Where a translation begins. The user-facing half of what used to be
-/// `useLocalModel` — except the local slot is no longer a standing mode that bypasses
-/// the rest of the app, it is simply the first stage of a route that can continue.
+/// Where a translation begins. The local slot is simply the first stage of a route
+/// that can continue online.
 enum RouteStart: String, Equatable, Sendable, CaseIterable {
     case local
     case online
 }
 
-/// What to do with the two online slots. Replaces the `fallbackEnabled` /
-/// `raceFastestEnabled` pair, which were never independent: racing silently did
-/// nothing unless fallback was also on, because the race path read the same resolved
-/// chain that fallback gated.
+/// What to do with the two online slots.
 enum OnlineStrategy: String, Equatable, Sendable, CaseIterable {
     /// Ask the primary; only if it fails does the backup hear about it.
     case failover
@@ -38,10 +34,8 @@ enum OnlineStrategy: String, Equatable, Sendable, CaseIterable {
 
 /// One attempt at answering, and the slots it is allowed to use.
 ///
-/// A stage is the unit the engine advances through. Advancing on *failure* is what
-/// used to be called failover; advancing on *request* is escalation. They were three
-/// separate branches of `translate()` and are now one loop with two triggers, which is
-/// the whole reason "⏎ again for a better answer" costs almost no new machinery.
+/// A stage is the unit the engine advances through. Advancing on *failure* is
+/// failover; advancing on *request* is escalation — one loop with two triggers.
 struct RouteStage: Equatable, Sendable {
     enum Strategy: Equatable, Sendable {
         /// One slot, with the ordinary single-provider retry on transient failures.

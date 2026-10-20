@@ -2,8 +2,6 @@ import AppKit
 import SwiftUI
 
 private struct ResultHeightKey: PreferenceKey {
-    // `let`, not `var`: the protocol only needs a getter, and a mutable static is a
-    // data-race error under the Swift 6 language mode.
     static let defaultValue: CGFloat = 20
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
@@ -20,17 +18,14 @@ struct TranslatorView: View {
     @State private var presentedInputHeight: CGFloat?
     @State private var inputResizeGeneration = UUID()
     @State private var resultHeight: CGFloat = 20
-    /// Whether the result viewport sits at its bottom edge. Streaming auto-scrolls
-    /// only when the user is already there — reading an earlier part of a long
-    /// result must not be yanked back to the tail on every chunk.
+    /// Whether the result viewport sits at its bottom edge; the overflow fade hides
+    /// once it does.
     @State private var isAtBottom = true
     /// The same flag for the history list, which fades its last visible row the same way.
     @State private var historyIsAtBottom = true
 
-    // Line geometry for the 15pt content font with lineSpacing 3, measured with the
-    // same AppKit machinery the input height uses — derived, not hardcoded, so a
-    // change to the font or spacing (including larger system fonts) stays correct.
-    // Measured empirically: the first line is 19pt and every line after adds 22pt.
+    // Line geometry for the 15pt content font with lineSpacing 3, derived rather than
+    // hardcoded so a change to the font or spacing stays correct.
     private let firstLineHeight: CGFloat
     private let lineStep: CGFloat
     /// The same two numbers for the *input editor*, which does not lay text out the way
@@ -108,26 +103,10 @@ struct TranslatorView: View {
     /// Line metrics for the *input editor*, measured with the machinery `TextEditor`
     /// actually lays out with.
     ///
-    /// `Text` and `TextEditor` do not agree, and the difference is not noise. Measured on
-    /// this font (system 15, `lineSpacing(3)`), against a live view of each:
-    ///
-    ///     lines   Text (and boundingRect)   TextEditor (and NSLayoutManager)
-    ///         1                        19                                 18
-    ///         6                       129                                123
-    ///        14                       305                                291
-    ///
-    /// `measureLineMetrics()` above measures the first column and is exactly right for
-    /// the result, which is a `Text`. Using it for the input made the six-line cap 129pt
-    /// tall when six editor lines are 123pt — the extra 6pt showed the top of a seventh
-    /// line, a row of clipped glyph tops sitting above the text. It also made every
-    /// scrolled position land mid-line: the top edge of the viewport fell 8pt into a row
-    /// rather than on a boundary.
-    ///
-    /// With the editor's own numbers the alignment stops being something to arrange and
-    /// becomes arithmetic. Content is `first + step × (lines − 1)`, the viewport is
-    /// `first + step × 5`, and their difference — the scroll offset when the editor sits
-    /// at the end of the text, which is where it sits after a paste — is a whole multiple
-    /// of `step`. No half line, for any text.
+    /// `Text` and `TextEditor` do not agree: six lines are 129pt in a `Text` but 123pt in
+    /// the editor. Using `Text` metrics for the input showed the clipped top of a seventh
+    /// line and left scrolled positions mid-line. With the editor's own numbers every
+    /// height and scroll offset is a whole multiple of `step`.
     static func measureEditorLineMetrics() -> (first: CGFloat, step: CGFloat) {
         let one = editorTextHeight("A", width: 200)
         let two = editorTextHeight("A\nA", width: 200)
@@ -194,21 +173,10 @@ struct TranslatorView: View {
     /// to where the ink happens to stop.
     private var editorLineGap: CGFloat { editorLineStep - editorFirstLineHeight }
 
-    // Caps expressed as whole lines so a clamped view never cuts a line in half — the panel
-    // grows to fit short content, and long content scrolls inside a whole-line viewport.
-    // Each cap is measured with the metrics of the view it caps: the input is a TextEditor,
-    // the result is a Text, and they lay text out differently.
-    //
-    // Whole grid cells, gap included — not `first + n × step`, which is the same lines
-    // with the last one's spacing shaved off.
-    //
-    // The two caps are not the same number because they are not the same job. The input
-    // is a draft the user already knows the contents of, and six lines of it is context;
-    // the result is the thing they came for, and a translation that stops mid-sentence
-    // reads as damage no matter how correct the arithmetic above it is. The result's cap
-    // is therefore as tall as the panel can be without taking over the screen, and exists
-    // only to keep the window inside `clampedPanelHeight` — not as an editorial decision
-    // about how much translation is worth showing.
+    // Caps are whole grid cells (gap included), each measured with the metrics of the
+    // view it caps, so a clamped view never cuts a line in half. The input stops at six
+    // lines of context; the result is what the user came for, so its cap only keeps the
+    // window inside `clampedPanelHeight`.
     private var maxInputHeight: CGFloat {
         let lines = min(6, max(2, floor((panelState.availableHeight - 240) / (2 * editorLineStep))))
         return lines * editorLineStep
@@ -237,17 +205,12 @@ struct TranslatorView: View {
     /// frame it sets is the height the text actually occupies — see
     /// `measureEditorLineMetrics` for why `boundingRect` is not that height.
     ///
-    /// Memoized by (text, width): the body re-evaluates on every streamed chunk, but
-    /// the input text does not change while the result streams — re-measuring it
-    /// hundreds of times per translation is pure waste. The cache is bounded (widths
-    /// come from the clamped 470–700 range, so entries are few).
+    /// Memoized by (text, width): the body re-evaluates far more often than the input
+    /// changes. The cache is small and cleared when it fills.
     private struct InputMeasureKey: Hashable {
         let text: String
         let width: CGFloat
     }
-    // @MainActor: only ever touched from `body`/view computed properties, which SwiftUI
-    // already runs on the main actor — explicit here so it reads the same as the rest of
-    // this project's Swift 6 concurrency annotations instead of looking like an oversight.
     @MainActor private static var inputMeasureCache: [InputMeasureKey: CGFloat] = [:]
     private static let inputMeasureCacheLimit = 64
 
@@ -300,12 +263,9 @@ struct TranslatorView: View {
                     }
                 )
         }
-        // Every one of these is declared here, at the top of the page, rather than
-        // wrapped around the mutation that causes it: a value can be changed from the
+        // Declared here rather than around each mutation: a value can change from the
         // bottom bar, a keyboard shortcut, or the panel controller, and only a
-        // declaration covers all three. History shares `.layout` with everything else
-        // now — it had its own slightly longer token purely to mask the window lag that
-        // no longer exists.
+        // declaration covers all three.
         .motion(.layout, value: resultPhase)
         // The provenance row arriving, and the switch appearing beside it when a second
         // version lands, both change the panel's height — same clock as everything else.
@@ -365,18 +325,9 @@ struct TranslatorView: View {
                     }
                 }
                 // History gets an explicit viewport; the result deliberately gets none.
-                //
-                // The result section used to measure itself into a `@State` that then
-                // set this frame — one more `preference → @State → frame → preference`
-                // hop on the way to the window. SwiftUI does not promise to redeliver a
-                // preference for the layout its own state write caused, and when that
-                // second delivery went missing the window stayed sized for the *previous*
-                // result: the panel kept the height it had while the text underneath it
-                // grew past the bottom edge, taking the bottom bar with it. Traced live —
-                // `result section 238.0` arrived and the `content` that should have
-                // followed never did. Letting the result's natural height reach the VStack
-                // directly puts it in the same layout pass as the measurement, so there is
-                // no second delivery left to lose.
+                // Its natural height reaches the VStack in the same layout pass as the
+                // measurement — a `preference → @State → frame` hop here can lose a
+                // delivery and leave the window sized for the previous result.
                 .frame(height: panelState.showHistory ? historyViewportHeight : nil, alignment: .top)
                 .clipped()
                 .padding(.horizontal, 16)
@@ -440,33 +391,11 @@ struct TranslatorView: View {
                     .lineSpacing(3)
                     .scrollContentBackground(.hidden)
                     .scrollDisabled(height <= maxInputHeight)
-                    // Keep long drafts scrollable without exposing the system scroller.
-                    // On macOS it can render as an opaque gutter against this clear editor.
-                    .scrollIndicators(.never)
                     .focused($inputFocused)
-                    // The trailing gap again, this time for the *scrolled* state, where a
-                    // taller frame cannot help: scrolled to the end of the text the last
-                    // pixel of the content is the last pixel of the viewport, so the
-                    // bottom line sits flush against the clip edge with nothing to spare.
-                    // A bottom safe-area inset extends the scrollable range instead, which
-                    // both keeps 3pt under the last line and — because the extra range is
-                    // exactly the gap the grid is missing — lands the top edge of the
-                    // viewport on a line boundary rather than partway into a row.
-                    // Measured against a live editor: without it, scrolled to the end, the
-                    // top line is cut by 15pt and the bottom line by all of its spacing.
-                    //
-                    // Bottom edge only. A top inset would push the first line down 3pt and
-                    // leave the placeholder, which is a sibling and has no safe area,
-                    // sitting above the text it stands in for.
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        Color.clear.frame(height: editorLineGap)
-                    }
-                    // The two positions the app scrolls to itself — the top, and the end
-                    // of the text — land on the grid by construction. A trackpad does not:
-                    // it leaves the view wherever the flick stopped, which is why the top
-                    // and bottom rows were cut through the glyphs at some scroll positions
-                    // and not others.
-                    .snapsScrollToLines(step: editorLineStep, growingEditorLimit: maxInputHeight)
+                    // The inset is bottom-only: a top inset would push the text below its
+                    // placeholder, which is a sibling and has no safe area.
+                    .lineGridScroll(step: editorLineStep, trailingGap: editorLineGap,
+                                    growingEditorLimit: maxInputHeight)
                     // Clearing is one whole-panel transition, not an editor row edit.
                     .frame(height: engine.input.isEmpty ? inputResizeTarget.height : (presentedInputHeight ?? inputResizeTarget.height))
             }
@@ -480,12 +409,8 @@ struct TranslatorView: View {
                 .foregroundStyle(.secondary)
                 .transition(.opacity)
             } else if engine.input.count >= Self.inputCountdownThreshold {
-                // A count only appears near the ceiling. Showing one from the first
-                // character would put a number under an empty box for every short
-                // sentence — which is every normal use — to warn about a limit almost
-                // nobody reaches. Arriving late is the point: it is a warning, not a
-                // meter, and it gives the user a chance to split the text *before* the
-                // paste that loses its tail.
+                // A warning, not a meter: it appears only near the ceiling, early enough
+                // to split the text before a paste loses its tail.
                 Text(String(
                     format: L("还可以输入 %d 字"),
                     max(0, TranslationEngine.maxInputCharacters - engine.input.count)
@@ -567,12 +492,8 @@ struct TranslatorView: View {
 
     /// What kind of thing the result box currently holds. One value rather than the two
     /// it is derived from (`hasResultSection` and `engine.state`), because they change
-    /// together the moment a translation starts or lands — and two `.motion` scopes both
-    /// claiming that moment is precisely the "one action, several overlapping timelines"
-    /// this system exists to prevent. Note what is *not* in here: `engine.output`. It
-    /// grows while a translation streams, and nothing in the panel animates during a
-    /// stream — the window mirrors those heights directly, which is what keeps the text
-    /// from lagging the tokens.
+    /// together — two `.motion` scopes claiming the same moment would be two timelines
+    /// for one action.
     private enum ResultPhase: Equatable {
         case none
         case waiting
@@ -592,10 +513,8 @@ struct TranslatorView: View {
     @ViewBuilder
     private var resultArea: some View {
         // `.transition(.opacity)` on each branch, driven by `.motion(.layout, value:
-        // resultPhase)` at the top of `body`. Without them the skeleton is replaced by
-        // the finished text in a single frame while the box around it is still easing
-        // its height — the last hard cut in the panel, and the most visible one, since
-        // it lands exactly where the user is looking.
+        // resultPhase)` at the top of `body`, so the skeleton crossfades into the text
+        // while the box eases its height.
         switch engine.state {
         case .failed(let message):
             ErrorBox(
@@ -629,11 +548,8 @@ struct TranslatorView: View {
                         // just typed outweighed the translation they came for.
                         .foregroundStyle(Color(nsColor: .textColor))
                         .textSelection(.enabled)
-                        // Matches TextEditor's default 5pt NSTextView line-fragment
-                        // inset (see the input placeholder's identical padding and
-                        // editorTextWidth's -10 above) so the result text's left
-                        // edge lines up with the input's, instead of sitting 5pt
-                        // further left.
+                        // TextEditor's 5pt line-fragment inset, so the result's left
+                        // edge lines up with the input's.
                         .padding(.leading, 5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
@@ -642,31 +558,10 @@ struct TranslatorView: View {
                             }
                         )
                 }
-                // The last holdout of the three scrollers in this panel, and the
-                // only one still asking for an automatic indicator: macOS reserves an
-                // opaque white gutter for it when the system is drawing legacy
-                // scrollers (a mouse is attached), which against this transparent
-                // panel is a white bar down the side of the translation. The input
-                // editor and the history list already answer this the same way, for
-                // the same reason. Trackpad, wheel and keyboard scrolling are
-                // untouched; only the indicator goes.
-                .scrollIndicators(.never)
-                // Same trailing gap as the input, on the `Text` grid: a result long
-                // enough to scroll is read by scrolling to its end, which is precisely
-                // the state that puts the last line against the clip edge.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: textLineGap)
-                }
-                // Same treatment on the `Text` grid: a result long enough to scroll is
-                // read by scrolling, and a hand-scrolled result has the same problem.
-                .snapsScrollToLines(step: lineStep)
+                .lineGridScroll(step: lineStep, trailingGap: textLineGap)
                 .frame(height: min(max(resultHeight + textLineGap, 20), maxResultHeight))
-                // A translation longer than the panel can be has to say so, or it
-                // reads as one that simply stops mid-sentence — which is exactly how
-                // it read once the system scroller (an opaque white gutter against
-                // this panel) was taken away. The last line fades instead: it says
-                // "there is more" in the panel's own vocabulary, costs no width, and
-                // goes away the moment the text is fully scrolled.
+                // Without a scroller, an overflowing result would read as one that
+                // stops mid-sentence; the last line fades to say there is more.
                 .mask(resultOverflows && !isAtBottom ? AnyView(fadeOutBottom) : AnyView(Rectangle()))
                 .trackBottomEdge($isAtBottom)
                 .onPreferenceChange(ResultHeightKey.self) { height in
@@ -827,8 +722,6 @@ struct TranslatorView: View {
         .padding(.leading, Self.resultNoticeInset)
     }
 
-    // MARK: - Bottom bar
-
     // MARK: - History
 
     private struct HistoryDay: Identifiable {
@@ -883,11 +776,9 @@ struct TranslatorView: View {
     /// Sized to the list's content up to a cap, so a short history doesn't sit in an
     /// empty viewport and a long one scrolls.
     ///
-    /// A list longer than the cap does not stop wherever the cap happens to fall. Its
-    /// resting edge is placed under a translation's first line — a whole line, like the
-    /// result's own cap — where the bottom fade turns that line into "there is more". Cut at the cap, the edge could land in the 22pt
-    /// gap between two days: the fade then covered empty space and the next day's header
-    /// at near-zero opacity, and the list looked like it simply ended in a blank strip.
+    /// A list longer than the cap rests with its edge under a translation's first line,
+    /// where the bottom fade reads as "there is more". Cut at the cap itself, the edge
+    /// could fall in the gap between two days and look like the list simply ended.
     private var historyViewportHeight: CGFloat? {
         guard !engine.history.isEmpty else { return nil }
         let meta = Self.metaLineHeight
@@ -973,11 +864,8 @@ struct TranslatorView: View {
     }
 
     /// One row under the list that never scrolls away: the commands on the right, and on
-    /// the left only a state worth saying (the list was just emptied). No standing note
-    /// about how much history is kept — the retention setting already says it, and a fixed
-    /// "last 50" contradicted a 24-hour retention. Undo appears on the right too, beside Clear History
-    /// after a single deletion, so the way back is where the click just was. It stays until
-    /// history is left. Clearing everything leaves history at once and takes its undo along.
+    /// the left only a state worth saying (the list was just emptied). Undo sits beside
+    /// Clear History, where the click just was, until history is left.
     private var historyFooter: some View {
         HStack(spacing: 12) {
             if engine.history.isEmpty {
@@ -1013,16 +901,9 @@ struct TranslatorView: View {
     /// mode) 「互换」. Selecting a language pill IS the mode decision — no separate
     /// multi-language switch exists anymore.
     ///
-    /// Wrapped in a horizontal ScrollView rather than a bare HStack: an HStack that runs
-    /// out of room silently crushes its `Text` children down to a bare "…" with zero
-    /// characters showing instead of erroring — that's happened for real in this exact
-    /// row once already. Scrolling degrades instead of destroying legibility, and costs
-    /// nothing at any width where everything already fits.
-    ///
-    /// When the row fits, it is laid out without the scroll view so its `Spacer` can
-    /// actually expand and put 「互换」— an action, not a target — at the trailing edge.
-    /// Inside a horizontal ScrollView the spacer only ever got its 4pt minimum, which read
-    /// as a slightly-off gap rather than a separate group.
+    /// An HStack that runs out of room crushes its labels to "…", so the row falls back
+    /// to a horizontal scroll view. When it fits it is laid out bare, so the `Spacer` can
+    /// push 「互换」— an action, not a target — to the trailing edge.
     private var languagePickerRow: some View {
         ViewThatFits(in: .horizontal) {
             languagePickerPills
@@ -1105,8 +986,7 @@ struct TranslatorView: View {
     }
 
     /// The answer that is not on screen. There are at most two — one per tier — so
-    /// "the other one" is always a single, well-defined thing, which is exactly why a
-    /// swap link says more with less than a two-segment picker did.
+    /// "the other one" is always well defined.
     private var otherVersion: (index: Int, version: TranslationEngine.ResultVersion)? {
         guard engine.versions.count > 1 else { return nil }
         let index = engine.shownVersion == 0 ? 1 : 0
@@ -1260,10 +1140,8 @@ private struct HistoryRecordRow: View {
 }
 
 private extension View {
-    /// Keeps a "user is at the bottom of the scroll view" flag current. macOS 15+
-    /// exposes ScrollGeometry for this; macOS 14 has no way to read a SwiftUI
-    /// ScrollView's offset, so the flag simply stays at its initial value there
-    /// (true — streaming keeps auto-following, the pre-existing behavior).
+    /// Keeps a "user is at the bottom of the scroll view" flag current. macOS 14 has no
+    /// ScrollGeometry, so there the flag stays at its initial value.
     @ViewBuilder
     func trackBottomEdge(_ isAtBottom: Binding<Bool>) -> some View {
         if #available(macOS 15.0, *) {

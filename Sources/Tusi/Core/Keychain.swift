@@ -29,12 +29,10 @@ enum KeychainError: LocalizedError, Equatable {
         }
     }
 
-    /// One OSStatus is not one situation, and the old single sentence ("unlock your
-    /// device and try again") was wrong for most of them: a denied prompt, a missing
-    /// entitlement after a re-signing, and a locked Keychain need different actions from
-    /// the user. Only statuses with a distinct remedy get their own text; everything else
-    /// keeps the generic message with the raw code, which is what makes a bug report
-    /// actionable. The status code is the only thing surfaced — never the key.
+    /// A denied prompt, a missing entitlement after a re-signing, and a locked Keychain
+    /// need different actions from the user. Only statuses with a distinct remedy get
+    /// their own text; everything else keeps the generic message with the raw code. The
+    /// status code is the only thing surfaced — never the key.
     private static func message(for status: OSStatus, reading: Bool) -> String {
         switch status {
         case errSecInteractionNotAllowed:
@@ -55,15 +53,13 @@ enum KeychainError: LocalizedError, Equatable {
     }
 }
 
-/// Both API keys live in a single Keychain item.
+/// Every API key (the three slots and Jev) lives in a single Keychain item.
 ///
-/// macOS authorizes access per item, so one item per slot meant one password prompt per
-/// slot on every launch. The keys are always read together anyway, so storing them as one
-/// JSON blob makes that exactly one prompt.
+/// macOS authorizes access per item, so one item per key would mean one prompt per key.
+/// The keys are always read together anyway, so one JSON blob makes that one prompt.
 enum Keychain {
     private static let service = "com.tusi.app"
     private static let account = "apiKeys"
-    private static let legacyAccounts = ["apiKey.0", "apiKey.1", "apiKey"]
 
     /// Keys by slot index. Missing slots are simply absent.
     static func loadKeys() throws -> [Int: String] {
@@ -91,36 +87,6 @@ enum Keychain {
         }
         let data = try JSONEncoder().encode(raw)
         try write(data, account: account)
-    }
-
-    /// Folds the old one-item-per-slot layout into the combined item. Returns the keys it
-    /// recovered, or nil when there was nothing to migrate. Legacy items are deleted only
-    /// after the combined write succeeds, so a locked or unavailable Keychain can retry on
-    /// the next launch without losing the old credentials.
-    static func migrateLegacyKeysIfNeeded() throws -> [Int: String]? {
-        var recovered: [Int: String] = [:]
-        var found = false
-        for legacy in legacyAccounts {
-            guard let data = try read(account: legacy) else { continue }
-            guard let value = String(data: data, encoding: .utf8) else {
-                throw KeychainError.invalidData
-            }
-            found = true
-            // "apiKey" predates slots entirely and was always the primary.
-            let index = legacy == "apiKey" ? 0 : Int(legacy.suffix(1)) ?? 0
-            if recovered[index] == nil, !value.isEmpty { recovered[index] = value }
-        }
-        guard found else { return nil }
-
-        do {
-            try saveKeys(recovered)
-            legacyAccounts.forEach { try? delete(account: $0) }
-        } catch {
-            // Keep the recovered values in memory for this run, but leave the legacy
-            // records intact so the migration can retry next time.
-            Log.keychain.error("legacy API-key migration failed (\(error.localizedDescription, privacy: .public)); will retry on next launch")
-        }
-        return recovered
     }
 
     // MARK: - Raw item access
