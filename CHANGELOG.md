@@ -2,6 +2,16 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.3] - 2026-10-20
+
+### Fixed
+
+- The Jev page in Settings now offers Retry when the Keychain was locked or the access prompt was denied, like the service pages already did.
+
+### Changed
+
+- Internal cleanup with no change in behavior: duplicated code in translation, streaming, history and settings is merged, outdated code for migrating pre-1.0 settings is removed, and stale code comments are corrected.
+
 ## [1.19.2] - 2026-10-08
 
 ### Fixed
