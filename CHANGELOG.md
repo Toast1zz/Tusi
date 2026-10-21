@@ -2,6 +2,12 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.4] - 2026-10-21
+
+### Fixed
+
+- "Ask both" is selectable again when one online service is a local address. A loopback URL there is usually a proxy to a remote model, so both online services are raced; only the local model, which has its own tier, is never raced.
+
 ## [1.19.3] - 2026-10-20
 
 ### Fixed

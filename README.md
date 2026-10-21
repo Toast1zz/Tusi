@@ -91,8 +91,7 @@ Settings → Services → Route controls how the three translation slots
   switches between them.
 - **Two online services** — Primary first (the backup takes over only when the
   primary fails) or Ask both (both are asked at once; the first usable answer wins).
-  Both services may charge in the latter mode. It is offered only when both slots are
-  remote: a loopback server would win on network latency alone.
+  Both services may charge in the latter mode.
 
 Each question appears only when it is a real choice. With a backup configured, a
 primary request that fails before producing any output can fail over to it. API

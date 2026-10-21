@@ -181,7 +181,6 @@
 "同时请求" = "Ask both";
 "先用主用，只有它失败时才换备用" = "Uses the primary; only a failure moves to the backup";
 "两套一起问，先答完的用它 · 每次翻译计费翻倍" = "Both are asked at once and the first finished answer wins · doubles the billing per translation";
-"其中一套是本机地址，本机几乎必定先答完，比不出快慢" = "One of them is a local address, which would almost always finish first — that is no comparison";
 "同时请求，两套地位相同" = "Asked at the same time — neither one is primary";
 "· 填好后可作为主用失败时的备用" = "· Once filled in, it takes over when the primary fails";
 

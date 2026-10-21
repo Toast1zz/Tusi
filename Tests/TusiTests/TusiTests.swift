@@ -1095,10 +1095,9 @@ final class TusiTests: XCTestCase {
         XCTAssertFalse(engine.versions[0].afterFailover)
     }
 
-    func testRaceFastestSkippedWhenEitherSlotIsLoopback() async throws {
-        // A local model's near-zero network latency would trivially win every race
-        // regardless of answer quality, so racing must not engage at all when either
-        // slot is loopback — sequential primary-first behavior applies instead.
+    func testRaceFastestEngagesWhenAnOnlineSlotIsALoopbackProxy() async throws {
+        // A loopback URL in an online slot is typically a local proxy to a remote model,
+        // so it races like any other online slot.
         let settings = SettingsStore(preview: true)
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
@@ -1119,7 +1118,7 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(engine.output, "结果")
         // A real race fires both legs immediately; sequential ordering never calls the
         // backup once the primary already succeeded.
-        XCTAssertEqual(remoteCalls, 0, "loopback in the chain must fall back to sequential ordering, not race")
+        XCTAssertEqual(remoteCalls, 1, "both online slots must be raced")
     }
 
     func testRaceFastestBothFailProducesCombinedErrorMessage() async throws {
@@ -1856,20 +1855,17 @@ final class TusiTests: XCTestCase {
         XCTAssertEqual(SettingsStore.loadRouting(defaults: defaults).strategy, .concurrent)
     }
 
-    func testConcurrentDegradesToFailoverWhenASlotIsLoopback() {
-        // The old pair could be switched on together and silently do nothing. The route
-        // resolves the conflict instead, and `concurrentAvailable` is what the settings
-        // page reads to say so out loud.
+    func testConcurrentNeedsBothOnlineSlotsButNotRemoteAddresses() {
         let settings = SettingsStore(preview: true)
         settings.onlineStrategy = .concurrent
-        settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local")
+        settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:9992/v1", apiKey: "", model: "proxy")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "remote")
-        XCTAssertFalse(settings.concurrentAvailable)
-        XCTAssertEqual(settings.route.stages.map(\.strategy), [.failover])
-
-        settings.profiles[0] = APIProfile(baseURL: "https://other.com/v1", apiKey: "k", model: "remote2")
         XCTAssertTrue(settings.concurrentAvailable)
         XCTAssertEqual(settings.route.stages.map(\.strategy), [.concurrent])
+
+        settings.profiles[1] = APIProfile(baseURL: "", apiKey: "", model: "")
+        XCTAssertFalse(settings.concurrentAvailable)
+        XCTAssertEqual(settings.route.stages.map(\.strategy), [.single])
     }
 
     func testLocalStartBuildsATwoTierRouteWithOnlineAbove() {

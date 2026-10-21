@@ -1041,9 +1041,7 @@ final class TranslationEngine: ObservableObject {
 
     /// Fires every slot in the stage at once and commits whichever finishes first with
     /// usable content; the still-running losers are cancelled the moment a winner is
-    /// chosen. `SettingsStore.concurrentAvailable` is what guarantees no loopback slot
-    /// is in here — its near-zero network latency would win every time regardless of
-    /// whether its answer is any good.
+    /// chosen. Only online slots are ever in here; the local model is its own tier.
     ///
     /// Deliberately no retry: a leg that fails just loses. Retrying it would only delay
     /// a result the other leg may already be able to provide; if the other leg also

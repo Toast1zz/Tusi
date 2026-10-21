@@ -757,16 +757,7 @@ struct SettingsView: View {
                     title: L("两套在线服务"),
                     options: [
                         .init(id: OnlineStrategy.failover.rawValue, label: L("主用优先")),
-                        .init(
-                            id: OnlineStrategy.concurrent.rawValue,
-                            label: L("同时请求"),
-                            // Not hidden, disabled with its reason: a missing option
-                            // reads as a bug, and the reason is fixable in two fields
-                            // right above.
-                            disabledReason: settings.concurrentAvailable
-                                ? nil
-                                : L("其中一套是本机地址，本机几乎必定先答完，比不出快慢")
-                        ),
+                        .init(id: OnlineStrategy.concurrent.rawValue, label: L("同时请求")),
                     ],
                     selection: effectiveOnlineStrategy.rawValue,
                     onSelect: { settings.onlineStrategy = OnlineStrategy(rawValue: $0) ?? .failover }
@@ -779,8 +770,8 @@ struct SettingsView: View {
         .motion(.layout, value: routingShape)
     }
 
-    /// What the strategy actually resolves to right now. A stored `.concurrent` with a
-    /// loopback slot degrades to `.failover` in the route builder, and the page must
+    /// What the strategy actually resolves to right now. A stored `.concurrent` with
+    /// a slot that is no longer usable degrades to `.failover` in the route builder, and the page must
     /// show what will happen rather than what was once chosen.
     private var effectiveOnlineStrategy: OnlineStrategy {
         (settings.onlineStrategy == .concurrent && settings.concurrentAvailable) ? .concurrent : .failover

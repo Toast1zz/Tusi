@@ -114,7 +114,7 @@ final class SettingsStore: ObservableObject {
 
     /// The dedicated local-model slot. It forms its own `.local` tier in `route`, so it
     /// is never raced against or a failover target for the online pair. Slots 0/1 may
-    /// still hold a loopback URL; `concurrentAvailable` checks for that.
+    /// still hold a loopback URL (a local proxy to a remote model); that is an online slot.
     static let localProfileIndex = 2
 
     /// Set when a Keychain write failed. The pending snapshot is retained so a later
@@ -164,11 +164,10 @@ final class SettingsStore: ObservableObject {
 
     /// What to do when both online slots are filled in.
     ///
-    /// `.concurrent` is only ever *offered* when both online slots are non-loopback
-    /// (see `concurrentAvailable`): a loopback slot's near-zero network latency wins
-    /// every race regardless of answer quality, which defeats the point. The route
-    /// builder enforces the same rule, so a stale preference degrades to `.failover`
-    /// instead of quietly behaving like something Settings never showed.
+    /// `.concurrent` is only ever *offered* when both online slots are usable (see
+    /// `concurrentAvailable`). The route builder enforces the same rule, so a stale
+    /// preference degrades to `.failover` instead of quietly behaving like something
+    /// Settings never showed.
     @Published var onlineStrategy: OnlineStrategy {
         didSet { defaults.set(onlineStrategy.rawValue, forKey: "onlineStrategy") }
     }
@@ -682,13 +681,11 @@ final class SettingsStore: ObservableObject {
     /// Whether there is any usable slot at all, the local one included.
     var isConfigured: Bool { !route.isEmpty }
 
-    /// Whether "同时请求" is a real choice right now. Both online slots must be filled
-    /// in and remote — a loopback slot would win every race on network latency alone,
-    /// so racing it says nothing about which answer is better. Settings hides
-    /// the option when this is false rather than showing a switch that does nothing.
+    /// Whether "同时请求" is a real choice right now: both online slots filled in. A
+    /// loopback URL in either slot is fine — it is usually a local proxy to a remote
+    /// model. The local model has its own tier and is never raced.
     var concurrentAvailable: Bool {
         profiles[0].isUsable && profiles[1].isUsable
-            && profiles[0].config.requiresAuth && profiles[1].config.requiresAuth
     }
 
     /// Whether the start-tier choice is a real choice: both tiers have to exist for
