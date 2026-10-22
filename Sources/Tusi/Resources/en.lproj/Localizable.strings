@@ -97,6 +97,7 @@
 "复制" = "Copy";
 "输入已截断，最多保留 %d 字" = "Input was truncated to %d characters";
 "重试" = "Retry";
+"保存" = "Save";
 
 /* MARK: - ShortcutAction labels */
 "全局呼出" = "Summon";

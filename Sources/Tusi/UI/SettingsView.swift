@@ -33,6 +33,10 @@ struct SettingsView: View {
 
     @State private var showKey = false
     @State private var showJevKey = false
+    /// An unsaved edit of the key being edited. nil means "show the stored key"; a draft
+    /// reaches the Keychain only through the Save button, so leaving the page restores it.
+    @State private var keyDraft: String?
+    @State private var jevKeyDraft: String?
     @State private var testStates: [Int: TestState] = [:]
     @State private var testTasks: [Int: Task<Void, Never>] = [:]
     @State private var testGenerations: [Int: Int] = [:]
@@ -163,11 +167,20 @@ struct SettingsView: View {
             NSApp.keyWindow?.makeFirstResponder(nil)
             focusedField = nil
             showKey = false
+            keyDraft = nil
+            jevKeyDraft = nil
             cancelTests()
             cancelJevTest()
         }
         .onChange(of: settings.jevAPIKey) { _, _ in
             cancelJevTest()
+        }
+        .onChange(of: jevKeyDraft) { _, _ in
+            cancelJevTest()
+        }
+        .onChange(of: keyDraft) { _, _ in
+            cancelTests()
+            testStates.removeAll()
         }
         .onChange(of: settings.profiles) { _, _ in
             cancelTests()
@@ -180,6 +193,8 @@ struct SettingsView: View {
         .onChange(of: editingIndex) { _, _ in
             showKey = false
             showJevKey = false
+            keyDraft = nil
+            jevKeyDraft = nil
             cancelTests()
             cancelJevTest()
         }
@@ -491,8 +506,9 @@ struct SettingsView: View {
                         .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                         .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                 } content: {
-                    secretField("API Key", text: $settings.profiles[safeEditingIndex].apiKey,
-                                prompt: Self.placeholder("sk-…"), revealed: $showKey, focus: .apiKey)
+                    secretField("API Key", text: serviceKeyBinding,
+                                prompt: Self.placeholder("sk-…"), revealed: $showKey, focus: .apiKey,
+                                dirty: serviceKeyDirty, onSave: saveServiceKey)
                         .accessibilityLabel("API Key")
                 }
             }
@@ -501,13 +517,47 @@ struct SettingsView: View {
         }
     }
 
-    /// A key field with a show/hide toggle and the brief saved-to-Keychain check.
+    private var serviceKeyBinding: Binding<String> {
+        Binding(
+            get: { keyDraft ?? settings.profiles[safeEditingIndex].apiKey },
+            set: { keyDraft = $0 }
+        )
+    }
+
+    private var serviceKeyDirty: Bool {
+        keyDraft.map { $0 != settings.profiles[safeEditingIndex].apiKey } ?? false
+    }
+
+    private func saveServiceKey() {
+        guard let draft = keyDraft else { return }
+        settings.profiles[safeEditingIndex].apiKey = draft
+        keyDraft = nil
+    }
+
+    private var jevKeyBinding: Binding<String> {
+        Binding(get: { jevKeyDraft ?? settings.jevAPIKey }, set: { jevKeyDraft = $0 })
+    }
+
+    private var jevKeyDirty: Bool {
+        jevKeyDraft.map { $0 != settings.jevAPIKey } ?? false
+    }
+
+    private func saveJevKey() {
+        guard let draft = jevKeyDraft else { return }
+        settings.jevAPIKey = draft
+        jevKeyDraft = nil
+    }
+
+    /// A key field with a show/hide toggle, a Save button while the draft differs from
+    /// the stored key, and the brief saved-to-Keychain check.
     private func secretField(
         _ title: String,
         text: Binding<String>,
         prompt: Text,
         revealed: Binding<Bool>,
-        focus: FocusedField
+        focus: FocusedField,
+        dirty: Bool,
+        onSave: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 6) {
             Group {
@@ -520,8 +570,15 @@ struct SettingsView: View {
             .textFieldStyle(.plain)
             .font(Theme.bodyMonospaced)
             .focused($focusedField, equals: focus)
+            .onSubmit(onSave)
 
-            if settings.keychainSaved {
+            if dirty {
+                Button("保存", action: onSave)
+                    .buttonStyle(.plain)
+                    .font(Theme.controlSemibold)
+                    .foregroundStyle(Theme.accent)
+                    .transition(.opacity)
+            } else if settings.keychainSaved {
                 Image(systemName: "checkmark.circle.fill")
                     .font(Theme.caption)
                     .foregroundStyle(.green)
@@ -541,6 +598,7 @@ struct SettingsView: View {
         }
         // `.state`, not `.micro`: this is a confirmation appearing, not hover feedback.
         .motion(.state, value: settings.keychainSaved)
+        .motion(.state, value: dirty)
     }
 
     @ViewBuilder
@@ -1030,14 +1088,15 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .help(L("Key 保存在本机钥匙串；选择智能文风时将待译文本发送给 Jev"))
             } content: {
-                secretField("Jev API Key", text: $settings.jevAPIKey, prompt: Text(verbatim: ""),
-                            revealed: $showJevKey, focus: .jevAPIKey)
+                secretField("Jev API Key", text: jevKeyBinding, prompt: Text(verbatim: ""),
+                            revealed: $showJevKey, focus: .jevAPIKey,
+                            dirty: jevKeyDirty, onSave: saveJevKey)
             }
             keychainErrorRow
             HStack(spacing: 10) {
                 testConnectionButton(
                     testing: jevTestState == .testing,
-                    enabled: !settings.jevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    enabled: !(jevKeyDraft ?? settings.jevAPIKey).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                     action: testJevConnection
                 )
 
@@ -1070,7 +1129,7 @@ struct SettingsView: View {
     private func testJevConnection() {
         cancelJevTest()
         let generation = jevTestGeneration
-        let key = settings.jevAPIKey
+        let key = jevKeyDraft ?? settings.jevAPIKey
         jevTestState = .testing
         jevTestTask = Task { @MainActor in
             do {
@@ -1149,7 +1208,7 @@ struct SettingsView: View {
     private var connectionTestCommand: some View {
         testConnectionButton(
             testing: testState == .testing,
-            enabled: settings.isSlotAvailable(safeEditingIndex),
+            enabled: isEditedSlotAvailable,
             action: runTest
         )
         .help(L("使用与翻译相同的协议策略，最多发送 2 个短测试请求"))
@@ -1200,14 +1259,27 @@ struct SettingsView: View {
         .motion(.layout, value: testState)
     }
 
+    /// The slot as the form shows it: the stored profile with the unsaved key draft laid
+    /// over it, so a new key can be tested before it replaces the old one.
+    private var editedProfile: APIProfile {
+        var profile = settings.profiles[safeEditingIndex]
+        if let draft = keyDraft { profile.apiKey = draft }
+        return profile
+    }
+
+    private var isEditedSlotAvailable: Bool {
+        editedProfile.isUsable
+            && settings.permitsRequest(to: editedProfile.config, slot: safeEditingIndex)
+    }
+
     private func runTest() {
         let index = safeEditingIndex
-        guard settings.isSlotAvailable(index) else { return }
+        guard isEditedSlotAvailable else { return }
         testTasks[index]?.cancel()
         let generation = (testGenerations[index] ?? 0) + 1
         testGenerations[index] = generation
         testStates[index] = .testing
-        let config = settings.profiles[index].config
+        let config = editedProfile.config
 
         let task = Task { @MainActor in
             do {

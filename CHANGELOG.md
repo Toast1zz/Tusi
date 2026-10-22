@@ -2,6 +2,13 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-10-22
+
+### Changed
+
+- API keys are saved explicitly. Typing or pasting in a key field edits a draft and a Save button appears; the key is written to the Keychain only when you press Save or Return. Leaving the page, switching service or changing the settings tab discards the draft and restores the stored key, so a stray paste can no longer overwrite it. This applies to the service pages and the Jev page.
+- Test Connection uses the key currently in the field, so a new key can be tried before it replaces the old one.
+
 ## [1.19.4] - 2026-10-21
 
 ### Fixed
