@@ -4,7 +4,12 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class NativeLayoutTests: XCTestCase {
+private final class WindowFrameTrace {
+    var samples: [(frame: NSRect, time: TimeInterval)] = []
+}
+
+@MainActor
+final class NativeLayoutTests: IsolatedPersistenceTestCase {
     func testResolvedAutoToneFitsCompactToolbar() {
         let selector = NSHostingView(rootView: ToneSelector(tone: .constant(.automatic), resolvedTone: .formal))
         selector.layoutSubtreeIfNeeded()
@@ -12,7 +17,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testTranslationRequestClosesHistoryButEditingDoesNot() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.profiles = settings.profiles.map { _ in APIProfile() }
         let state = PanelState()
         let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
@@ -74,7 +79,7 @@ final class NativeLayoutTests: XCTestCase {
         for width: CGFloat in [470, 700] {
             for dark in [false, true] {
                 for page in ["translator", "hold", "settings", "service", "local", "jev", "advanced", "translation", "general", "shortcuts"] {
-                    let settings = SettingsStore(preview: true)
+                    let settings = isolatedSettings()
                     settings.autoCopy = false
                     settings.soundEnabled = false
                     if page == "translator" { settings.tone = .automatic }
@@ -145,7 +150,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testSettingsSectionChangesKeepHeaderAndHeightBounded() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         let state = PanelState()
         state.showSettings = true
@@ -183,7 +188,7 @@ final class NativeLayoutTests: XCTestCase {
         }
     }
     func testNaturalSettingsTransitionKeepsHeaderAnchoredAndAnimatesWindowMonotonically() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://opencode.ai/v1", apiKey: "fake", model: "mimo-v2.5")
         settings.profiles[1] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "fake", model: "deepseek-flash")
@@ -269,7 +274,7 @@ final class NativeLayoutTests: XCTestCase {
     func testInputLineResizeSharesWindowFramesAndKeepsFirstLineAnchored() async throws {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         print("INPUT_TRANSITION reduceMotion=\(reduceMotion)")
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let state = PanelState()
@@ -387,7 +392,7 @@ final class NativeLayoutTests: XCTestCase {
     func testFirstAndRepeatedClearUseOneMonotonicWindowTransition() async throws {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         print("CLEAR_TRANSITION reduceMotion=\(reduceMotion)")
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let state = PanelState()
@@ -419,26 +424,39 @@ final class NativeLayoutTests: XCTestCase {
                 try await settle()
             }
             let start = window.frame
+            let frameTrace = WindowFrameTrace()
+            frameTrace.samples = [(start, ProcessInfo.processInfo.systemUptime)]
+            // Observe actual resize steps; a sleeping sampler can miss frames under load.
+            let observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification,
+                                                                  object: window, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    frameTrace.samples.append((window.frame, ProcessInfo.processInfo.systemUptime))
+                }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
             engine.input = ""
-            var frames: [NSRect] = [start]
             for sample in 0..<50 {
                 try await Task.sleep(for: .milliseconds(8))
                 window.contentView?.layoutSubtreeIfNeeded()
                 let frame = window.frame
-                frames.append(frame)
                 trace += "\(pass),\(sample),\(frame.width),\(frame.height),\(frame.maxY),\(frame.midX)\n"
                 XCTAssertEqual(frame.maxY, start.maxY, accuracy: 1)
                 XCTAssertEqual(frame.midX, start.midX, accuracy: 1)
             }
             let end = window.frame
+            let frames = frameTrace.samples.map(\.frame)
             endpoints.append(end.size)
             XCTAssertEqual(end.width, start.width, accuracy: 1, "Clearing must preserve the reading width")
             XCTAssertLessThan(end.height, 100)
             XCTAssertFalse(state.inputResizeInProgress)
-            for (previous, next) in zip(frames, frames.dropFirst()) {
+            for (index, pair) in zip(frames, frames.dropFirst()).enumerated() {
+                let (previous, next) = pair
                 XCTAssertLessThanOrEqual(next.width, previous.width + 1, "Clearing must not shrink then widen")
                 XCTAssertLessThanOrEqual(next.height, previous.height + 1, "Clearing must not reverse height")
-                if !reduceMotion {
+                // A delayed callback can span several animation frames. Only judge
+                // a single-step jump when the two observations are at most 1/30s apart.
+                let elapsed = frameTrace.samples[index + 1].time - frameTrace.samples[index].time
+                if !reduceMotion, elapsed <= 1.0 / 30 {
                     XCTAssertLessThanOrEqual(previous.height - next.height, (start.height - end.height) * 0.4,
                                              "Clearing must not snap off the result before shrinking the input")
                 }
@@ -452,7 +470,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testSettledAuditRepairsStaleHeightWithoutAnotherPreference() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let state = PanelState()
@@ -552,7 +570,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testRapidDeletionFromCompletedResultDoesNotWaitForFitAudit() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let state = PanelState()
@@ -585,7 +603,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testEmptyHistoryCompactsAndUndoRestoresListHeight() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let record = TranslationEngine.Record(id: UUID(), input: "测试", output: "Test", sourceLabel: "中",
@@ -637,7 +655,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testHistoryToggleKeepsToolbarGlyphsOnSameRow() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
@@ -721,7 +739,7 @@ final class NativeLayoutTests: XCTestCase {
     /// the window. Traced frame by frame: window height and top, the input's top edge, and
     /// the bar's trailing glyph's distance from the window bottom.
     func testHistoryToggleKeepsInputAndBarStill() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         let now = Date()
@@ -829,7 +847,7 @@ final class NativeLayoutTests: XCTestCase {
         let data = try JSONEncoder().encode(records)
         for dark in [false, true] {
             for scene in ["result", "history"] {
-                let settings = SettingsStore(preview: true)
+                let settings = isolatedSettings()
                 settings.autoCopy = false
                 settings.soundEnabled = false
                 settings.profiles[0] = APIProfile(baseURL: "https://api.deepseek.com", apiKey: "k", model: "deepseek-chat")
@@ -887,7 +905,7 @@ final class NativeLayoutTests: XCTestCase {
     }
 
     func testProgrammaticPanelMovesDoNotPin() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         let engine = TranslationEngine(settings: settings, storage: TranslationStorage(read: { _ in nil }, write: { _, _ in }))
         engine.debugPreview(input: "第一行", output: String(repeating: "A line of translation.\n", count: 6))
         let state = PanelState()

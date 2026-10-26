@@ -4,15 +4,7 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class TusiTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        // Preview-mode engines share scratch persistence (com.tusi.preview); reset it
-        // so no test case reads another case's records or editor draft.
-        try? FileManager.default.removeItem(at: TranslationEngine.historyURL(preview: true))
-        try? FileManager.default.removeItem(at: TranslationEngine.draftURL(preview: true))
-    }
-
+final class TusiTests: IsolatedPersistenceTestCase {
     func testLanguageDirectionHandlesMixedChineseAndLatin() {
         XCTAssertEqual(LanguageDetector.detect("这个 PR 需要 rebase 一下").source, .chinese)
         XCTAssertEqual(LanguageDetector.detect("This PR needs a rebase").source, .english)
@@ -75,10 +67,10 @@ final class TusiTests: XCTestCase {
     func testWrongLanguageResultIsFlaggedAndNotAutoCopied() async throws {
         // End-to-end: the result is kept and shown (the check is a heuristic), but it is
         // flagged and must not reach the pasteboard as if it were a clean translation.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = true
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("是的，感谢您的反馈。")
                 continuation.finish()
@@ -95,10 +87,10 @@ final class TusiTests: XCTestCase {
     }
 
     func testCorrectTranslationIsNotFlaggedAsWrongLanguage() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("Really? Your answer sounds so official.")
                 continuation.finish()
@@ -444,8 +436,8 @@ final class TusiTests: XCTestCase {
     }
 
     func testManualDirectionFlipOverridesDetection() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
 
         // 4 Han characters outweigh the 2 Latin words, so auto-detection says Chinese.
         engine.input = "sequential thinking 什么意思"
@@ -474,8 +466,8 @@ final class TusiTests: XCTestCase {
     }
 
     func testDirectionFlipIsNoOpWithoutInputOrInMultiLanguageMode() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
 
         engine.flipDirection()  // nothing typed yet
         XCTAssertFalse(engine.flipped)
@@ -514,7 +506,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testClearedShortcutIsUnboundAndRebindingRestores() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
 
         // Defaults are bound.
         XCTAssertNotNil(settings.shortcut(.copy))
@@ -554,8 +546,8 @@ final class TusiTests: XCTestCase {
     }
 
     func testSetTargetOnlyWorksInMultiLanguageMode() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
 
         engine.input = "hello world"
         engine.setTarget(.japanese)  // simple mode: explicit targets are ignored
@@ -569,8 +561,8 @@ final class TusiTests: XCTestCase {
     func testSelectExplicitTargetEntersMultiLanguageModeImplicitly() {
         // The panel picker has no separate mode switch: picking a concrete target IS
         // entering multi-language mode.
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         XCTAssertFalse(settings.multiLanguageMode)
 
         engine.input = "hello world"
@@ -582,8 +574,8 @@ final class TusiTests: XCTestCase {
     func testSelectAutoTargetReturnsToDetectedDirection() {
         // 「自动」leaves multi-language mode and re-derives the direction from the
         // current input (English input → Chinese target).
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
 
         engine.input = "hello world"
         engine.selectExplicitTarget(.japanese)
@@ -609,7 +601,7 @@ final class TusiTests: XCTestCase {
     func testLocalSlotAloneIsEnoughToBeConfigured() {
         // The local slot used to be manual-only, so filling it in left ⏎ "unconfigured".
         // It is an ordinary route start now: a filled local slot is a working app.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         XCTAssertFalse(settings.isConfigured)
         settings.setLocalModelEnabled(true)
         settings.setLocalModelReady(true)
@@ -624,7 +616,7 @@ final class TusiTests: XCTestCase {
     func testLocalSlotStaysOutOfTheRouteWhenTheStartIsOnline() {
         // Filled in but not chosen as the start: the local slot must not be contacted,
         // raced, or failed over to.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.routeStart = .online
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.setLocalModelEnabled(true)
@@ -636,7 +628,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testLocalStartContactsOnlyTheLocalSlotUntilEscalated() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
@@ -648,7 +640,7 @@ final class TusiTests: XCTestCase {
         )
 
         var calledModels: [String] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             calledModels.append(config.model)
             return AsyncThrowingStream { continuation in
                 continuation.yield("本地结果")
@@ -671,13 +663,13 @@ final class TusiTests: XCTestCase {
         // Preferring a local start that is not actually filled in is not an error to
         // report — a working online slot is right there. The old behavior refused to
         // translate at all and sent the user to Settings.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "primary")
 
         var calledModels: [String] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             calledModels.append(config.model)
             return AsyncThrowingStream { continuation in
                 continuation.yield("online result")
@@ -694,9 +686,9 @@ final class TusiTests: XCTestCase {
     }
 
     func testNothingConfiguredAtAllFailsWithoutContactingAnyone() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in continuation.finish() }
         }
@@ -710,7 +702,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testLocalModelAvailableReflectsSlotUsability() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         XCTAssertFalse(settings.localAvailable)
 
         settings.setLocalModelEnabled(true)
@@ -725,7 +717,7 @@ final class TusiTests: XCTestCase {
         // The selected service tab shows its provider in the remaining row width;
         // a full domain would consume too much of it, so the label strips the generic
         // "api." subdomain and the trailing TLD down to just the brand.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.profiles[0] = APIProfile(baseURL: "https://api.deepseek.com/v1", apiKey: "k", model: "m")
         settings.profiles[1] = APIProfile(baseURL: "https://api.commandcode.ai/provider/v1", apiKey: "k", model: "m")
         XCTAssertEqual(settings.label(for: 0), "deepseek")
@@ -733,7 +725,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testSlotLabelHandlesShortDomainsAndLocalAddresses() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.profiles[0] = APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "k", model: "m")
         settings.profiles[1] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "m")
         // A two-label domain has no separate "brand" subdomain to strip — dropping the
@@ -744,7 +736,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testSlotLabelForUnconfiguredSlot() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         XCTAssertEqual(settings.label(for: 0), "未配置")
     }
 
@@ -793,7 +785,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testCompletedTranslationIsRecordedAndRestorable() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(
             baseURL: "https://example.com/v1",
@@ -802,7 +794,7 @@ final class TusiTests: XCTestCase {
         )
 
         var responses = ["First result", "Second result"]
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             let response = responses.removeFirst()
             return AsyncThrowingStream { continuation in
                 continuation.yield(response)
@@ -935,10 +927,10 @@ final class TusiTests: XCTestCase {
     func testLocalTranslationWithoutKeySucceeds() async throws {
         // End-to-end through the engine: a loopback profile with no key must translate
         // (isUsable, no emptyKey thrown, no auth header sent).
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "http://localhost:11434/v1", apiKey: "", model: "model")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("你好")
                 continuation.finish()
@@ -951,9 +943,9 @@ final class TusiTests: XCTestCase {
     }
 
     func testTranslateWithoutUsableProfileShowsSetupMessage() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.input = "hi"
         engine.translate()
         if case .failed(let message) = engine.state {
@@ -966,13 +958,13 @@ final class TusiTests: XCTestCase {
     func testFailoverMessageSkipsUntriedBackup() async throws {
         // Primary yields partial output then dies: backup must NOT be tried (splicing
         // two translations is worse), and the message must not claim it was.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 continuation.yield("partial")
@@ -998,13 +990,13 @@ final class TusiTests: XCTestCase {
 
     func testFailoverMessageMentionsBackupWhenTried() async throws {
         // Primary fails cleanly before any output → backup is tried → both failed.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: TranslationError.http(500, "boom"))
@@ -1026,13 +1018,13 @@ final class TusiTests: XCTestCase {
     // MARK: - Race for fastest
 
     func testRaceFastestCommitsWinnerWithoutWaitingForLoser() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "fast")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "slow")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "fast" {
                 return AsyncThrowingStream { continuation in
                     continuation.yield("快的结果")
@@ -1065,13 +1057,13 @@ final class TusiTests: XCTestCase {
         // Racing isn't a silent black box: a one-time toast names (with the short
         // per-slot label, not the full host) whichever provider actually answered
         // first, not the loser.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.fast.com/v1", apiKey: "k1", model: "fast")
         settings.profiles[1] = APIProfile(baseURL: "https://api.slow.com/v1", apiKey: "k2", model: "slow")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "fast" {
                 return AsyncThrowingStream { continuation in
                     continuation.yield("快的结果")
@@ -1098,14 +1090,14 @@ final class TusiTests: XCTestCase {
     func testRaceFastestEngagesWhenAnOnlineSlotIsALoopbackProxy() async throws {
         // A loopback URL in an online slot is typically a local proxy to a remote model,
         // so it races like any other online slot.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "remote")
 
         var remoteCalls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "remote" { remoteCalls += 1 }
             return AsyncThrowingStream { continuation in
                 continuation.yield("结果")
@@ -1122,13 +1114,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestBothFailProducesCombinedErrorMessage() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.finish(throwing: TranslationError.http(500, "boom"))
             }
@@ -1143,13 +1135,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestWaitsForUsableResultAfterEmptyCompletion() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "empty" {
                 return AsyncThrowingStream { $0.finish() }
             }
@@ -1170,13 +1162,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestWaitsForUsableResultAfterOtherLegFails() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "failed")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "usable")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "failed" {
                 return AsyncThrowingStream { $0.finish(throwing: TranslationError.http(500, "boom")) }
             }
@@ -1196,13 +1188,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestWaitsForTargetLanguageAfterWrongLanguageCompletion() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.wrong.com/v1", apiKey: "k1", model: "wrong")
         settings.profiles[1] = APIProfile(baseURL: "https://api.correct.com/v1", apiKey: "k2", model: "correct")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "wrong" {
                 return AsyncThrowingStream { continuation in
                     continuation.yield("根据计划，九月将发送十二封邮件。")
@@ -1228,13 +1220,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestPreservesFirstWrongLanguageResultWhenNeitherLegMatchesTarget() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://api.first.com/v1", apiKey: "k1", model: "first")
         settings.profiles[1] = APIProfile(baseURL: "https://api.second.com/v1", apiKey: "k2", model: "second")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "first" {
                 return AsyncThrowingStream { continuation in
                     continuation.yield("第一家返回了中文回答。")
@@ -1267,7 +1259,7 @@ final class TusiTests: XCTestCase {
         TranslationService.protocolRegistryOverride = registry
         defer { TranslationService.protocolRegistryOverride = nil }
 
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(
@@ -1313,7 +1305,7 @@ final class TusiTests: XCTestCase {
             MockURLProtocol.handler = nil
         }
 
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.input = "请翻译这句话"
         engine.translate()
         try await waitUntilDone(engine)
@@ -1326,13 +1318,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestReportsFailureWhenEmptyCompletionIsPairedWithFailure() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "failed")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             if config.model == "empty" {
                 return AsyncThrowingStream { $0.finish() }
             }
@@ -1354,13 +1346,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testRaceFastestReportsEmptyResponseOnlyWhenBothLegsAreEmpty() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "empty-a")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "empty-b")
 
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { $0.finish() }
         }
         engine.input = "hi"
@@ -1376,13 +1368,13 @@ final class TusiTests: XCTestCase {
     func testTransientFailureRetriesSameProviderOnceThenSucceeds() async throws {
         // A transient 500 on the first attempt must be retried on the same provider;
         // the second attempt succeeds, so no backup is tried and the result is complete.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 if calls == 1 {
@@ -1402,12 +1394,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testURLErrorTimeoutRetriesSameProviderOnceThenSucceeds() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 if calls == 1 {
@@ -1427,12 +1419,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testURLErrorConnectionLostRetriesSameProviderOnceThenSucceeds() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 if calls == 1 {
@@ -1452,12 +1444,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testWatchdogTimeoutRetriesSameProviderOnceThenSucceeds() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 if calls == 1 {
@@ -1477,13 +1469,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testUserCancellationDoesNotRetryAsTransientFailure() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
 
         var calls = 0
         var continuation: AsyncThrowingStream<String, Error>.Continuation?
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation = $0 }
         }
@@ -1506,12 +1498,12 @@ final class TusiTests: XCTestCase {
     func testNonTransientFailureDoesNotRetry() async throws {
         // A 401 (bad auth) is deterministic — retrying would just fail again, so the
         // provider is attempted exactly once.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: TranslationError.http(401, "bad key"))
@@ -1529,14 +1521,14 @@ final class TusiTests: XCTestCase {
     }
 
     func testMultiLanguageTargetChangeRestartsTranslationWhileTranslating() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         settings.multiLanguageMode = true
 
         var requestedTargets: [TranslationLanguage] = []
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, target, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, target, _, _, _ in
             requestedTargets.append(target)
             return AsyncThrowingStream { continuation in
                 continuations.append(continuation)
@@ -1576,9 +1568,9 @@ final class TusiTests: XCTestCase {
         // never be selected until the user typed something; and once empty input was
         // allowed, selecting 中文 was still vetoed because the empty-input source
         // placeholder (Chinese) tripped the "translate X into X" auto-flip.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.multiLanguageMode = true
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         XCTAssertTrue(engine.input.isEmpty)
 
         engine.setTarget(.chinese)
@@ -1597,9 +1589,9 @@ final class TusiTests: XCTestCase {
         // With actual input, choosing a target identical to the detected source is
         // still an invalid "translate X into X" and should be corrected to the other
         // side — the empty-input exception must not leak into real translations.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.multiLanguageMode = true
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.input = "这是中文字符串"   // detected source: Chinese
         XCTAssertEqual(engine.source, .chinese)
         engine.setTarget(.chinese)       // no-op target → should flip away from Chinese
@@ -1607,12 +1599,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testMultiLanguageModeChangeRestartsTranslationWhileTranslating() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var requestedTargets: [TranslationLanguage] = []
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, target, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, target, _, _, _ in
             requestedTargets.append(target)
             return AsyncThrowingStream { continuation in
                 continuations.append(continuation)
@@ -1645,7 +1637,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testHistoryLoadToleratesCorruptRecord() throws {
-        let url = TranslationEngine.historyURL(preview: true)
+        let url = testHistoryURL
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let good = """
         {"id":"00000000-0000-0000-0000-000000000001","input":"a","output":"b","sourceLabel":"中","source":{"displayName":"中文","apiName":"x","symbol":"中"},"target":{"displayName":"English","apiName":"y","symbol":"EN"},"tone":"standard","timestamp":1000}
@@ -1654,20 +1646,20 @@ final class TusiTests: XCTestCase {
         let bad = "{\"input\":\"broken\"}"
         try "[\(good),\(bad)]".write(to: url, atomically: true, encoding: .utf8)
 
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         XCTAssertEqual(engine.history.count, 1)
         XCTAssertEqual(engine.history[0].input, "a")
     }
 
     func testDraftInputPersistsAcrossEngineRecreation() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         let original = "需要在重新打开后恢复的原文。\nSecond line."
-        let first = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+        let first = TranslationEngine(settings: settings, draftPersistenceEnabled: true, storage: testStorage)
         first.input = original
         first.flushPendingDraftSave()
 
-        let restored = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+        let restored = TranslationEngine(settings: settings, draftPersistenceEnabled: true, storage: testStorage)
 
         XCTAssertEqual(restored.input, original)
         XCTAssertEqual(restored.source, .chinese)
@@ -1675,24 +1667,24 @@ final class TusiTests: XCTestCase {
     }
 
     func testEmptyDraftRemovesPersistedInput() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings, draftPersistenceEnabled: true)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, draftPersistenceEnabled: true, storage: testStorage)
         engine.input = "temporary draft"
         engine.flushPendingDraftSave()
-        XCTAssertTrue(FileManager.default.fileExists(atPath: TranslationEngine.draftURL(preview: true).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: testDraftURL.path))
 
         engine.input = ""
         engine.flushPendingDraftSave()
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: TranslationEngine.draftURL(preview: true).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: testDraftURL.path))
         XCTAssertEqual(
-            TranslationEngine(settings: settings, draftPersistenceEnabled: true).input,
+            TranslationEngine(settings: settings, draftPersistenceEnabled: true, storage: testStorage).input,
             ""
         )
     }
 
     func testHistoryLoadReappliesCapacityAndFieldLimits() throws {
-        let url = TranslationEngine.historyURL(preview: true)
+        let url = testHistoryURL
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let oversized = String(repeating: "x", count: 10_000)
         let records = (0..<60).map { index in
@@ -1709,7 +1701,7 @@ final class TusiTests: XCTestCase {
         }
         try JSONEncoder().encode(records).write(to: url, options: .atomic)
 
-        let engine = TranslationEngine(settings: SettingsStore(preview: true))
+        let engine = TranslationEngine(settings: isolatedSettings(), storage: testStorage)
 
         XCTAssertEqual(engine.history.count, 50)
         XCTAssertTrue(engine.history.allSatisfy { $0.input.count == 4_000 })
@@ -1720,12 +1712,12 @@ final class TusiTests: XCTestCase {
         // Bounds the worst case for the synchronous history write (50 records at the
         // input/output ceilings would be ~10MB of JSON) by capping each field on
         // archive — the current panel's full input/output must be unaffected.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         let longInput = String(repeating: "a", count: 5_000)
         let longOutput = String(repeating: "b", count: 5_000)
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield(longOutput)
                 continuation.finish()
@@ -1746,11 +1738,11 @@ final class TusiTests: XCTestCase {
     }
 
     func testRestoringTruncatedHistoryMarksResultAsIncomplete() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         let oversizedOutput = String(repeating: "x", count: 5_000)
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield(oversizedOutput)
                 continuation.finish()
@@ -1772,10 +1764,10 @@ final class TusiTests: XCTestCase {
     }
 
     func testClearHistoryPersistsEmptyFile() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("result")
                 continuation.finish()
@@ -1789,7 +1781,7 @@ final class TusiTests: XCTestCase {
         engine.clearHistory()
         // Synchronous save: the cleared state is already on disk — no detached task
         // can resurrect the old records later.
-        let data = try Data(contentsOf: TranslationEngine.historyURL(preview: true))
+        let data = try Data(contentsOf: testHistoryURL)
         let decoded = try JSONDecoder().decode([TranslationEngine.Record].self, from: data)
         XCTAssertTrue(decoded.isEmpty)
     }
@@ -1856,7 +1848,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testConcurrentNeedsBothOnlineSlotsButNotRemoteAddresses() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.onlineStrategy = .concurrent
         settings.profiles[0] = APIProfile(baseURL: "http://127.0.0.1:9992/v1", apiKey: "", model: "proxy")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "remote")
@@ -1869,7 +1861,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testLocalStartBuildsATwoTierRouteWithOnlineAbove() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
@@ -1894,7 +1886,7 @@ final class TusiTests: XCTestCase {
         onlineFails: Error? = nil,
         record: @escaping (String) -> Void = { _ in }
     ) -> (SettingsStore, TranslationEngine) {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
@@ -1903,7 +1895,7 @@ final class TusiTests: XCTestCase {
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             record(config.model)
             return AsyncThrowingStream { continuation in
                 if config.model == "local" {
@@ -2016,7 +2008,7 @@ final class TusiTests: XCTestCase {
     func testStoppingAnEscalationKeepsTheAnswerAlreadyOnScreen() async throws {
         // The half-arrived online tokens must not overwrite a finished translation the
         // user already has, and must not be marked as an interrupted result either.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.routeStart = .local
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "online")
@@ -2025,7 +2017,7 @@ final class TusiTests: XCTestCase {
         settings.profiles[SettingsStore.localProfileIndex] = APIProfile(
             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "local"
         )
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             AsyncThrowingStream { continuation in
                 if config.model == "local" {
                     continuation.yield("The finished local answer.")
@@ -2090,11 +2082,11 @@ final class TusiTests: XCTestCase {
     func testFailoverInsideOneStageIsMarkedOnTheResult() async throws {
         // What the "used the backup" toast used to say, said by the result itself for
         // as long as the result is on screen.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://api.first.com/v1", apiKey: "k1", model: "primary")
         settings.profiles[1] = APIProfile(baseURL: "https://api.second.com/v1", apiKey: "k2", model: "backup")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             AsyncThrowingStream { continuation in
                 if config.model == "primary" {
                     continuation.finish(throwing: TranslationError.http(401, "nope"))
@@ -2801,11 +2793,11 @@ final class TusiTests: XCTestCase {
     // MARK: - Streaming coalescing
 
     func testStreamingCoalescingDoesNotDropContent() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         let chunks = (0..<40).map { "piece-\($0) " }
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 Task {
                     for chunk in chunks {
@@ -2823,13 +2815,13 @@ final class TusiTests: XCTestCase {
     }
 
     func testOverlongOutputIsCappedAndFlagged() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         // 10-char substring × the cap ⇒ far past the ceiling; Character-count must
         // match the engine's own cap logic.
         let big = String(repeating: "很长的一段翻译文本，", count: TranslationEngine.maxOutputCharacters)
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield(big)
                 continuation.finish()
@@ -2844,11 +2836,11 @@ final class TusiTests: XCTestCase {
     }
 
     func testInFlightOutputCapCommitsWithoutWaitingForStreamEnd() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuations.append(continuation)
             }
@@ -2870,10 +2862,10 @@ final class TusiTests: XCTestCase {
     }
 
     func testOutputExactlyAtCapIsMarkedIncomplete() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield(String(repeating: "x", count: TranslationEngine.maxOutputCharacters))
                 continuation.finish()
@@ -2887,10 +2879,10 @@ final class TusiTests: XCTestCase {
     }
 
     func testShortOutputIsNotCapped() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("你好")
                 continuation.finish()
@@ -2904,10 +2896,10 @@ final class TusiTests: XCTestCase {
     }
 
     func testCompletedTranslationDoesNotExposeEchoedTranslateWrapper() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("<translate>\nTranslated text\n</translate>")
                 continuation.finish()
@@ -2926,11 +2918,11 @@ final class TusiTests: XCTestCase {
         // Multiple chunks are buffered; nothing is published to `output` (and no copy
         // button can appear) until the stream finishes, which is the unified local/
         // online display rhythm — this app deliberately does not stream word-by-word.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuations.append(continuation)
             }
@@ -2961,11 +2953,11 @@ final class TusiTests: XCTestCase {
     func testFailedAttemptNeverPublishesPartialOutput() async throws {
         // A provider that streams some content and then fails must never have shown
         // that partial text — the buffer is discarded unpublished either way.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuations.append(continuation)
             }
@@ -2986,11 +2978,11 @@ final class TusiTests: XCTestCase {
     }
 
     func testStopWithBufferedContentShowsPartialOnce() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuations.append(continuation)
             }
@@ -3021,11 +3013,11 @@ final class TusiTests: XCTestCase {
     }
 
     func testStopWithNoContentReturnsToIdle() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
         var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuations.append(continuation)
             }
@@ -3047,13 +3039,13 @@ final class TusiTests: XCTestCase {
         // A provider that produces a token and then fails must not show the partial
         // result, must not fail over to the backup (two spliced translations are worse),
         // and must land in a failed state.
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
         settings.profiles[1] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k2", model: "m2")
 
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { continuation in
                 continuation.yield("partial")
@@ -3078,8 +3070,8 @@ final class TusiTests: XCTestCase {
     // MARK: - Input cap / keychain recovery / metrics
 
     func testInputIsCappedAtMaximumLength() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.input = String(repeating: "a", count: TranslationEngine.maxInputCharacters + 500)
         XCTAssertEqual(engine.input.count, TranslationEngine.maxInputCharacters)
         XCTAssertTrue(engine.inputWasTruncated)
@@ -3091,8 +3083,8 @@ final class TusiTests: XCTestCase {
     }
 
     func testReloadKeysIfMissingIsSafeNoOpInPreview() {
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         // Preview mode must never touch the Keychain — this is a pure no-op.
         settings.reloadKeysIfMissing()
         XCTAssertTrue(settings.profiles.allSatisfy { $0.apiKey.isEmpty })
@@ -3343,8 +3335,8 @@ final class TusiTests: XCTestCase {
         // One case covers it now. "Local mode is on but its slot is empty" used to be
         // its own dead end; it is just an online start today, so the only unconfigured
         // failure left is "nothing at all is filled in".
-        let settings = SettingsStore(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let settings = isolatedSettings()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.input = "hi"
         engine.translate()
         XCTAssertEqual(engine.failureKind, .notConfigured)
@@ -3356,12 +3348,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testBadCredentialsFailureIsClassifiedAndClearedOnSuccess() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k1", model: "m1")
 
         var shouldFail = true
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 if shouldFail {
                     continuation.finish(throwing: TranslationError.http(401, "bad key"))
@@ -3407,7 +3399,7 @@ final class TusiTests: XCTestCase {
     }
 
     func testSettingsHostingReportsNaturalHeightBeyondConstrainedViewport() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.profiles = [
             APIProfile(baseURL: "https://api.one.example/v1", apiKey: "k", model: "m"),
             APIProfile(baseURL: "https://api.two.example/v1", apiKey: "k", model: "m"),
@@ -3416,7 +3408,7 @@ final class TusiTests: XCTestCase {
         settings.onlineStrategy = .concurrent
         let panelState = PanelState()
         let updateChecker = UpdateChecker(preview: true)
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         func requestedHeight(width: CGFloat, mode: SettingsView.Mode = .overview) async throws -> CGFloat {
             var requested: CGFloat = 0
             let root = SettingsView(mode: mode)
@@ -3452,7 +3444,7 @@ final class TusiTests: XCTestCase {
     /// Undo used to expire after ten seconds while the list was still on screen. It now
     /// lasts until history is left, which the view reports through `discardHistoryUndo`.
     func testHistoryUndoLastsUntilDiscarded() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         let record = TranslationEngine.Record(id: UUID(), input: "测试", output: "Test", sourceLabel: "中",
                                               source: .chinese, target: .english, tone: .standard, timestamp: Date())
         let data = try JSONEncoder().encode([record])
@@ -3472,7 +3464,7 @@ final class TusiTests: XCTestCase {
     /// Clear History closes history itself, so its undo must survive that exit and be
     /// offered on the translator; a single deletion still ends when history closes.
     func testClearedHistoryUndoOutlivesClosingHistoryOnce() throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         let records = (0..<2).map { i in
             TranslationEngine.Record(id: UUID(), input: "测试\(i)", output: "Test", sourceLabel: "中",
                                      source: .chinese, target: .english, tone: .standard,
@@ -3519,12 +3511,12 @@ final class TusiTests: XCTestCase {
     }
 
     func testTranslatorHostingKeepsCompletedBottomBarCompactAtMinimumWidth() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://api.example.com/v1", apiKey: "k", model: "m")
         let panelState = PanelState()
         panelState.panelWidth = Theme.panelMinWidth
-        let engine = TranslationEngine(settings: settings)
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
         engine.debugPreview(
             input: "他希望的最低工资是多少呢？",
             output: "What is the minimum wage he hopes for?"

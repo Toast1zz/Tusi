@@ -4,14 +4,9 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class AuditRegressionTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        try? FileManager.default.removeItem(at: TranslationEngine.historyURL(preview: true))
-    }
-
+final class AuditRegressionTests: IsolatedPersistenceTestCase {
     private func settings(local: Bool = false) -> SettingsStore {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "fake", model: "online", outputProtocolPreference: .plainText)
@@ -107,7 +102,7 @@ final class AuditRegressionTests: XCTestCase {
     func testMalformedStreamDoesNotCommitPartialResult() async throws {
         let sse = try content("Partial translation") + "data: {broken}\n\n" + finish("stop") + "data: [DONE]\n\n"
         try await withStream(sse) {
-            let engine = TranslationEngine(settings: settings())
+            let engine = TranslationEngine(settings: settings(), storage: testStorage)
             engine.input = "source"
             engine.translate()
             try await wait { if case .failed = engine.state { return true }; return false }
@@ -145,7 +140,7 @@ final class AuditRegressionTests: XCTestCase {
     func testLengthTerminationNeverCommitsResultOrHistory() async throws {
         let sse = try content("Partial translation") + finish("length") + "data: [DONE]\n\n"
         try await withStream(sse) {
-            let engine = TranslationEngine(settings: settings())
+            let engine = TranslationEngine(settings: settings(), storage: testStorage)
             engine.input = "source"
             engine.translate()
             try await wait { if case .failed = engine.state { return true }; return false }
@@ -169,7 +164,7 @@ final class AuditRegressionTests: XCTestCase {
     }
 
     func testLocalOnlyRouteIgnoresUnavailableOnlinePreference() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.setLocalModelEnabled(true)
         settings.setLocalModelReady(true)
         settings.profiles[2] = APIProfile(baseURL: "http://localhost:11434/v1", model: "local")
@@ -183,7 +178,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testChangingFinishedTargetStartsNewRequestBeforeEscalating() async throws {
         var requests: [(TranslationLanguage, String)] = []
-        let engine = TranslationEngine(settings: settings(local: true)) { _, target, _, _, config in
+        let engine = TranslationEngine(settings: settings(local: true), storage: testStorage) { _, target, _, _, config in
             requests.append((target, config.model))
             return AsyncThrowingStream { c in
                 c.yield(target == .japanese ? "こんにちは。" : "Hello.")
@@ -208,7 +203,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testRestoreSameInputCancelsInFlightEscalationAndClearsVersions() async throws {
         var online: AsyncThrowingStream<String, Error>.Continuation?
-        let engine = TranslationEngine(settings: settings(local: true)) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings(local: true), storage: testStorage) { _, _, _, _, config in
             AsyncThrowingStream { c in
                 if config.model == "local" { c.yield("Local."); c.finish() }
                 else { online = c }
@@ -232,7 +227,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testExplicitTargetAfterManualFlipRestoresDetectedSource() async throws {
         var targets: [TranslationLanguage] = []
-        let engine = TranslationEngine(settings: settings()) { _, target, _, _, _ in
+        let engine = TranslationEngine(settings: settings(), storage: testStorage) { _, target, _, _, _ in
             targets.append(target)
             return AsyncThrowingStream { c in c.yield("OK."); c.finish() }
         }
@@ -252,7 +247,7 @@ final class AuditRegressionTests: XCTestCase {
     func testTargetChangeDuringEscalationIgnoresLateOldOnlineResult() async throws {
         var oldOnline: AsyncThrowingStream<String, Error>.Continuation?
         var targets: [TranslationLanguage] = []
-        let engine = TranslationEngine(settings: settings(local: true)) { _, target, _, _, config in
+        let engine = TranslationEngine(settings: settings(local: true), storage: testStorage) { _, target, _, _, config in
             targets.append(target)
             return AsyncThrowingStream { c in
                 if config.model == "online" { oldOnline = c }
@@ -276,7 +271,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testCappedOnlineResultCanRetryWithoutEditingInput() async throws {
         var calls = 0
-        let engine = TranslationEngine(settings: settings()) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings(), storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { c in
                 c.yield(calls == 1 ? String(repeating: "x", count: TranslationEngine.maxOutputCharacters + 1) : "Hello.")
@@ -297,7 +292,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testWrongLanguageOnlineResultCanBeRetried() async throws {
         var calls = 0
-        let engine = TranslationEngine(settings: settings()) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings(), storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { c in
                 c.yield(calls == 1 ? "这段中文没有被翻译成英文。" : "Hello.")
@@ -320,7 +315,7 @@ final class AuditRegressionTests: XCTestCase {
         let settings = settings()
         settings.profiles[1] = settings.profiles[0]
         var calls = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             calls += 1
             return AsyncThrowingStream { c in
                 c.yield("partial")
@@ -568,7 +563,7 @@ final class AuditRegressionTests: XCTestCase {
     func testAdditionalInstructionStartsFreshRequestWithNewIdentity() async throws {
         let settings = settings()
         var extras: [String] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, extra, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, extra, _ in
             extras.append(extra)
             return AsyncThrowingStream { c in c.yield("Hello."); c.finish() }
         }
@@ -604,7 +599,7 @@ final class AuditRegressionTests: XCTestCase {
     func testByteLimitsHandleOneEnormousGrapheme() async throws {
         let giant = "a" + String(repeating: "\u{0301}", count: TranslationEngine.maxOutputBytes)
         XCTAssertEqual(giant.count, 1)
-        let engine = TranslationEngine(settings: settings()) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings(), storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { c in c.yield(giant); c.finish() }
         }
         engine.input = giant
@@ -621,7 +616,7 @@ final class AuditRegressionTests: XCTestCase {
         settings.profiles[0].outputProtocolPreference = .automatic
         settings.profiles[1] = settings.profiles[0]
         var count = 0
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             count += 1
             return AsyncThrowingStream { c in
                 c.finish(throwing: PartialTranslationFailure(underlying: TranslationError.truncatedStream))
@@ -637,7 +632,7 @@ final class AuditRegressionTests: XCTestCase {
     func testUnknownKeysArePreservedWhenOnlyOneSlotIsEdited() {
         let credentials = Credentials()
         credentials.failLoad = true
-        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let settings = isolatedSettings(credentialStorage: credentials.storage)
         settings.profiles[0].apiKey = "new-primary"
         settings.flushPendingSaves()
         XCTAssertEqual(credentials.writes, 0)
@@ -652,7 +647,7 @@ final class AuditRegressionTests: XCTestCase {
     func testExplicitKeyCanReplaceKnownCorruptCredentialData() {
         var saved: [Int: String]?
         let storage = CredentialStorage(load: { throw KeychainError.invalidData }, save: { saved = $0 })
-        let settings = SettingsStore(preview: true, credentialStorage: storage)
+        let settings = isolatedSettings(credentialStorage: storage)
         XCTAssertNotNil(settings.keychainError)
         settings.profiles[0].apiKey = "replacement"
         settings.flushPendingSaves()
@@ -663,7 +658,7 @@ final class AuditRegressionTests: XCTestCase {
     func testRapidCredentialEditsMergeWithoutLosingUntouchedSlot() {
         let credentials = Credentials()
         credentials.keys[2] = "untouched"
-        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let settings = isolatedSettings(credentialStorage: credentials.storage)
         settings.profiles[0].apiKey = "first-edit"
         settings.profiles[1].apiKey = "new-backup"
         settings.profiles[0].apiKey = "last-edit"
@@ -674,14 +669,14 @@ final class AuditRegressionTests: XCTestCase {
 
     func testJevKeySharesCredentialItemWithoutChangingTranslationKeys() {
         let credentials = Credentials()
-        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let settings = isolatedSettings(credentialStorage: credentials.storage)
         settings.jevAPIKey = "jev-key"
         settings.flushPendingSaves()
         XCTAssertEqual(credentials.keys[SettingsStore.jevKeyIndex], "jev-key")
         XCTAssertEqual(credentials.keys[0], "old-primary")
         XCTAssertEqual(credentials.keys[1], "old-backup")
 
-        let reloaded = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let reloaded = isolatedSettings(credentialStorage: credentials.storage)
         XCTAssertEqual(reloaded.jevAPIKey, "jev-key")
         reloaded.flushPendingSaves()
         XCTAssertEqual(credentials.writes, 1, "Loading Jev key must not rewrite the Keychain")
@@ -689,7 +684,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testSaveRetryDoesNotClearFailureWithoutSavingAndHonorsDeletion() {
         let credentials = Credentials()
-        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let settings = isolatedSettings(credentialStorage: credentials.storage)
         credentials.failSave = true
         settings.profiles[0].apiKey = "new-primary"
         settings.profiles[1].apiKey = ""
@@ -707,7 +702,7 @@ final class AuditRegressionTests: XCTestCase {
     func testUnlockRecoversRemoteKeysWithWorkingLocalRoute() {
         let credentials = Credentials()
         credentials.failLoad = true
-        let settings = SettingsStore(preview: true, credentialStorage: credentials.storage)
+        let settings = isolatedSettings(credentialStorage: credentials.storage)
         settings.profiles[0].baseURL = "https://example.com/v1"
         settings.profiles[0].model = "online"
         settings.setLocalModelEnabled(true)

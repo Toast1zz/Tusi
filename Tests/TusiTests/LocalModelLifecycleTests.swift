@@ -41,7 +41,7 @@ private actor FakeLocalRuntime: LocalModelRuntime {
     func isProcessRunning(_ pid: Int32) async -> Bool { loaded }
 }
 
-final class LocalModelLifecycleTests: XCTestCase {
+final class LocalModelLifecycleTests: IsolatedPersistenceTestCase {
     private func fixture() throws -> (URL, LocalModelService, FakeLocalRuntime) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -227,7 +227,7 @@ final class LocalModelLifecycleTests: XCTestCase {
 
     @MainActor
     func testDisabledOrUnreadyLocalSlotCannotEnterAnyRoute() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.profiles[2] = APIProfile(baseURL: "http://127.0.0.1:8080/v1", model: "local")
         settings.routeStart = .local
         XCTAssertTrue(settings.route.isEmpty)
@@ -259,7 +259,7 @@ final class LocalModelLifecycleTests: XCTestCase {
 
     @MainActor
     func testDisablingBeforeRetryCannotReuseCapturedLocalRoute() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         settings.profiles[2] = APIProfile(baseURL: "http://127.0.0.1:8080/v1", model: "local")
@@ -268,7 +268,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         settings.setLocalModelEnabled(true)
         settings.setLocalModelReady(true)
         var called: [String] = []
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, config in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
             called.append(config.model)
             if config.model == "local" {
                 settings.setLocalModelEnabled(false)

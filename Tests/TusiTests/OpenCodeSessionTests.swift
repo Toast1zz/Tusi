@@ -3,7 +3,7 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class OpenCodeSessionTests: XCTestCase {
+final class OpenCodeSessionTests: IsolatedPersistenceTestCase {
     private let config = APIConfig(baseURL: "https://opencode.ai/zen/go/v1", apiKey: "fake", model: "mimo-v2.5")
     private let missingSession = "Request is missing x-opencode-session and cannot be routed efficiently."
 
@@ -80,13 +80,13 @@ final class OpenCodeSessionTests: XCTestCase {
     }
 
     func testEngineKeepsSessionAcrossTransportRetryAndRotatesForNewTranslation() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         settings.profiles[0] = APIProfile(baseURL: config.baseURL, apiKey: "fake", model: config.model,
                                           outputProtocolPreference: .plainText)
         var ids: [UUID?] = []
-        let engine = TranslationEngine(settings: settings, stream: { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage, stream: { _, _, _, _, _ in
             ids.append(TranslationService.sessionID)
             let fail = ids.count == 1
             return AsyncThrowingStream { continuation in

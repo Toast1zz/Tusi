@@ -3,9 +3,9 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class JevToneTests: XCTestCase {
+final class JevToneTests: IsolatedPersistenceTestCase {
     private func settings() -> SettingsStore {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         settings.tone = .automatic
@@ -107,7 +107,7 @@ final class JevToneTests: XCTestCase {
     func testAutoToneIsFrozenForTranslationAndHistory() async throws {
         let settings = settings()
         var tones: [Tone] = []
-        let engine = TranslationEngine(settings: settings, stream: { _, _, tone, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage, stream: { _, _, tone, _, _ in
             tones.append(tone)
             return AsyncThrowingStream { continuation in
                 continuation.yield("Please review the proposal.")
@@ -130,7 +130,7 @@ final class JevToneTests: XCTestCase {
     func testClassifierFailureFallsBackAndOldDecisionCannotStartTranslation() async throws {
         let settings = settings()
         var inputs: [String] = []
-        let engine = TranslationEngine(settings: settings, stream: { text, _, tone, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage, stream: { text, _, tone, _, _ in
             inputs.append(text)
             XCTAssertEqual(tone, .standard)
             return AsyncThrowingStream { continuation in

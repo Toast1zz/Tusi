@@ -6,26 +6,24 @@ import XCTest
 /// pack) played when a translation result has fully arrived. Everything else is
 /// deliberately silent.
 @MainActor
-final class SoundTests: XCTestCase {
+final class SoundTests: IsolatedPersistenceTestCase {
     private let player = SoundPlayer.shared
 
     override func setUp() {
         super.setUp()
         player.enabled = true
         player.debugResetPlayedFlag()
-        // Wipe the preview scratch suite so sound preferences never leak between tests.
-        UserDefaults.standard.removePersistentDomain(forName: "com.tusi.preview.scratch")
     }
 
     // MARK: - Success cue timing
 
     func testSuccessfulTranslationPlaysSuccessAfterResultArrives() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
 
         // A slow stream: the cue must not play until the stream actually finishes.
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 Task {
                     try? await Task.sleep(for: .milliseconds(50))
@@ -45,10 +43,10 @@ final class SoundTests: XCTestCase {
     }
 
     func testFailedTranslationPlaysNoSound() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.finish(throwing: TranslationError.http(500, "boom"))
             }
@@ -63,10 +61,10 @@ final class SoundTests: XCTestCase {
     }
 
     func testCancelledTranslationPlaysNoSound() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 _ = continuation  // never finishes
             }
@@ -96,16 +94,16 @@ final class SoundTests: XCTestCase {
     }
 
     func testEnabledDefaultsTrue() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         XCTAssertTrue(settings.soundEnabled)
     }
 
     func testDisablingPreventsSuccessCue() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.autoCopy = false
         settings.soundEnabled = false
         settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
-        let engine = TranslationEngine(settings: settings) { _, _, _, _, _ in
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield("你好")
                 continuation.finish()
@@ -119,7 +117,7 @@ final class SoundTests: XCTestCase {
     }
 
     func testPreviewPlaysEvenWhenSoundDisabled() {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.soundEnabled = false
         XCTAssertFalse(settings.soundEnabled)
 

@@ -4,7 +4,7 @@ import XCTest
 @testable import Tusi
 
 @MainActor
-final class InstructionEditorTests: XCTestCase {
+final class InstructionEditorTests: IsolatedPersistenceTestCase {
     func testHeightIncludesWrappingTrailingNewlineAndCap() {
         let short = InstructionEditor.height(for: "One", width: 400)
         let three = InstructionEditor.height(for: "One\nTwo\n", width: 400)
@@ -14,7 +14,7 @@ final class InstructionEditorTests: XCTestCase {
     }
 
     func testSettingsEditorAcceptsNewlinesGrowsWindowAndScrollsAtCap() async throws {
-        let settings = SettingsStore(preview: true)
+        let settings = isolatedSettings()
         settings.extraInstruction = "Keep names"
         let state = PanelState()
         state.showSettings = true
