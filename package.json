@@ -1,8 +1,6 @@
 {
   "name": "tusi",
-  "version": "1.13.2",
   "description": "A menubar translator for macOS. Type Chinese and get English; type anything else and get Chinese. The direction is detected automatically, so there is nothing to select.",
-  "main": "index.js",
   "scripts": {
     "test": "swift test"
   },
@@ -20,5 +18,6 @@
   "homepage": "https://github.com/Toast1zz/Tusi#readme",
   "dependencies": {
     "uisfx": "^0.4.0"
-  }
+  },
+  "private": true
 }
