@@ -78,38 +78,60 @@ enum SmartQuotes {
         return result
     }
 
-    /// Marks every character inside a matched code region (delimiters included).
-    /// Runs of 1–2 backticks pair with an equal-length run (inline spans); runs of
-    /// 3+ pair with another block run (fenced blocks). Unpaired runs stay plain text.
+    /// Fence contents stay protected through the closing line or the end of input.
+    /// Inline backtick pairs are matched only within lines outside fences.
     private static func matchedCodeFlags(in characters: [Character]) -> [Bool] {
         var flags = [Bool](repeating: false, count: characters.count)
-        var runs: [BacktickRun] = []
-        var i = 0
-        while i < characters.count {
-            if characters[i] == "`" {
-                var j = i
-                while j < characters.count, characters[j] == "`" { j += 1 }
-                runs.append(BacktickRun(start: i, end: j, length: j - i))
-                i = j
-            } else {
-                i += 1
+        var fence: (character: Character, length: Int)?
+        var start = 0
+        while start < characters.count {
+            var end = start
+            while end < characters.count, !characters[end].isNewline { end += 1 }
+            let next = end < characters.count ? end + 1 : end
+            var marker = start
+            while marker < end, characters[marker] == " ", marker - start < 4 { marker += 1 }
+            var runEnd = marker
+            if marker - start <= 3, marker < end,
+               characters[marker] == "`" || characters[marker] == "~" {
+                while runEnd < end, characters[runEnd] == characters[marker] { runEnd += 1 }
             }
-        }
-        var stack: [BacktickRun] = []
-        for run in runs {
-            if let top = stack.last, canPair(top, run) {
-                for position in top.start..<run.end { flags[position] = true }
-                stack.removeLast()
+            let length = runEnd - marker
+            if let current = fence {
+                for position in start..<next { flags[position] = true }
+                if length >= current.length, characters[marker] == current.character,
+                   characters[runEnd..<end].allSatisfy({ $0.isWhitespace }) {
+                    fence = nil
+                }
+            } else if length >= 3 {
+                fence = (characters[marker], length)
+                for position in start..<next { flags[position] = true }
             } else {
-                stack.append(run)
+                var runs: [BacktickRun] = []
+                var index = start
+                while index < end {
+                    if characters[index] == "`" {
+                        var finish = index + 1
+                        while finish < end, characters[finish] == "`" { finish += 1 }
+                        runs.append(BacktickRun(start: index, end: finish, length: finish - index))
+                        index = finish
+                    } else {
+                        index += 1
+                    }
+                }
+                index = 0
+                while index < runs.count {
+                    let opening = runs[index]
+                    if let closing = runs[(index + 1)...].firstIndex(where: { $0.length == opening.length }) {
+                        for position in opening.start..<runs[closing].end { flags[position] = true }
+                        index = closing + 1
+                    } else {
+                        index += 1
+                    }
+                }
             }
+            start = next
         }
         return flags
-    }
-
-    private static func canPair(_ a: BacktickRun, _ b: BacktickRun) -> Bool {
-        if a.length >= 3 || b.length >= 3 { return a.length >= 3 && b.length >= 3 }
-        return a.length == b.length
     }
 
     /// Latin text puts a space before an opening quote, so the preceding character settles

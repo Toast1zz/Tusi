@@ -2788,10 +2788,9 @@ final class TusiTests: XCTestCase {
         )
     }
 
-    func testSmartQuotesUnclosedFenceDoesNotSilenceQuotes() {
-        // An unclosed ``` block is not code: its quotes still convert rather than
-        // everything after it going raw.
-        XCTAssertEqual(SmartQuotes.apply(to: "```\n\"raw\"\n"), "```\n“raw”\n")
+    func testSmartQuotesUnclosedFencePreservesCodeThroughEndOfInput() {
+        let code = "```\n\"raw\"\n"
+        XCTAssertEqual(SmartQuotes.apply(to: code), code)
     }
 
     func testSmartQuotesApostrophesAndElision() {
