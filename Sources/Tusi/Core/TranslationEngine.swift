@@ -205,6 +205,7 @@ final class TranslationEngine: ObservableObject {
     private let clipboard: TranslationClipboard
     private var preferences = Set<AnyCancellable>()
     private var restoringHistory = false
+    private var historyFileUntrusted = false
     @Published private var draftError: String?
     @Published private var historyError: String?
     var persistenceError: String? { historyError ?? draftError }
@@ -1343,6 +1344,7 @@ final class TranslationEngine: ObservableObject {
     /// Clears all translation history. The panel leaves history right after, so this undo
     /// survives that one exit and is offered on the translator instead (see `historyClosed`).
     func clearHistory() {
+        historyFileUntrusted = false
         rememberDeletion(history)
         historyUndoOutlivesExit = canUndoHistoryDeletion
         history = []
@@ -1434,6 +1436,7 @@ final class TranslationEngine: ObservableObject {
 
     func historyPreferenceChanged() {
         guard !settings.saveHistoryEnabled else { return }
+        historyFileUntrusted = false
         history = []
         rememberDeletion([])
         saveHistory()
@@ -1505,6 +1508,8 @@ final class TranslationEngine: ObservableObject {
     /// write keeps saves strictly ordered and guarantees they land before termination
     /// (detached writes can finish out of order and resurrect cleared history).
     private func saveHistory() {
+        defer { scheduleHistoryExpiry() }
+        guard !historyFileUntrusted else { return }
         let records = history
         let url = historyURL
         guard let data = try? JSONEncoder().encode(records) else {
@@ -1520,14 +1525,16 @@ final class TranslationEngine: ObservableObject {
             historyError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("history write failed: \(error.localizedDescription, privacy: .public)")
         }
-        scheduleHistoryExpiry()
     }
 
     private func loadHistory() {
         let url = historyURL
         guard settings.saveHistoryEnabled else { saveHistory(); return }
         defer { pruneExpiredHistory() }
-        guard let data = loadData(url, resource: .history) else { return }
+        guard let data = loadData(url, resource: .history) else {
+            historyFileUntrusted = historyError != nil
+            return
+        }
         if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
             history = normalizeLoadedHistory(decoded)
             return
@@ -1536,6 +1543,19 @@ final class TranslationEngine: ObservableObject {
         // user the whole history: decode per-record, keep the good ones.
         let lossy = try? JSONDecoder().decode([LossyRecord].self, from: data)
         history = normalizeLoadedHistory(lossy?.compactMap(\.record) ?? [])
+        guard history.isEmpty, !data.isEmpty else { return }
+        historyError = L("本机读取失败，请检查磁盘空间或文件权限")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let backup = url.deletingLastPathComponent().appendingPathComponent(
+            "history.corrupt-\(formatter.string(from: now())).json")
+        do {
+            try storage.move(url, backup)
+        } catch {
+            historyFileUntrusted = true
+            Log.app.error("history quarantine failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Old builds or manually edited files can exceed the guarantees `pushHistory`

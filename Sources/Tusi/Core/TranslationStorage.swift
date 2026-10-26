@@ -12,6 +12,7 @@ enum TextBudget {
 struct TranslationStorage {
     var read: (URL) throws -> Data?
     var write: (Data?, URL) throws -> Void
+    var move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }
 
     static var disk: TranslationStorage {
         TranslationStorage(read: { url in
