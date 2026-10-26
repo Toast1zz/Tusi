@@ -205,7 +205,11 @@ final class TranslationEngine: ObservableObject {
     private let clipboard: TranslationClipboard
     private var preferences = Set<AnyCancellable>()
     private var restoringHistory = false
-    @Published private(set) var persistenceError: String?
+    @Published private var draftError: String?
+    @Published private var historyError: String?
+    var persistenceError: String? { historyError ?? draftError }
+
+    private enum PersistenceResource { case draft, history }
     @Published private(set) var canUndoHistoryDeletion = false
     private var historyUndoOutlivesExit = false
     private var historyExpiryTask: Task<Void, Never>?
@@ -1467,9 +1471,9 @@ final class TranslationEngine: ObservableObject {
             try storage.write(draft.isEmpty ? nil : Data(draft.utf8), draftURL)
             if draft.isEmpty { Log.app.notice("draft cleared") }
             pendingDraftInput = nil
-            persistenceError = nil
+            draftError = nil
         } catch {
-            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
+            draftError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("draft write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -1478,7 +1482,7 @@ final class TranslationEngine: ObservableObject {
         guard draftPersistenceEnabled else { return }
         Log.app.notice("draft restore enabled=\(self.settings.saveDraftEnabled, privacy: .public)")
         guard settings.saveDraftEnabled else { saveDraft(""); return }
-        guard let data = loadData(draftURL),
+        guard let data = loadData(draftURL, resource: .draft),
               let draft = String(data: data, encoding: .utf8),
               !draft.isEmpty else { return }
         isRestoringDraft = true
@@ -1511,9 +1515,9 @@ final class TranslationEngine: ObservableObject {
         }
         do {
             try storage.write(settings.saveHistoryEnabled ? data : nil, url)
-            persistenceError = nil
+            historyError = nil
         } catch {
-            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
+            historyError = L("本机保存失败，请检查磁盘空间或文件权限")
             Log.app.error("history write failed: \(error.localizedDescription, privacy: .public)")
         }
         scheduleHistoryExpiry()
@@ -1523,7 +1527,7 @@ final class TranslationEngine: ObservableObject {
         let url = historyURL
         guard settings.saveHistoryEnabled else { saveHistory(); return }
         defer { pruneExpiredHistory() }
-        guard let data = loadData(url) else { return }
+        guard let data = loadData(url, resource: .history) else { return }
         if let decoded = try? JSONDecoder().decode([Record].self, from: data) {
             history = normalizeLoadedHistory(decoded)
             return
@@ -1560,10 +1564,20 @@ final class TranslationEngine: ObservableObject {
         )
     }
 
-    private func loadData(_ url: URL) -> Data? {
-        do { return try storage.read(url) }
-        catch {
-            persistenceError = L("本机保存失败，请检查磁盘空间或文件权限")
+    private func loadData(_ url: URL, resource: PersistenceResource) -> Data? {
+        do {
+            let data = try storage.read(url)
+            switch resource {
+            case .draft: draftError = nil
+            case .history: historyError = nil
+            }
+            return data
+        } catch {
+            let message = L("本机读取失败，请检查磁盘空间或文件权限")
+            switch resource {
+            case .draft: draftError = message
+            case .history: historyError = message
+            }
             return nil
         }
     }

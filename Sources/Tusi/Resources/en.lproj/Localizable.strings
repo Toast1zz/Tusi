@@ -297,3 +297,5 @@
 "正在关闭…" = "Stopping…";
 "已就绪" = "Ready";
 "出错了，请重试" = "Something went wrong. Try again.";
+
+"本机读取失败，请检查磁盘空间或文件权限" = "Could not read local data. Check disk space and file permissions.";
