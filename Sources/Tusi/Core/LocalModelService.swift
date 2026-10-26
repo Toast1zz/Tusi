@@ -73,16 +73,20 @@ actor LocalModelService {
         return args[index + 1]
     }
 
+    static func modelPath(in args: [String]) -> String? {
+        argument("-m", in: args) ?? argument("--model", in: args)
+    }
+
     func catalog() throws -> [LocalTranslationModel] {
         let config = try configuration()
         let args = config["ProgramArguments"] as! [String]
-        guard let model = Self.argument("-m", in: args) else { throw LocalModelError.message("服务缺少模型路径") }
+        guard let model = Self.modelPath(in: args) else { throw LocalModelError.message("服务缺少模型路径") }
         return try LocalTranslationModel.discover(in: URL(fileURLWithPath: model).deletingLastPathComponent())
     }
 
     func selectedModel() throws -> LocalTranslationModel {
         let args = try configuration()["ProgramArguments"] as! [String]
-        guard let path = Self.argument("-m", in: args) ?? Self.argument("--model", in: args) else {
+        guard let path = Self.modelPath(in: args) else {
             throw LocalModelError.message("服务缺少模型路径")
         }
         return LocalTranslationModel(url: URL(fileURLWithPath: path))
