@@ -48,6 +48,8 @@ struct SettingsView: View {
         min(560, max(180, availableHeight - 24))
     }
 
+    private static let scrollClipInset: CGFloat = 6
+
     private func settingsPage<Content: View>(active: Bool, @ViewBuilder content: () -> Content) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
@@ -56,8 +58,12 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .modifier(SettingsHeightPart(mode: mode, padding: 18 + 6, active: active))
+            // Glass controls draw their rim and shadow past their frame; keep that inside
+            // the scroll view's clip without moving the content.
+            .padding(.horizontal, Self.scrollClipInset)
         }
         .scrollIndicators(.never)
+        .padding(.horizontal, -Self.scrollClipInset)
     }
 
     private enum FocusedField: Hashable {
