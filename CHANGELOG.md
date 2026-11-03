@@ -2,6 +2,16 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.1] - 2026-11-03
+
+### Fixed
+
+- Straight quotes inside Markdown code blocks stay straight. This now holds for ~~~ fences, fences longer than three backticks or indented up to three spaces, a block with a stray backtick inside, and a block with no closing fence.
+- If the history file cannot be read, Tusi shows "Could not read local data" and leaves the file untouched instead of overwriting it. A damaged history file is moved aside as history.corrupt-<time>.json rather than replaced with an empty list.
+- A draft error and a history error no longer clear each other, so a failed read or save stays visible until that file works again.
+- A running local model started with --model instead of -m is recognized.
+- The left edge of the Test Connection button in Settings is no longer cut off.
+
 ## [1.20.0] - 2026-10-22
 
 ### Changed
