@@ -291,7 +291,7 @@ final class SettingsStore: ObservableObject {
     /// Registers or unregisters the login item. On failure the previous value is
     /// returned so the property `didSet` can roll back without applying the opposite
     /// SMAppService call (a failed register must not immediately unregister).
-    static func applyLaunchAtLogin(
+    nonisolated static func applyLaunchAtLogin(
         _ enabled: Bool,
         register: () throws -> Void,
         unregister: () throws -> Void

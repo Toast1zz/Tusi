@@ -30,7 +30,7 @@ final class UpdateChecker: ObservableObject {
     /// follow a cross-origin redirect with the original request. The request-level
     /// timeout is also set per-request inside `performCheck`.
     private let session: URLSession
-    private static let productionSession = TranslationService.makeSecureSession(
+    private nonisolated static let productionSession = TranslationService.makeSecureSession(
         timeoutIntervalForRequest: 15,
         timeoutIntervalForResource: 20
     )
