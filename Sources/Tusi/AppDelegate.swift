@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.flushPendingSaves()
         // Silence anything still playing and release the cached player.
         settings.shutdownSound()
+        if let sessionObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sessionObserver)
+            self.sessionObserver = nil
+        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

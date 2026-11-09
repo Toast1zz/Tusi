@@ -26,13 +26,16 @@ final class UpdateChecker: ObservableObject {
     /// network state into screenshots — the preview settings suite is isolated, so the
     /// update checker must be too.
     private let isPreview: Bool
-    /// Injectable for tests: production uses `URLSession.shared`; tests hand in a
-    /// mock-backed session (same seam as TranslationService). The request-level
-    /// timeout is set per-request inside `performCheck`, so the shared session's own
-    /// timeout is never relied on.
+    /// Injectable for tests: production uses a cookie-less session that will not
+    /// follow a cross-origin redirect with the original request. The request-level
+    /// timeout is also set per-request inside `performCheck`.
     private let session: URLSession
+    private static let productionSession = TranslationService.makeSecureSession(
+        timeoutIntervalForRequest: 15,
+        timeoutIntervalForResource: 20
+    )
 
-    init(preview: Bool = false, session: URLSession = .shared) {
+    init(preview: Bool = false, session: URLSession = UpdateChecker.productionSession) {
         isPreview = preview
         self.session = session
     }

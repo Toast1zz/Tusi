@@ -24,4 +24,8 @@ final class Debouncer {
         task?.cancel()
         task = nil
     }
+
+    deinit {
+        task?.cancel()
+    }
 }
