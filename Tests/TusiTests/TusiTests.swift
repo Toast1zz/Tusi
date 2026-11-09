@@ -1,4 +1,5 @@
 import AppKit
+import NaturalLanguage
 import SwiftUI
 import XCTest
 @testable import Tusi
@@ -39,16 +40,21 @@ final class TusiTests: IsolatedPersistenceTestCase {
     }
 
     func testRecognizerChineseIsTreatedAsChineseForDirection() {
-        // fromNLLanguage(.chinese) is not equal to the .chinese preset, which used to
-        // make simple mode pick Chinese as the target of Chinese text.
-        let recognized = TranslationLanguage.fromNLLanguage(.chinese)
-        XCTAssertNotEqual(recognized, .chinese)
-        XCTAssertTrue(recognized.isChinese)
-        XCTAssertTrue(recognized.isSame(as: .chinese))
+        // The recognizer reports Simplified or Traditional Chinese, never a
+        // `.chinese` member. Those values are not equal to the `.chinese` preset,
+        // which used to make simple mode pick Chinese as the target of Chinese text.
+        let simplified = TranslationLanguage.fromNLLanguage(.simplifiedChinese)
+        let traditional = TranslationLanguage.fromNLLanguage(.traditionalChinese)
+        XCTAssertNotEqual(simplified, TranslationLanguage.chinese)
+        XCTAssertNotEqual(traditional, TranslationLanguage.chinese)
+        XCTAssertTrue(simplified.isChinese)
+        XCTAssertTrue(traditional.isChinese)
+        XCTAssertTrue(simplified.isSame(as: .chinese))
+        XCTAssertTrue(traditional.isSame(as: .chinese))
         XCTAssertTrue(TranslationLanguage.fromNLLanguage(.english).isSame(as: .english))
         XCTAssertTrue(TranslationLanguage.fromNLLanguage(.japanese).isSame(as: .japanese))
         XCTAssertTrue(TranslationLanguage.fromNLLanguage(.korean).isSame(as: .korean))
-        XCTAssertFalse(recognized.isSame(as: .english))
+        XCTAssertFalse(simplified.isSame(as: .english))
     }
 
     func testDetectorRecognizesHangulJamoAndHalfwidthKatakana() {
