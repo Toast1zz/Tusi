@@ -270,21 +270,39 @@ final class SettingsStore: ObservableObject {
     }
     @Published var launchAtLogin: Bool {
         didSet {
-            guard launchAtLogin != oldValue else { return }
+            guard launchAtLogin != oldValue, !applyingLaunchAtLogin else { return }
             launchAtLoginError = nil
-            do {
-                if launchAtLogin {
-                    try SMAppService.mainApp.register()
-                } else {
-                    try SMAppService.mainApp.unregister()
-                }
-            } catch {
-                launchAtLoginError = error.localizedDescription
-                launchAtLogin = oldValue
+            let result = Self.applyLaunchAtLogin(
+                launchAtLogin,
+                register: { try SMAppService.mainApp.register() },
+                unregister: { try SMAppService.mainApp.unregister() }
+            )
+            if let error = result.error {
+                launchAtLoginError = error
+                applyingLaunchAtLogin = true
+                launchAtLogin = result.enabled
+                applyingLaunchAtLogin = false
             }
         }
     }
     @Published private(set) var launchAtLoginError: String?
+    private var applyingLaunchAtLogin = false
+
+    /// Registers or unregisters the login item. On failure the previous value is
+    /// returned so the property `didSet` can roll back without applying the opposite
+    /// SMAppService call (a failed register must not immediately unregister).
+    static func applyLaunchAtLogin(
+        _ enabled: Bool,
+        register: () throws -> Void,
+        unregister: () throws -> Void
+    ) -> (enabled: Bool, error: String?) {
+        do {
+            if enabled { try register() } else { try unregister() }
+            return (enabled, nil)
+        } catch {
+            return (!enabled, error.localizedDescription)
+        }
+    }
     init(preview: Bool? = nil, credentialStorage: CredentialStorage? = nil, defaultsOverride: UserDefaults? = nil) {
         isPreview = preview ?? (ProcessInfo.processInfo.environment["TUSI_PREVIEW"] != nil)
         self.credentialStorage = credentialStorage ?? (isPreview ? nil : .live)
