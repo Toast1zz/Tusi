@@ -55,21 +55,10 @@ enum ManagedProcess {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        let buffer = OutputBuffer(limit: outputLimit)
         let handle = pipe.fileHandleForReading
-        let lock = NSLock()
-        var output = Data()
-
-        func append(_ data: Data) {
-            guard !data.isEmpty else { return }
-            lock.lock()
-            defer { lock.unlock() }
-            let remaining = outputLimit - output.count
-            guard remaining > 0 else { return }
-            output.append(data.prefix(remaining))
-        }
-
         handle.readabilityHandler = { file in
-            append(file.availableData)
+            buffer.append(file.availableData)
         }
         defer {
             handle.readabilityHandler = nil
@@ -93,11 +82,31 @@ enum ManagedProcess {
         }
         process.waitUntilExit()
         handle.readabilityHandler = nil
-        append(handle.readDataToEndOfFile())
-        lock.lock()
-        let data = output
-        lock.unlock()
-        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+        buffer.append(handle.readDataToEndOfFile())
+        return (process.terminationStatus, String(decoding: buffer.data, as: UTF8.self))
+    }
+
+    private final class OutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var storage = Data()
+
+        init(limit: Int) { self.limit = limit }
+
+        var data: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+
+        func append(_ chunk: Data) {
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            let remaining = limit - storage.count
+            guard remaining > 0 else { return }
+            storage.append(chunk.prefix(remaining))
+        }
     }
 }
 

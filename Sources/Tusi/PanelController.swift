@@ -97,10 +97,6 @@ final class FloatingPanel: NSPanel {
         stopResizeAnimation()
         super.orderOut(sender)
     }
-
-    deinit {
-        stopResizeAnimation()
-    }
 }
 
 @MainActor
