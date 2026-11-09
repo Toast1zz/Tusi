@@ -169,11 +169,16 @@ final class UpdateChecker: ObservableObject {
         else {
             return nil
         }
-        let path = components.path.split(separator: "/").map(String.init)
+        let path = components.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        // A ".." hop would otherwise match the first two components and then walk
+        // out of this repository (e.g. /Toast1zz/Tusi/../Evil/releases). Restrict
+        // the rest of the path to a GitHub releases page for this repo.
+        guard path.allSatisfy({ $0 != "." && $0 != ".." }) else { return nil }
         let repo = repository.split(separator: "/").map(String.init)
-        guard repo.count == 2, path.count >= 2,
+        guard repo.count == 2, path.count >= 3,
               path[0].caseInsensitiveCompare(repo[0]) == .orderedSame,
-              path[1].caseInsensitiveCompare(repo[1]) == .orderedSame
+              path[1].caseInsensitiveCompare(repo[1]) == .orderedSame,
+              path[2].caseInsensitiveCompare("releases") == .orderedSame
         else {
             return nil
         }

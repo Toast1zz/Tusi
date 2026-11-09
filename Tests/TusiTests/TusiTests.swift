@@ -1544,6 +1544,74 @@ final class TusiTests: IsolatedPersistenceTestCase {
         }
     }
 
+    func testRateLimitDoesNotRetrySameProviderButFailsOver() async throws {
+        // 429 is shown as retryable in the UI, but automatically retrying the same
+        // provider would just hit the same limit. Fail over once, with no same-slot retry.
+        let settings = isolatedSettings()
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://primary.example/v1", apiKey: "k1", model: "m1")
+        settings.profiles[1] = APIProfile(baseURL: "https://backup.example/v1", apiKey: "k2", model: "m2")
+
+        var hosts: [String] = []
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, config in
+            hosts.append(config.baseURL)
+            return AsyncThrowingStream { continuation in
+                if config.baseURL.contains("primary") {
+                    continuation.finish(throwing: TranslationError.http(429, "slow down"))
+                } else {
+                    continuation.yield("ok")
+                    continuation.finish()
+                }
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        try await waitUntilDone(engine)
+        XCTAssertEqual(hosts, [
+            "https://primary.example/v1",
+            "https://backup.example/v1",
+        ])
+        XCTAssertEqual(engine.output, "ok")
+    }
+
+    func testRetranslateAbandonsInFlightResultFromTheFirstRequest() async throws {
+        // A second translate() of the same input keeps inputRevision unchanged.
+        // Cancellation still has to drop the first stream, including tokens that
+        // arrive after the second request has already started.
+        let settings = isolatedSettings()
+        settings.autoCopy = false
+        settings.profiles[0] = APIProfile(baseURL: "https://example.com/v1", apiKey: "k", model: "m")
+
+        var first: AsyncThrowingStream<String, Error>.Continuation?
+        var calls = 0
+        let engine = TranslationEngine(settings: settings, storage: testStorage) { _, _, _, _, _ in
+            calls += 1
+            if calls == 1 {
+                return AsyncThrowingStream { first = $0 }
+            }
+            return AsyncThrowingStream { continuation in
+                continuation.yield("second")
+                continuation.finish()
+            }
+        }
+        engine.input = "hi"
+        engine.translate()
+        for _ in 0..<100 where first == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(first)
+
+        engine.translate()
+        try await waitUntilDone(engine)
+        first?.yield("FIRST_SHOULD_NOT_APPEAR")
+        first?.finish()
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(engine.output, "second")
+        XCTAssertEqual(engine.state, .done)
+    }
+
     func testMultiLanguageTargetChangeRestartsTranslationWhileTranslating() async throws {
         let settings = isolatedSettings()
         settings.autoCopy = false
@@ -1869,6 +1937,41 @@ final class TusiTests: IsolatedPersistenceTestCase {
         defaults.set(true, forKey: "fallbackEnabled")
         defaults.set(true, forKey: "raceFastestEnabled")
         XCTAssertEqual(SettingsStore.loadRouting(defaults: defaults).strategy, .concurrent)
+    }
+
+    func testFirstRunDefaultsAndRoutingPersistWithoutRetiredKeys() {
+        let settings = isolatedSettings()
+        XCTAssertEqual(settings.routeStart, .online)
+        XCTAssertEqual(settings.onlineStrategy, .failover)
+        XCTAssertFalse(settings.localModelEnabled)
+        XCTAssertFalse(settings.isConfigured)
+        XCTAssertTrue(settings.autoCopy)
+        XCTAssertTrue(settings.holdReturnToRetranslate)
+        XCTAssertTrue(settings.saveHistoryEnabled)
+        XCTAssertEqual(settings.historyRetention, .never)
+        XCTAssertTrue(settings.saveDraftEnabled)
+        XCTAssertTrue(settings.autoCheckUpdates)
+        XCTAssertTrue(settings.soundEnabled)
+        XCTAssertEqual(settings.primaryIndex, 0)
+        XCTAssertFalse(settings.multiLanguageMode)
+
+        // An empty defaults domain is treated as first run, not as "migrate the
+        // retired switches". The new keys are written once; the retired ones stay gone.
+        let suite = "com.tusi.test.firstrun.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let routing = SettingsStore.loadRouting(defaults: defaults)
+        XCTAssertEqual(routing.start, .online)
+        XCTAssertEqual(routing.strategy, .failover)
+        XCTAssertEqual(defaults.string(forKey: "routeStart"), RouteStart.online.rawValue)
+        XCTAssertEqual(defaults.string(forKey: "onlineStrategy"), OnlineStrategy.failover.rawValue)
+        XCTAssertNil(defaults.object(forKey: "useLocalModel"))
+        XCTAssertNil(defaults.object(forKey: "fallbackEnabled"))
+        XCTAssertNil(defaults.object(forKey: "raceFastestEnabled"))
+        XCTAssertNil(defaults.object(forKey: "raceToastEnabled"))
+
+        XCTAssertEqual(HistoryRetention(rawValue: defaults.integer(forKey: "historyRetentionDays")) ?? .never, .never)
+        XCTAssertNil(HistoryRetention(rawValue: 15), "an unrecognized retention value must not invent a period")
     }
 
     func testConcurrentNeedsBothOnlineSlotsButNotRemoteAddresses() {
@@ -3624,6 +3727,13 @@ final class TusiTests: IsolatedPersistenceTestCase {
         XCTAssertNil(UpdateChecker.releasePageURL(from: "https://github.com/other/Tusi/releases/tag/v99.0.0"))
         XCTAssertNil(UpdateChecker.releasePageURL(from: "https://user:pass@github.com/Toast1zz/Tusi/releases/tag/v99.0.0"))
         XCTAssertNil(UpdateChecker.releasePageURL(from: "javascript:alert(1)"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://github.com/Toast1zz/Tusi/../Evil/releases/tag/v99.0.0"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://github.com/Toast1zz/Tusi/issues/1"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://github.com/Toast1zz/Tusi"))
+        XCTAssertEqual(
+            UpdateChecker.releasePageURL(from: "https://github.com/Toast1zz/Tusi/releases")?.absoluteString,
+            "https://github.com/Toast1zz/Tusi/releases"
+        )
     }
 
     func testUpdateCheckerRejectsOffRepoReleasePage() async throws {
