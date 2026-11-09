@@ -113,8 +113,13 @@ final class UpdateChecker: ObservableObject {
                 return
             }
             let latest = release.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-            if Self.isNewer(latest, than: currentVersion),
-               let page = URL(string: release.html_url) {
+            if Self.isNewer(latest, than: currentVersion) {
+                guard let page = Self.releasePageURL(from: release.html_url) else {
+                    Log.update.error("update check: release page URL is not this repository")
+                    state = .failed
+                    checkTask = nil
+                    return
+                }
                 pendingUpdate = (latest, page)
                 state = .available(version: latest, url: page)
                 Log.update.info("update available: \(latest, privacy: .public)")
@@ -144,6 +149,32 @@ final class UpdateChecker: ObservableObject {
     deinit {
         checkTask?.cancel()
         automaticTask?.cancel()
+    }
+
+    /// Accepts only an https GitHub release page for this repository. `html_url` comes
+    /// from the Releases API and is later opened in the browser, so a forged or
+    /// unexpected host must never become a clickable update.
+    static func releasePageURL(from raw: String, repository: String = "Toast1zz/Tusi") -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.user == nil,
+              components.password == nil,
+              let host = components.host?.lowercased(),
+              host == "github.com" || host == "www.github.com"
+        else {
+            return nil
+        }
+        let path = components.path.split(separator: "/").map(String.init)
+        let repo = repository.split(separator: "/").map(String.init)
+        guard repo.count == 2, path.count >= 2,
+              path[0].caseInsensitiveCompare(repo[0]) == .orderedSame,
+              path[1].caseInsensitiveCompare(repo[1]) == .orderedSame
+        else {
+            return nil
+        }
+        return url
     }
 
     /// True when `candidate` is a strictly higher semantic version than `current`.

@@ -3586,6 +3586,34 @@ final class TusiTests: IsolatedPersistenceTestCase {
         XCTAssertNil(checker.pendingUpdate)
     }
 
+    func testReleasePageURLAcceptsOnlyThisRepositoryOnGitHub() {
+        XCTAssertEqual(
+            UpdateChecker.releasePageURL(from: "https://github.com/Toast1zz/Tusi/releases/tag/v99.0.0")?.absoluteString,
+            "https://github.com/Toast1zz/Tusi/releases/tag/v99.0.0"
+        )
+        XCTAssertEqual(
+            UpdateChecker.releasePageURL(from: "https://www.github.com/Toast1zz/Tusi/releases/tag/v99.0.0")?.host,
+            "www.github.com"
+        )
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://evil.example/Tusi"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "http://github.com/Toast1zz/Tusi/releases/tag/v99.0.0"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://github.com/other/Tusi/releases/tag/v99.0.0"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "https://user:pass@github.com/Toast1zz/Tusi/releases/tag/v99.0.0"))
+        XCTAssertNil(UpdateChecker.releasePageURL(from: "javascript:alert(1)"))
+    }
+
+    func testUpdateCheckerRejectsOffRepoReleasePage() async throws {
+        let body = #"{"tag_name":"v99.0.0","html_url":"https://evil.example/download"}"#
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        defer { Self.resetMockGitHubSession() }
+        checker.check(manual: true)
+        try await Self.waitUntilState(of: checker) { state in
+            if case .failed = state { return true }
+            return false
+        }
+        XCTAssertNil(checker.pendingUpdate)
+    }
+
     private static func mockGitHubSession(statusCode: Int, body: String) -> URLSession {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
