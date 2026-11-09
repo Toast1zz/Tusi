@@ -38,6 +38,24 @@ final class TusiTests: IsolatedPersistenceTestCase {
         XCTAssertEqual(LanguageDetector.detect("I love 中国").source, .english)
     }
 
+    func testRecognizerChineseIsTreatedAsChineseForDirection() {
+        // fromNLLanguage(.chinese) is not equal to the .chinese preset, which used to
+        // make simple mode pick Chinese as the target of Chinese text.
+        let recognized = TranslationLanguage.fromNLLanguage(.chinese)
+        XCTAssertNotEqual(recognized, .chinese)
+        XCTAssertTrue(recognized.isChinese)
+        XCTAssertTrue(recognized.isSame(as: .chinese))
+        XCTAssertTrue(TranslationLanguage.fromNLLanguage(.english).isSame(as: .english))
+        XCTAssertTrue(TranslationLanguage.fromNLLanguage(.japanese).isSame(as: .japanese))
+        XCTAssertTrue(TranslationLanguage.fromNLLanguage(.korean).isSame(as: .korean))
+        XCTAssertFalse(recognized.isSame(as: .english))
+    }
+
+    func testDetectorRecognizesHangulJamoAndHalfwidthKatakana() {
+        XCTAssertEqual(LanguageDetector.detect("ㄱㄴㄷㄹㅁㅂㅅ").source, .korean)
+        XCTAssertEqual(LanguageDetector.detect("ｶﾀｶﾅﾃｽﾄ").source, .japanese)
+    }
+
     func testWrongLanguageCheckCatchesAnsweredInsteadOfTranslated() {
         // The observed failure: Chinese input, English target, and the model replied to
         // the remark in Chinese instead of translating it.

@@ -34,6 +34,25 @@ struct TranslationLanguage: Codable, Equatable, Hashable {
     static let presets: [TranslationLanguage] = [
         .english, .chinese, .japanese, .korean
     ]
+
+    /// Identity for routing, not instance equality. `fromNLLanguage` builds a
+    /// different `chinese` value than the `.chinese` preset (`"Chinese"` / `"ZH"`
+    /// versus `"中文"` / `"中"`), so `== .chinese` would miss it and simple mode
+    /// would try to translate Chinese into Chinese.
+    var isChinese: Bool { self == .chinese || apiName.lowercased().contains("chinese") }
+    var isJapanese: Bool { self == .japanese || apiName.lowercased().contains("japanese") }
+    var isKorean: Bool { self == .korean || apiName.lowercased().contains("korean") }
+    var isEnglish: Bool { self == .english || apiName.lowercased().contains("english") }
+
+    func isSame(as other: TranslationLanguage) -> Bool {
+        if self == other { return true }
+        if isChinese && other.isChinese { return true }
+        if isJapanese && other.isJapanese { return true }
+        if isKorean && other.isKorean { return true }
+        if isEnglish && other.isEnglish { return true }
+        return false
+    }
+
     /// Fallback for NLLanguage values not in the presets list.
     static func fromNLLanguage(_ nl: NLLanguage) -> TranslationLanguage {
         let display = shortDisplayName(for: nl)
@@ -188,9 +207,9 @@ enum LanguageDetector {
     }
 
     private static func expectedScript(for target: TranslationLanguage) -> ExpectedScript {
-        if target == .chinese { return .han }
-        if target == .japanese { return .japanese }
-        if target == .korean { return .hangul }
+        if target.isChinese { return .han }
+        if target.isJapanese { return .japanese }
+        if target.isKorean { return .hangul }
         // Targets built by `fromNLLanguage` aren't the preset instances, so fall back to
         // the English language name baked into `apiName`.
         let name = target.apiName.lowercased()
@@ -233,7 +252,9 @@ enum LanguageDetector {
     private static func isKana(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
         case 0x3040...0x309F,       // Hiragana
-             0x30A0...0x30FF:       // Katakana
+             0x30A0...0x30FF,       // Katakana
+             0x31F0...0x31FF,       // Katakana phonetic extensions
+             0xFF66...0xFF9D:       // Halfwidth katakana
             return true
         default:
             return false
@@ -242,7 +263,11 @@ enum LanguageDetector {
 
     private static func isHangul(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0xAC00...0xD7AF:       // Hangul syllables
+        case 0x1100...0x11FF,       // Hangul Jamo
+             0x3130...0x318F,       // Hangul Compatibility Jamo
+             0xA960...0xA97F,       // Hangul Jamo Extended-A
+             0xAC00...0xD7AF,       // Hangul syllables
+             0xD7B0...0xD7FF:       // Hangul Jamo Extended-B
             return true
         default:
             return false

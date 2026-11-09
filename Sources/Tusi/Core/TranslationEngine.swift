@@ -358,9 +358,9 @@ final class TranslationEngine: ObservableObject {
         let (detected, label) = LanguageDetector.detect(input)
         if flipped {
             // Manual override: the user says the detector picked the wrong side.
-            source = detected == .chinese ? .english : .chinese
-            sourceLabel = source == .chinese ? "中" : "EN"
-            target = source == .chinese ? .english : .chinese
+            source = detected.isChinese ? .english : .chinese
+            sourceLabel = source.isChinese ? "中" : "EN"
+            target = source.isChinese ? .english : .chinese
             return
         }
         source = detected
@@ -369,18 +369,18 @@ final class TranslationEngine: ObservableObject {
             // In multi-language mode the user picks the target explicitly.
             // If the stored target equals the source, flip it to the most
             // recent distinct target, or fall back to the other side.
-            if target == source {
+            if target.isSame(as: source) {
                 // Find the most recent record where target ≠ current source and is still
                 // offered in the picker — older builds may have recorded targets (e.g.
                 // French) that are no longer in the presets list.
                 let lastDifferent = history.first {
-                    $0.target != source && TranslationLanguage.presets.contains($0.target)
+                    !$0.target.isSame(as: source) && TranslationLanguage.presets.contains($0.target)
                 }?.target
-                target = lastDifferent ?? (source == .english ? .chinese : .english)
+                target = lastDifferent ?? (source.isEnglish ? .chinese : .english)
             }
         } else {
             // Simple CN↔EN mode: Chinese → English, everything else → Chinese.
-            target = source == .chinese ? .english : .chinese
+            target = source.isChinese ? .english : .chinese
         }
     }
 
@@ -413,7 +413,7 @@ final class TranslationEngine: ObservableObject {
         // translate. With an empty input the detected source is just a placeholder
         // (usually Chinese), so it must not veto the user's explicit target choice:
         // let them select 中文 even before typing anything.
-        if target == source, !input.isEmpty { updateDirection() }
+        if target.isSame(as: source), !input.isEmpty { updateDirection() }
         guard target != previousTarget else { return }
         if hasResultSection || escalating { translate() }
     }
