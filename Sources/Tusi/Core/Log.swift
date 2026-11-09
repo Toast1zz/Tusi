@@ -60,11 +60,20 @@ enum HeightTrace {
         private let limit = 48
         /// A dump is evidence, not a stream. One incident's worth per half minute.
         private let cooldown: TimeInterval = 30
+        /// DateFormatter is not thread-safe. Preference callbacks can hop off the
+        /// main actor, so stamping happens only under `lock`.
+        private let stamp: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            formatter.dateFormat = "HH:mm:ss.SSS"
+            return formatter
+        }()
 
         func append(_ entry: String) {
             lock.lock()
             defer { lock.unlock() }
-            entries.append(entry)
+            entries.append("\(stamp.string(from: Date())) \(entry)")
             if entries.count > limit {
                 entries.removeFirst(entries.count - limit)
             }
@@ -85,17 +94,11 @@ enum HeightTrace {
 
     private static let ring = Ring()
 
-    private static let stamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        return formatter
-    }()
-
     static func log(_ message: @autoclosure () -> String) {
         // Evaluated into a local first: the logger's string interpolation is an escaping
         // autoclosure, which a non-escaping parameter cannot be captured by.
         let text = message()
-        ring.append("\(stamp.string(from: Date())) \(text)")
+        ring.append(text)
         guard isVerbose else { return }
         Log.app.notice("height: \(text, privacy: .public)")
     }
