@@ -55,6 +55,42 @@ final class LocalModelTests: XCTestCase {
         XCTAssertEqual(try LocalTranslationModel.discover(in: directory).map(\.id), ["Hy-MT2.gguf", "MiLMMT.gguf"])
     }
 
+    func testManagedProcessCapturesOutputAndExitCode() throws {
+        let result = try ManagedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf 'hello'; exit 7"],
+            timeout: 5
+        )
+        XCTAssertEqual(result.output, "hello")
+        XCTAssertEqual(result.code, 7)
+    }
+
+    func testManagedProcessKillsAStuckChild() throws {
+        let start = Date()
+        let result = try ManagedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sleep"),
+            arguments: ["30"],
+            timeout: 0.3,
+            terminateGrace: 0.3
+        )
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertNotEqual(result.code, 0)
+    }
+
+    func testManagedProcessCapsOutputAndDoesNotDeadlock() throws {
+        let start = Date()
+        let result = try ManagedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "yes"],
+            timeout: 0.8,
+            outputLimit: 8_192,
+            terminateGrace: 0.4
+        )
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6)
+        XCTAssertLessThanOrEqual(result.output.utf8.count, 8_192)
+        XCTAssertFalse(result.output.isEmpty)
+    }
+
     /// Explicitly enabled for this machine's deployment verification, never in normal test runs.
     func testLiveSequentialSwitch() async throws {
         guard ProcessInfo.processInfo.environment["TUSI_TEST_LOCAL_SWITCH"] == "1" else {

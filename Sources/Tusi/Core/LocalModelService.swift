@@ -26,20 +26,78 @@ struct SystemLocalModelRuntime: LocalModelRuntime {
 
     func run(_ arguments: [String]) async throws -> (code: Int32, output: String) {
         try await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = arguments
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            try process.run()
-            let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timeout)
-            let output = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            timeout.cancel()
-            return (process.terminationStatus, String(decoding: output, as: UTF8.self))
+            try ManagedProcess.run(
+                executable: URL(fileURLWithPath: "/bin/launchctl"),
+                arguments: arguments
+            )
         }.value
+    }
+}
+
+/// Runs a helper process with a deadline, a bounded pipe, and a SIGKILL fallback.
+/// `readDataToEndOfFile()` plus `waitUntilExit()` can deadlock when the child fills
+/// the pipe, and SIGTERM alone can leave a stuck `launchctl` blocking a model switch.
+enum ManagedProcess {
+    static let defaultTimeout: TimeInterval = 15
+    static let defaultOutputLimit = 256 * 1024
+    static let terminateGrace: TimeInterval = 2
+
+    static func run(
+        executable: URL,
+        arguments: [String],
+        timeout: TimeInterval = defaultTimeout,
+        outputLimit: Int = defaultOutputLimit,
+        terminateGrace: TimeInterval = terminateGrace
+    ) throws -> (code: Int32, output: String) {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let handle = pipe.fileHandleForReading
+        let lock = NSLock()
+        var output = Data()
+
+        func append(_ data: Data) {
+            guard !data.isEmpty else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            let remaining = outputLimit - output.count
+            guard remaining > 0 else { return }
+            output.append(data.prefix(remaining))
+        }
+
+        handle.readabilityHandler = { file in
+            append(file.availableData)
+        }
+        defer {
+            handle.readabilityHandler = nil
+            try? handle.close()
+        }
+
+        try process.run()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            usleep(50_000)
+        }
+        if process.isRunning {
+            process.terminate()
+            let killBy = Date().addingTimeInterval(terminateGrace)
+            while process.isRunning, Date() < killBy {
+                usleep(50_000)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+        process.waitUntilExit()
+        handle.readabilityHandler = nil
+        append(handle.readDataToEndOfFile())
+        lock.lock()
+        let data = output
+        lock.unlock()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 }
 
