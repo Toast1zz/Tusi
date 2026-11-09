@@ -84,15 +84,23 @@ enum TranslationService {
 
     private static let maxSSELineBytes = 256 * 1024
     private static let redirectDelegate = RedirectPolicyDelegate()
-    private static let productionSession: URLSession = {
+    private static let productionSession = makeSecureSession(
+        timeoutIntervalForRequest: 60,
+        timeoutIntervalForResource: 300
+    )
+
+    /// A URLSession that never forwards Authorization, cookies, or a POST body across
+    /// origins. Translation and Jev both send bearer keys; they must share this policy.
+    static func makeSecureSession(
+        timeoutIntervalForRequest: TimeInterval,
+        timeoutIntervalForResource: TimeInterval
+    ) -> URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 60
-        // A stream may legitimately take a while, but it should never be allowed to
-        // hang for URLSession's default multi-day resource timeout.
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForRequest = timeoutIntervalForRequest
+        config.timeoutIntervalForResource = timeoutIntervalForResource
         config.httpShouldSetCookies = false
         return URLSession(configuration: config, delegate: redirectDelegate, delegateQueue: nil)
-    }()
+    }
 
     /// The session every request goes through. Tests swap in a mock-backed session
     /// via `sessionOverride` (a URLProtocol that serves canned SSE); the seam itself
@@ -791,7 +799,7 @@ enum TranslationService {
 /// URLSession follows redirects by default, which would otherwise replay the POST body
 /// and Authorization header at a different host. Same-origin redirects with the same
 /// scheme are allowed; every other redirect is downgraded to a credential-free GET.
-private final class RedirectPolicyDelegate: NSObject, URLSessionTaskDelegate {
+final class RedirectPolicyDelegate: NSObject, URLSessionTaskDelegate {
     static func request(original: URLRequest, redirected: URLRequest) -> URLRequest? {
         guard let originalURL = original.url, let redirectedURL = redirected.url else {
             return nil

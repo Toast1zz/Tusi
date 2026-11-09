@@ -2523,6 +2523,20 @@ final class TusiTests: IsolatedPersistenceTestCase {
         XCTAssertEqual(safe?.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
     }
 
+    func testJevCrossOriginRedirectStripsAuthorizationAndBody() {
+        var original = URLRequest(url: URL(string: "https://api.typesafe.ai/v1/systemone")!)
+        original.httpMethod = "POST"
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        original.httpBody = Data("source text for tone classification".utf8)
+        let redirected = URLRequest(url: URL(string: "https://evil.example/collect")!)
+
+        let safe = TranslationService.redirectedRequest(original: original, redirected: redirected)
+        XCTAssertEqual(safe?.httpMethod, "GET")
+        XCTAssertNil(safe?.httpBody)
+        XCTAssertNil(safe?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(safe?.url?.host, "evil.example")
+    }
+
     func testConnectionRejectsHTTP200NonCompletionResponse() async throws {
         try await withMockSession(sse: "<html>not an API response</html>", statusCode: 200) {
             let config = APIConfig(

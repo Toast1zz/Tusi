@@ -16,6 +16,12 @@ enum JevToneError: LocalizedError {
 
 enum JevToneService {
     private static let endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
+    /// Same redirect policy as translation requests: a cross-origin hop must not
+    /// carry the Jev bearer key or the source text.
+    private static let productionSession = TranslationService.makeSecureSession(
+        timeoutIntervalForRequest: 10,
+        timeoutIntervalForResource: 15
+    )
 
     private struct Request: Encodable {
         let model = "jev-latest"
@@ -42,13 +48,13 @@ enum JevToneService {
         let probabilities: [String: Double]
     }
 
-    static func testConnection(key: String, session: URLSession = .shared) async throws -> Int {
+    static func testConnection(key: String, session: URLSession = productionSession) async throws -> Int {
         let start = ProcessInfo.processInfo.systemUptime
         _ = try await evaluate(text: "Please review the attached document.", key: key, session: session)
         return Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)
     }
 
-    static func classify(text: String, key: String, session: URLSession = .shared) async throws -> Tone {
+    static func classify(text: String, key: String, session: URLSession = productionSession) async throws -> Tone {
         let answer = try await evaluate(text: text, key: key, session: session)
         guard let tone = Tone(rawValue: answer.choice), tone != .automatic,
               let probability = answer.probabilities[answer.choice], probability >= 0.7,
