@@ -18,7 +18,23 @@ fi
 # (data race, non-Sendable capture) fails the build instead of shipping a
 # Swift-6 time bomb. Applied to EVERY arch mode — not just native — so the
 # release zips users download are gated exactly like the debug loop is.
-CONCURRENCY_FLAGS=(-Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors)
+#
+# --build-system native: Swift 6.4's default Swift Build backend records
+# discovered toolchains (including a user Metal.xctoolchain under $HOME) in
+# the binary. The native engine does not, and it also stamps the real SDK
+# in LC_BUILD_VERSION (the -platform_version flags below remain as a belt).
+ROOT="$(pwd)"
+CONCURRENCY_FLAGS=(
+    --build-system native
+    -Xswiftc -strict-concurrency=complete
+    -Xswiftc -warnings-as-errors
+    -Xswiftc -file-prefix-map
+    -Xswiftc "$ROOT=."
+    -Xswiftc -debug-prefix-map
+    -Xswiftc "$ROOT=."
+    -Xcc -ffile-prefix-map="$ROOT=."
+    -Xcc -fdebug-prefix-map="$ROOT=."
+)
 SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
 # Swift Build can otherwise stamp the deployment floor as the linked SDK version,
 # which makes AppKit choose legacy controls even on a new OS.
@@ -56,12 +72,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 case "$ARCH_MODE" in
     native)
         swift build -c release "${CONCURRENCY_FLAGS[@]}"
-        cp "$(swift build -c release --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
+        cp "$(swift build -c release "${CONCURRENCY_FLAGS[@]}" --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     arm64)
         swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64
-        cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
+        cp "$(swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64 --show-bin-path)/Tusi" "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
     universal)
@@ -73,9 +89,9 @@ case "$ARCH_MODE" in
         trap cleanup_slices EXIT
 
         swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64
-        cp "$(swift build -c release --arch arm64 --show-bin-path)/Tusi" "$arm64_slice"
+        cp "$(swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch arm64 --show-bin-path)/Tusi" "$arm64_slice"
         swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch x86_64
-        cp "$(swift build -c release --arch x86_64 --show-bin-path)/Tusi" "$x86_64_slice"
+        cp "$(swift build -c release "${CONCURRENCY_FLAGS[@]}" --arch x86_64 --show-bin-path)/Tusi" "$x86_64_slice"
         lipo -create "$arm64_slice" "$x86_64_slice" -output "$APP/Contents/MacOS/Tusi"
         chmod +x "$APP/Contents/MacOS/Tusi"
         ;;
@@ -197,6 +213,14 @@ keychain_partition_hint() {
   这会把记录的 partition 固定到 teamid:${team}，之后重新构建不再触发授权。
 HINT
 }
+
+# SwiftPM's release configuration still compiles with -g, and ld embeds OSO
+# records with the absolute checkout and .build object paths. Prefix-map flags
+# rewrite DWARF but not those notes. strip -S drops them and must run before
+# codesign. The path-leak gate then refuses $ROOT or $HOME in the app bundle.
+echo "=== 剥离调试符号 ==="
+xcrun strip -S "$APP/Contents/MacOS/Tusi"
+"$ROOT/scripts/assert-no-build-paths.sh" "$APP" "$ROOT"
 
 # Signing identity, in order of preference:
 #   1. TUSI_SIGN_IDENTITY, when set. `release` sets it to the anonymous self-signed
