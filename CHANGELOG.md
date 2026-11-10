@@ -2,6 +2,17 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.2] - 2026-11-10
+
+### Fixed
+
+- On a Chinese system, the interface stays in Chinese instead of falling back to English.
+- Hangul and halfwidth katakana are recognized as Korean and Japanese when choosing translation direction. Chinese text reported by the system language recognizer is also treated as Chinese.
+- If turning launch-at-login on or off fails, Tusi no longer immediately tries the opposite action.
+- Switching the local model no longer stalls if a helper process hangs.
+- Jev tone classification no longer forwards the API key if the request is redirected off-origin.
+- The in-app update check only opens this repository's GitHub Releases page, and ignores unexpected or unsafe links.
+
 ## [1.20.1] - 2026-11-03
 
 ### Fixed
