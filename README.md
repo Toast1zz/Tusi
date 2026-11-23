@@ -122,8 +122,7 @@ Two controls are available when you need them:
 
 - **Standing instruction** (Settings → Translation) — one instruction
   added to every translation request, whichever profile answers it. Use it for a
-  glossary rule, a house style, or a name that must remain untranslated. The field
-  starts collapsed when empty.
+  glossary rule, a house style, or a name that must remain untranslated.
 - **Output protocol** (Advanced, per profile) — Automatic (recommended) asks for
   structured output and, if a server does not support it, retries as plain text.
   Choose Plain-text compatibility for an endpoint that advertises structured output but

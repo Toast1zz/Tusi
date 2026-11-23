@@ -229,6 +229,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Show / hide
 
+    var isVisible: Bool { panel.isVisible }
+
     func toggle() {
         if panel.isVisible {
             hide()
@@ -273,6 +275,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     func hide() {
         emptyResizeTask?.cancel()
         cancelReturnHold()
+        panelState.recordingShortcut = nil
+        panelState.shortcutError = nil
+        panelState.pendingBareShortcut = nil
         guard panel.isVisible else { return }
         // Deliberately not NSApp.hide(nil): like ⌘H it hands activation back to the
         // previously frontmost app, whose window then jumps forward.

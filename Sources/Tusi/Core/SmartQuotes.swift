@@ -54,18 +54,19 @@ enum SmartQuotes {
             let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
             switch character {
             case "\"":
-                let opening = isOpening(previous: previous, isOpen: doubleIsOpen)
+                let opening = isOpening(previous: previous, next: next, isOpen: doubleIsOpen)
                 doubleIsOpen = opening
                 result.append(opening ? "\u{201C}" : "\u{201D}")
             case "'":
                 // A straight quote between Latin word characters is an apostrophe, not a
                 // quote mark: don’t, it’s, teams’ — never a nesting delimiter.
-                if let previous, (previous.isLetter || previous.isNumber), !isCJK(previous) {
+                if let previous, (previous.isLetter || previous.isNumber), !isCJK(previous),
+                   !(next.map(isCJK) ?? false) {
                     result.append("\u{2019}")
                 } else if let next, next.isNumber, !(previous.map { $0.isLetter || $0.isNumber } ?? false) {
                     result.append("\u{2019}")  // elision: the ’90s
                 } else {
-                    let opening = isOpening(previous: previous, isOpen: singleIsOpen)
+                    let opening = isOpening(previous: previous, next: next, isOpen: singleIsOpen)
                     singleIsOpen = opening
                     result.append(opening ? "\u{2018}" : "\u{2019}")
                 }
@@ -102,7 +103,7 @@ enum SmartQuotes {
                    characters[runEnd..<end].allSatisfy({ $0.isWhitespace }) {
                     fence = nil
                 }
-            } else if length >= 3 {
+            } else if length >= 3, characters[marker] == "~" || !characters[runEnd..<end].contains("`") {
                 fence = (characters[marker], length)
                 for position in start..<next { flags[position] = true }
             } else {
@@ -137,9 +138,9 @@ enum SmartQuotes {
     /// Latin text puts a space before an opening quote, so the preceding character settles
     /// it. CJK text doesn't — 他说“你好” has the quote flush against the character — so there
     /// the only reliable signal is whether a quote is currently open.
-    private static func isOpening(previous: Character?, isOpen: Bool) -> Bool {
+    private static func isOpening(previous: Character?, next: Character?, isOpen: Bool) -> Bool {
         guard let previous else { return true }
-        if isCJK(previous) { return !isOpen }
+        if isCJK(previous) || (next.map(isCJK) ?? false) { return !isOpen }
         if previous.isWhitespace { return true }
         return "([{<\u{201C}\u{2018}—–-".contains(previous)
     }

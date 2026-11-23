@@ -3675,8 +3675,14 @@ final class TusiTests: IsolatedPersistenceTestCase {
 
     // MARK: - UpdateChecker (mock session)
 
+    private func scratchDefaults() -> UserDefaults {
+        let suite = "com.tusi.test.update.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        return UserDefaults(suiteName: suite)!
+    }
+
     func testUpdateCheckerFailsOnHTTPError() async throws {
-        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 500, body: "{}"))
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 500, body: "{}"), defaults: scratchDefaults())
         defer { Self.resetMockGitHubSession() }
         checker.check(manual: true)
         try await Self.waitUntilState(of: checker) { state in
@@ -3687,7 +3693,7 @@ final class TusiTests: IsolatedPersistenceTestCase {
 
     func testUpdateCheckerSurfacesAvailableDownload() async throws {
         let body = #"{"tag_name":"v99.0.0","html_url":"https://github.com/Toast1zz/Tusi/releases/tag/v99.0.0"}"#
-        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body), defaults: scratchDefaults())
         defer { Self.resetMockGitHubSession() }
         checker.check(manual: true)
         try await Self.waitUntilState(of: checker) { state in
@@ -3706,7 +3712,7 @@ final class TusiTests: IsolatedPersistenceTestCase {
         // "0.0.0" is not newer than the test bundle's current version ("0"), so the
         // release must not be offered and no update must be pending.
         let body = #"{"tag_name":"0.0.0","html_url":"https://github.com/Toast1zz/Tusi/releases/tag/0.0.0"}"#
-        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body), defaults: scratchDefaults())
         defer { Self.resetMockGitHubSession() }
         checker.check(manual: true)
         try await Self.waitUntilState(of: checker) { $0 == .upToDate }
@@ -3738,7 +3744,7 @@ final class TusiTests: IsolatedPersistenceTestCase {
 
     func testUpdateCheckerRejectsOffRepoReleasePage() async throws {
         let body = #"{"tag_name":"v99.0.0","html_url":"https://evil.example/download"}"#
-        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body))
+        let checker = UpdateChecker(preview: false, session: Self.mockGitHubSession(statusCode: 200, body: body), defaults: scratchDefaults())
         defer { Self.resetMockGitHubSession() }
         checker.check(manual: true)
         try await Self.waitUntilState(of: checker) { state in
@@ -3746,6 +3752,30 @@ final class TusiTests: IsolatedPersistenceTestCase {
             return false
         }
         XCTAssertNil(checker.pendingUpdate)
+    }
+
+    func testUpdateCheckerThrottlesAutomaticChecksWithInjectedDefaults() async throws {
+        let defaults = scratchDefaults()
+        var requests = 0
+        MockURLProtocol.handler = { request in
+            requests += 1
+            let body = #"{"tag_name":"0.0.0","html_url":"https://github.com/Toast1zz/Tusi/releases/tag/0.0.0"}"#
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { Self.resetMockGitHubSession(); session.invalidateAndCancel() }
+
+        let checker = UpdateChecker(preview: false, session: session, defaults: defaults)
+        checker.check(manual: false)
+        try await Self.waitUntilState(of: checker) { $0 == .upToDate }
+        XCTAssertEqual(requests, 1)
+
+        // Within 6 hours, a second automatic check is throttled while a manual check runs.
+        checker.check(manual: false)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(requests, 1)
     }
 
     private static func mockGitHubSession(statusCode: Int, body: String) -> URLSession {

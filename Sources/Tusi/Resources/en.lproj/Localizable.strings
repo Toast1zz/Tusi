@@ -299,3 +299,10 @@
 "出错了，请重试" = "Something went wrong. Try again.";
 
 "本机读取失败，请检查磁盘空间或文件权限" = "Could not read local data. Check disk space and file permissions.";
+
+"已保存" = "Saved";
+"清除历史" = "Clear History";
+"历史接口地址" = "Recent Endpoints";
+"获取模型列表" = "Fetch Models";
+"没有可用的模型" = "No models available";
+"无法读取模型列表：%@" = "Couldn't load models: %@";

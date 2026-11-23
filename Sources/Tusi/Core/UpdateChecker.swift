@@ -18,7 +18,7 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var state: State = .idle
 
     private let repo = "Toast1zz/Tusi"
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let lastCheckKey = "lastUpdateCheck"
     /// Auto-checks are throttled so a login-item app doesn't hit the API on every launch.
     private let autoInterval: TimeInterval = 6 * 3600
@@ -35,9 +35,10 @@ final class UpdateChecker: ObservableObject {
         timeoutIntervalForResource: 20
     )
 
-    init(preview: Bool = false, session: URLSession = UpdateChecker.productionSession) {
+    init(preview: Bool = false, session: URLSession = UpdateChecker.productionSession, defaults: UserDefaults = .standard) {
         isPreview = preview
         self.session = session
+        self.defaults = defaults
     }
 
     /// A newer version was found. Kept separate from `state` so a passive surface (the

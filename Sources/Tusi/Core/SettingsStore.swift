@@ -125,16 +125,22 @@ final class SettingsStore: ObservableObject {
     /// second time returns the same corrupt bytes, and the only way out is re-entering
     /// the key. Drives whether Settings offers a retry.
     @Published private(set) var keychainErrorIsRetryable = false
-    /// True briefly after API keys land in the Keychain. The save is debounced
-    /// (250ms) and otherwise silent — a one-time confirmation tells the user the
-    /// typed key was actually persisted, instead of leaving them guessing.
-    @Published private(set) var keychainSaved = false
 
     private let keychainSave = Debouncer(delay: .milliseconds(250))
-    private var keychainSavedTask: Task<Void, Never>?
     private var pendingKeychainKeys: [Int: String]?
     private let profileSave = Debouncer(delay: .milliseconds(250))
     private var pendingProfiles: [APIProfile]?
+
+    /// Base URLs the online slots have been saved with, most recent first, so a changed
+    /// endpoint can be found again. Shared by both slots: the same provider is often
+    /// moved between primary and backup.
+    @Published private(set) var endpointHistory: [String] {
+        didSet {
+            guard !isPreview else { return }
+            defaults.set(endpointHistory, forKey: "endpointHistory")
+        }
+    }
+    static let endpointHistoryLimit = 10
 
     @Published var panelWidth: CGFloat = Theme.panelMinWidth {
         didSet { defaults.set(Double(panelWidth), forKey: "panelWidth") }
@@ -345,6 +351,7 @@ final class SettingsStore: ObservableObject {
         shortcuts = Self.loadShortcuts(defaults: defaults)
         disabledShortcuts = Self.loadDisabledShortcuts(defaults: defaults)
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        endpointHistory = defaults.stringArray(forKey: "endpointHistory") ?? []
         if let storage = self.credentialStorage {
             let loaded = Self.loadProfiles(defaults: defaults, storage: storage)
             profiles = loaded.profiles
@@ -354,6 +361,11 @@ final class SettingsStore: ObservableObject {
             jevAPIKey = loaded.keys?[Self.jevKeyIndex] ?? ""
         } else {
             profiles = [APIProfile(), APIProfile(), APIProfile()]
+        }
+
+        // Endpoints configured before history existed are its first entries.
+        if defaults.object(forKey: "endpointHistory") == nil {
+            for profile in profiles.prefix(2).reversed() { recordEndpoint(profile.baseURL) }
         }
 
         localModelEnabled = Self.loadLocalModelEnabled(defaults: defaults, start: routeStart,
@@ -581,22 +593,10 @@ final class SettingsStore: ObservableObject {
             applyLoadedKeys(merged)
             keychainError = nil
             keychainErrorIsRetryable = false
-            flashKeychainSaved()
         } catch {
             keychainError = error.localizedDescription
             keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
             Log.keychain.error("keychain save failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    /// Shows the "saved" confirmation for a beat, then clears it.
-    private func flashKeychainSaved() {
-        keychainSaved = true
-        keychainSavedTask?.cancel()
-        keychainSavedTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.6))
-            guard !Task.isCancelled else { return }
-            self?.keychainSaved = false
         }
     }
 
@@ -656,10 +656,8 @@ final class SettingsStore: ObservableObject {
         }
 
         keychainSave.cancel()
-        keychainSavedTask?.cancel()
-        keychainSavedTask = nil
-        if let keys = pendingKeychainKeys {
-            saveKeychain(keys)
+        if let pendingKeychainKeys {
+            saveKeychain(pendingKeychainKeys)
         }
     }
 
@@ -668,6 +666,40 @@ final class SettingsStore: ObservableObject {
     /// preferences are already persisted when audio stops.
     func shutdownSound() {
         SoundPlayer.shared.destroy()
+    }
+
+    // MARK: - Editing
+
+    /// Saves a service page: the whole profile at once, the way it was tested. The
+    /// endpoint it replaces and the one it saves both go into the history.
+    func commitProfile(_ profile: APIProfile, at index: Int) {
+        guard profiles.indices.contains(index) else { return }
+        let previous = profiles[index]
+        profiles[index] = profile
+        guard index != Self.localProfileIndex else { return }
+        recordEndpoint(previous.baseURL)
+        recordEndpoint(profile.baseURL)
+    }
+
+    func clearEndpointHistory() {
+        endpointHistory = []
+    }
+
+    private func recordEndpoint(_ baseURL: String) {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let key = Self.endpointIdentity(trimmed)
+        var history = endpointHistory.filter { Self.endpointIdentity($0) != key }
+        history.insert(trimmed, at: 0)
+        endpointHistory = Array(history.prefix(Self.endpointHistoryLimit))
+    }
+
+    /// Two spellings of one endpoint ("api.x.com/v1", "https://api.x.com/v1/") are one
+    /// history entry.
+    static func endpointIdentity(_ baseURL: String) -> String {
+        var value = TranslationService.normalizedBaseURLString(baseURL).lowercased()
+        while value.hasSuffix("/") { value.removeLast() }
+        return value
     }
 
     // MARK: - Resolution

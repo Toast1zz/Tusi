@@ -205,7 +205,7 @@ final class TranslationEngine: ObservableObject {
     private let clipboard: TranslationClipboard
     private var preferences = Set<AnyCancellable>()
     private var restoringHistory = false
-    private var historyFileUntrusted = false
+    @Published private(set) var historyFileUntrusted = false
     @Published private var draftError: String?
     @Published private var historyError: String?
     var persistenceError: String? { historyError ?? draftError }
@@ -1349,6 +1349,18 @@ final class TranslationEngine: ObservableObject {
         historyUndoOutlivesExit = canUndoHistoryDeletion
         history = []
         saveHistory()
+    }
+
+    func retryLoadHistory() {
+        guard settings.saveHistoryEnabled else { return }
+        let inMemory = history
+        historyFileUntrusted = false
+        loadHistory()
+        if !inMemory.isEmpty {
+            let existing = Set(history.map(\.id))
+            history = Array((inMemory.filter { !existing.contains($0.id) } + history).prefix(Self.historyCapacity))
+            if !historyFileUntrusted { saveHistory() }
+        }
     }
 
     func deleteHistory(_ id: UUID) {

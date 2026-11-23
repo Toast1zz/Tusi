@@ -717,4 +717,48 @@ final class AuditRegressionTests: IsolatedPersistenceTestCase {
         settings.flushPendingSaves()
         XCTAssertEqual(credentials.writes, 0)
     }
+
+    func testHidingPanelClearsShortcutRecordingAndPendingConfirmation() {
+        let settings = isolatedSettings()
+        let state = PanelState()
+        let engine = TranslationEngine(settings: settings, storage: testStorage)
+        let controller = PanelController(
+            engine: engine, settings: settings, panelState: state,
+            updateChecker: UpdateChecker(preview: true), statusItem: nil
+        )
+        controller.show()
+        state.showSettings = true
+        state.showShortcuts = true
+        state.recordingShortcut = .copy
+        state.shortcutError = "conflict"
+        state.pendingBareShortcut = PanelState.PendingShortcut(
+            action: .copy,
+            combo: KeyCombo(keyCode: 0, modifiers: 0, display: "A")
+        )
+        controller.hide()
+        XCTAssertNil(state.recordingShortcut)
+        XCTAssertNil(state.shortcutError)
+        XCTAssertNil(state.pendingBareShortcut)
+    }
+
+    func testVersionTooltipUsesCapturedSnapshotAndFallsBackForLegacyRecords() {
+        let snapshot = TranslationEngine.ResultVersion(
+            text: "Hello", slot: 0, tier: .online,
+            languageMismatch: false, capped: false, afterFailover: false,
+            host: "openrouter.ai", model: "deepseek-chat"
+        )
+        XCTAssertEqual(
+            TranslatorView.versionTooltip(snapshot) { "changed-model · api.deepseek.com" },
+            "deepseek-chat · openrouter.ai"
+        )
+        let legacy = TranslationEngine.ResultVersion(
+            text: "Hello", slot: 0, tier: .online,
+            languageMismatch: false, capped: false, afterFailover: false,
+            host: "", model: ""
+        )
+        XCTAssertEqual(
+            TranslatorView.versionTooltip(legacy) { "fallback-model · api.deepseek.com" },
+            "fallback-model · api.deepseek.com"
+        )
+    }
 }

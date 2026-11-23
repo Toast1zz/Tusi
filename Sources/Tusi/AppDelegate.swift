@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 // Pressing the summon combo while recording a new one in Settings is the
                 // user typing a shortcut, not asking for the panel.
-                guard self?.panelState.recordingShortcut == nil else { return }
+                guard !(self?.panelController.isVisible == true && self?.panelState.recordingShortcut != nil) else { return }
                 self?.togglePanel()
             }
         }

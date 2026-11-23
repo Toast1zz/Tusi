@@ -95,4 +95,30 @@ final class TranslationRegressionTests: XCTestCase {
         XCTAssertEqual(SmartQuotes.apply(to: "    ~~~\n\"prose\""), "    ~~~\n“prose”")
         XCTAssertEqual(SmartQuotes.apply(to: "`orphan\n\"prose\"\n`"), "`orphan\n“prose”\n`")
     }
+
+    func testChineseQuotesAdjacentToLatinDigitsAndCodePreserveOrientation() {
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "在API\"设置\"中点击\"保存\""),
+            "在API\u{201C}设置\u{201D}中点击\u{201C}保存\u{201D}"
+        )
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "请将`foo`\"替换为\"新值"),
+            "请将`foo`\u{201C}替换为\u{201D}新值"
+        )
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "在API'设置'中点击'保存'"),
+            "在API\u{2018}设置\u{2019}中点击\u{2018}保存\u{2019}"
+        )
+        XCTAssertEqual(
+            SmartQuotes.apply(to: "点击\"Save\"按钮，然后\"确认\""),
+            "点击\u{201C}Save\u{201D}按钮，然后\u{201C}确认\u{201D}"
+        )
+        XCTAssertEqual(SmartQuotes.apply(to: "don't, teams', the '90s"), "don\u{2019}t, teams\u{2019}, the \u{2019}90s")
+    }
+
+    func testLeadingTripleBacktickInlineSpanDoesNotActAsFence() {
+        let input = "```a `` \"b\"``` He said \"hello\"\nShe said \"world\""
+        let expected = "```a `` \"b\"``` He said \u{201C}hello\u{201D}\nShe said \u{201C}world\u{201D}"
+        XCTAssertEqual(SmartQuotes.apply(to: input), expected)
+    }
 }

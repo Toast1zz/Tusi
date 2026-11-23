@@ -33,10 +33,18 @@ struct SettingsView: View {
 
     @State private var showKey = false
     @State private var showJevKey = false
-    /// An unsaved edit of the key being edited. nil means "show the stored key"; a draft
-    /// reaches the Keychain only through the Save button, so leaving the page restores it.
-    @State private var keyDraft: String?
+    /// The unsaved edit of the service page — every field on it, not just the key. nil
+    /// means "show what is stored"; the store changes only through Save, so leaving the
+    /// page restores everything.
+    @State private var draft: ProfileDraft?
     @State private var jevKeyDraft: String?
+    @State private var savedFlash = false
+    @State private var savedFlashTask: Task<Void, Never>?
+    @State private var awaitingKeychainSave = false
+    @State private var modelList: ModelListState = .idle
+    @State private var modelListTask: Task<Void, Never>?
+    @State private var endpointDropdown = DropdownAnchor()
+    @State private var modelDropdown = DropdownAnchor()
     @State private var testStates: [Int: TestState] = [:]
     @State private var testTasks: [Int: Task<Void, Never>] = [:]
     @State private var testGenerations: [Int: Int] = [:]
@@ -114,7 +122,7 @@ struct SettingsView: View {
     /// hide the API Key field, since local inference servers don't take one.
     private var isCurrentProfileLocal: Bool {
         settings.profiles.indices.contains(editingIndex)
-            && !settings.profiles[editingIndex].config.requiresAuth
+            && !editedProfile.config.requiresAuth
     }
 
     var body: some View {
@@ -173,10 +181,27 @@ struct SettingsView: View {
             NSApp.keyWindow?.makeFirstResponder(nil)
             focusedField = nil
             showKey = false
-            keyDraft = nil
+            draft = nil
             jevKeyDraft = nil
+            savedFlashTask?.cancel()
+            savedFlash = false
+            awaitingKeychainSave = false
+            modelListTask?.cancel()
+            modelList = .idle
             cancelTests()
             cancelJevTest()
+        }
+        .onChange(of: settings.keychainError) { oldError, newError in
+            if newError != nil {
+                savedFlashTask?.cancel()
+                savedFlash = false
+            } else if oldError != nil, awaitingKeychainSave {
+                awaitingKeychainSave = false
+                triggerSavedFlash()
+            }
+        }
+        .onChange(of: localModels.selectedID) { _, _ in
+            if isEditingLocalSlot { draft = nil }
         }
         .onChange(of: settings.jevAPIKey) { _, _ in
             cancelJevTest()
@@ -184,7 +209,11 @@ struct SettingsView: View {
         .onChange(of: jevKeyDraft) { _, _ in
             cancelJevTest()
         }
-        .onChange(of: keyDraft) { _, _ in
+        .onChange(of: modelListQuery) { _, _ in
+            modelListTask?.cancel()
+            modelList = .idle
+        }
+        .onChange(of: draft) { _, _ in
             cancelTests()
             testStates.removeAll()
         }
@@ -199,14 +228,21 @@ struct SettingsView: View {
         .onChange(of: editingIndex) { _, _ in
             showKey = false
             showJevKey = false
-            keyDraft = nil
+            draft = nil
             jevKeyDraft = nil
+            savedFlashTask?.cancel()
+            savedFlash = false
+            awaitingKeychainSave = false
+            modelListTask?.cancel()
+            modelList = .idle
             cancelTests()
             cancelJevTest()
         }
         // Leaving the page mid-recording would otherwise swallow the next keystroke
         // typed into the translator.
         .onDisappear {
+            savedFlashTask?.cancel()
+            modelListTask?.cancel()
             panelState.recordingShortcut = nil
             panelState.shortcutError = nil
             cancelTests()
@@ -287,7 +323,20 @@ struct SettingsView: View {
                 .settingsRow()
             }
             if let error = engine.persistenceError {
-                footnote(error, warning: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    footnote(error, warning: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if engine.historyFileUntrusted {
+                        Button("重试") { engine.retryLoadHistory() }
+                            .buttonStyle(.plain)
+                            .font(Theme.controlSemibold)
+                            .foregroundStyle(Theme.accent)
+                        Button("清空历史") { engine.clearHistory() }
+                            .buttonStyle(.plain)
+                            .font(Theme.controlSemibold)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             SettingsGroup(title: L("启动与更新")) {
                 toggleRow("登录时启动", isOn: $settings.launchAtLogin)
@@ -464,6 +513,36 @@ struct SettingsView: View {
                 .font(Theme.title)
             Spacer()
             serviceRoleAction
+            saveControl
+        }
+        .motion(.state, value: pageDirty)
+        .motion(.state, value: savedFlash)
+    }
+
+    /// One Save for the whole page. It appears only while the page differs from what is
+    /// stored; a brief check confirms the save took.
+    @ViewBuilder
+    private var saveControl: some View {
+        if pageDirty {
+            Button(action: savePage) {
+                Text("保存")
+                    .font(Theme.controlSemibold)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Theme.accent))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("s", modifiers: .command)
+            .help(L("保存") + " (⌘S)")
+            .transition(.opacity)
+        } else if savedFlash {
+            Image(systemName: "checkmark.circle.fill")
+                .font(Theme.control)
+                .foregroundStyle(.green)
+                .accessibilityLabel(L("已保存"))
+                .transition(.opacity)
         }
     }
 
@@ -485,22 +564,43 @@ struct SettingsView: View {
             if isEditingLocalSlot {
                 localModelPicker
             } else {
-            labeledField("接口地址", focused: focusedField == .baseURL) {
-                TextField(
-                    "接口地址", text: $settings.profiles[safeEditingIndex].baseURL,
-                    prompt: Self.placeholder("https://api.example.com/v1")
-                )
-                .textFieldStyle(.plain)
-                .font(Theme.bodyMonospaced)
-                .focused($focusedField, equals: .baseURL)
-                .accessibilityLabel("接口地址")
-            }
-            labeledField("模型", focused: focusedField == .model) {
-                TextField("模型", text: $settings.profiles[safeEditingIndex].model, prompt: Self.placeholder("model-name"))
+            labeledField("接口地址", focused: focusedField == .baseURL, dropdown: endpointDropdown) {
+                HStack(spacing: 6) {
+                    TextField(
+                        "接口地址", text: draftBinding(\.baseURL),
+                        prompt: Self.placeholder("https://api.example.com/v1")
+                    )
                     .textFieldStyle(.plain)
                     .font(Theme.bodyMonospaced)
-                    .focused($focusedField, equals: .model)
-                    .accessibilityLabel("模型")
+                    .focused($focusedField, equals: .baseURL)
+                    .onSubmit(savePage)
+                    .accessibilityLabel("接口地址")
+                    if !endpointHistoryChoices.isEmpty {
+                        dropdownButton(L("历史接口地址"), action: openEndpointHistory)
+                    }
+                }
+            }
+            labeledField("模型", focused: focusedField == .model, dropdown: modelDropdown) {
+                fetchModelsButton
+            } content: {
+                HStack(spacing: 6) {
+                    TextField("模型", text: draftBinding(\.model), prompt: Self.placeholder("model-name"))
+                        .textFieldStyle(.plain)
+                        .font(Theme.bodyMonospaced)
+                        .focused($focusedField, equals: .model)
+                        .onSubmit(savePage)
+                        .accessibilityLabel("模型")
+                    if case .loaded = modelList {
+                        dropdownButton(L("选择模型"), action: openModelList)
+                    }
+                }
+            }
+            if case .failed(let message) = modelList {
+                Text(String(format: L("无法读取模型列表：%@"), message))
+                    .font(Theme.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
             }
             // Local (loopback) servers take no key, so they get no key field.
@@ -512,9 +612,8 @@ struct SettingsView: View {
                         .help(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                         .accessibilityLabel(L("API Key 仅保存在本机钥匙串，只发送给你配置的 API 服务"))
                 } content: {
-                    secretField("API Key", text: serviceKeyBinding,
-                                prompt: Self.placeholder("sk-…"), revealed: $showKey, focus: .apiKey,
-                                dirty: serviceKeyDirty, onSave: saveServiceKey)
+                    secretField("API Key", text: draftBinding(\.apiKey),
+                                prompt: Self.placeholder("sk-…"), revealed: $showKey, focus: .apiKey)
                         .accessibilityLabel("API Key")
                 }
             }
@@ -523,47 +622,161 @@ struct SettingsView: View {
         }
     }
 
-    private var serviceKeyBinding: Binding<String> {
-        Binding(
-            get: { keyDraft ?? settings.profiles[safeEditingIndex].apiKey },
-            set: { keyDraft = $0 }
+    // MARK: - Endpoint history
+
+    private var endpointHistoryChoices: [String] {
+        let current = SettingsStore.endpointIdentity(editedProfile.baseURL)
+        return settings.endpointHistory.filter { SettingsStore.endpointIdentity($0) != current }
+    }
+
+    private func openEndpointHistory() {
+        endpointDropdown.open(
+            endpointHistoryChoices.map { url in
+                .init(title: url) { draftBinding(\.baseURL).wrappedValue = url }
+            },
+            footer: [.init(title: L("清除历史")) { settings.clearEndpointHistory() }]
         )
     }
 
-    private var serviceKeyDirty: Bool {
-        keyDraft.map { $0 != settings.profiles[safeEditingIndex].apiKey } ?? false
+    /// The chevron that marks a field as a dropdown; the list opens under the field.
+    private func dropdownButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(Theme.captionSemibold)
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
-    private func saveServiceKey() {
-        guard let draft = keyDraft else { return }
-        settings.profiles[safeEditingIndex].apiKey = draft
-        keyDraft = nil
+    // MARK: - Model list
+
+    enum ModelListState: Equatable {
+        case idle
+        case loading
+        case loaded([String])
+        case failed(String)
+    }
+
+    /// What a fetched list belongs to. Changing the endpoint or key drops the list, so the
+    /// dropdown never offers another service's models.
+    private struct ModelListQuery: Equatable {
+        let baseURL: String
+        let apiKey: String
+    }
+
+    private var modelListQuery: ModelListQuery? {
+        guard !isEditingLocalSlot, !isEditingJev else { return nil }
+        let profile = editedProfile
+        let baseURL = profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = profile.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseURL.isEmpty else { return nil }
+        return ModelListQuery(baseURL: baseURL, apiKey: apiKey)
+    }
+
+    private var fetchModelsButton: some View {
+        Button(action: fetchModels) {
+            HStack(spacing: 4) {
+                if modelList == .loading {
+                    ProgressView().controlSize(.mini)
+                }
+                Text("获取模型列表")
+            }
+            .font(Theme.captionMedium)
+            .modifier(AccentWhenEnabled())
+        }
+        .buttonStyle(.plain)
+        .disabled(modelListQuery == nil || modelList == .loading)
+    }
+
+    private func fetchModels() {
+        guard modelListQuery != nil else { return }
+        modelListTask?.cancel()
+        modelList = .loading
+        let config = editedProfile.config
+        modelListTask = Task { @MainActor in
+            do {
+                let models = try await TranslationService.listModels(config: config)
+                guard !Task.isCancelled else { return }
+                modelList = models.isEmpty ? .failed(L("没有可用的模型")) : .loaded(models)
+                if !models.isEmpty { openModelList() }
+            } catch {
+                guard !Task.isCancelled else { return }
+                modelList = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func openModelList() {
+        guard case .loaded(let models) = modelList else { return }
+        let current = editedProfile.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        modelDropdown.open(models.map { model in
+            .init(title: model, checked: model == current) { draftBinding(\.model).wrappedValue = model }
+        })
+    }
+
+    // MARK: - Draft
+
+    private var storedProfile: APIProfile { settings.profiles[safeEditingIndex] }
+
+    /// A field of the page: reads the draft laid over the store, writes only the draft.
+    private func draftBinding<Value: Equatable>(_ field: WritableKeyPath<APIProfile, Value>) -> Binding<Value> {
+        Binding(
+            get: { editedProfile[keyPath: field] },
+            set: { value in
+                var next = draft ?? ProfileDraft(storedProfile)
+                next.edited[keyPath: field] = value
+                draft = next
+            }
+        )
     }
 
     private var jevKeyBinding: Binding<String> {
         Binding(get: { jevKeyDraft ?? settings.jevAPIKey }, set: { jevKeyDraft = $0 })
     }
 
-    private var jevKeyDirty: Bool {
-        jevKeyDraft.map { $0 != settings.jevAPIKey } ?? false
+    private var pageDirty: Bool {
+        if isEditingJev { return jevKeyDraft.map { $0 != settings.jevAPIKey } ?? false }
+        return editedProfile != storedProfile
     }
 
-    private func saveJevKey() {
-        guard let draft = jevKeyDraft else { return }
-        settings.jevAPIKey = draft
-        jevKeyDraft = nil
+    private func savePage() {
+        guard pageDirty else { return }
+        let keyChanged = isEditingJev || editedProfile.apiKey != storedProfile.apiKey
+        if isEditingJev {
+            if let key = jevKeyDraft { settings.jevAPIKey = key }
+            jevKeyDraft = nil
+        } else {
+            settings.commitProfile(editedProfile, at: safeEditingIndex)
+            draft = nil
+        }
+        awaitingKeychainSave = keyChanged
+        if !keyChanged || settings.keychainError == nil {
+            triggerSavedFlash()
+        }
     }
 
-    /// A key field with a show/hide toggle, a Save button while the draft differs from
-    /// the stored key, and the brief saved-to-Keychain check.
+    private func triggerSavedFlash() {
+        savedFlash = true
+        savedFlashTask?.cancel()
+        savedFlashTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            savedFlash = false
+            awaitingKeychainSave = false
+        }
+    }
+
+    /// A key field with a show/hide toggle. Return saves the page, like the header's Save.
     private func secretField(
         _ title: String,
         text: Binding<String>,
         prompt: Text,
         revealed: Binding<Bool>,
-        focus: FocusedField,
-        dirty: Bool,
-        onSave: @escaping () -> Void
+        focus: FocusedField
     ) -> some View {
         HStack(spacing: 6) {
             Group {
@@ -576,20 +789,7 @@ struct SettingsView: View {
             .textFieldStyle(.plain)
             .font(Theme.bodyMonospaced)
             .focused($focusedField, equals: focus)
-            .onSubmit(onSave)
-
-            if dirty {
-                Button("保存", action: onSave)
-                    .buttonStyle(.plain)
-                    .font(Theme.controlSemibold)
-                    .foregroundStyle(Theme.accent)
-                    .transition(.opacity)
-            } else if settings.keychainSaved {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(.green)
-                    .transition(.opacity)
-            }
+            .onSubmit(savePage)
 
             Button {
                 revealed.wrappedValue.toggle()
@@ -602,9 +802,6 @@ struct SettingsView: View {
             .help(revealed.wrappedValue ? "隐藏" : "显示")
             .accessibilityLabel(revealed.wrappedValue ? "隐藏" : "显示")
         }
-        // `.state`, not `.micro`: this is a confirmation appearing, not hover feedback.
-        .motion(.state, value: settings.keychainSaved)
-        .motion(.state, value: dirty)
     }
 
     @ViewBuilder
@@ -1027,14 +1224,16 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if isEditingLocalSlot {
                         labeledField("接口地址", focused: focusedField == .baseURL) {
-                            TextField("接口地址", text: $settings.profiles[safeEditingIndex].baseURL, prompt: Self.placeholder("http://127.0.0.1:8080/v1"))
+                            TextField("接口地址", text: draftBinding(\.baseURL), prompt: Self.placeholder("http://127.0.0.1:8080/v1"))
                                 .textFieldStyle(.plain).font(Theme.bodyMonospaced)
                                 .focused($focusedField, equals: .baseURL)
+                                .onSubmit(savePage)
                         }
                         labeledField("模型", focused: focusedField == .model) {
-                            TextField("模型", text: $settings.profiles[safeEditingIndex].model, prompt: Self.placeholder("model-name"))
+                            TextField("模型", text: draftBinding(\.model), prompt: Self.placeholder("model-name"))
                                 .textFieldStyle(.plain).font(Theme.bodyMonospaced)
                                 .focused($focusedField, equals: .model)
+                                .onSubmit(savePage)
                         }
                     }
                     VStack(alignment: .leading, spacing: 4) {
@@ -1043,7 +1242,7 @@ struct SettingsView: View {
                                 .font(Theme.captionMedium)
                                 .foregroundStyle(.secondary)
                             Spacer(minLength: 8)
-                            Picker("输出协议", selection: $settings.profiles[safeEditingIndex].outputProtocolPreference) {
+                            Picker("输出协议", selection: draftBinding(\.outputProtocolPreference)) {
                                 Text("自动（推荐）").tag(TranslationProtocolPreference.automatic)
                                 Text("纯文本兼容").tag(TranslationProtocolPreference.plainText)
                             }
@@ -1063,10 +1262,11 @@ struct SettingsView: View {
                         "供应商优先顺序（可选）",
                         focused: focusedField == .providerOrder
                     ) {
-                        TextField("供应商优先顺序（可选）", text: $settings.profiles[safeEditingIndex].providerOrder, prompt: Self.placeholder("novita, together"))
+                        TextField("供应商优先顺序（可选）", text: draftBinding(\.providerOrder), prompt: Self.placeholder("novita, together"))
                             .textFieldStyle(.plain)
                             .font(Theme.bodyMonospaced)
                             .focused($focusedField, equals: .providerOrder)
+                            .onSubmit(savePage)
                             .accessibilityLabel("供应商优先顺序（可选）")
                     }
                     .help(L("仅 OpenRouter 支持，多个供应商名称用逗号分隔；这些供应商会被优先尝试，都不可用时仍会回退到其他供应商"))
@@ -1095,8 +1295,7 @@ struct SettingsView: View {
                     .help(L("Key 保存在本机钥匙串；选择智能文风时将待译文本发送给 Jev"))
             } content: {
                 secretField("Jev API Key", text: jevKeyBinding, prompt: Text(verbatim: ""),
-                            revealed: $showJevKey, focus: .jevAPIKey,
-                            dirty: jevKeyDirty, onSave: saveJevKey)
+                            revealed: $showJevKey, focus: .jevAPIKey)
             }
             keychainErrorRow
             HStack(spacing: 10) {
@@ -1164,6 +1363,7 @@ struct SettingsView: View {
     private func labeledField(
         _ label: String,
         focused: Bool = false,
+        dropdown: DropdownAnchor? = nil,
         @ViewBuilder trailing: () -> some View = { EmptyView() },
         @ViewBuilder content: () -> some View
     ) -> some View {
@@ -1189,6 +1389,7 @@ struct SettingsView: View {
                             lineWidth: focused ? 1.5 : 1
                         )
                 )
+                .background { if let dropdown { DropdownAnchorView(anchor: dropdown) } }
         }
     }
 
@@ -1265,12 +1466,10 @@ struct SettingsView: View {
         .motion(.layout, value: testState)
     }
 
-    /// The slot as the form shows it: the stored profile with the unsaved key draft laid
-    /// over it, so a new key can be tested before it replaces the old one.
+    /// The slot as the form shows it: the stored profile with the unsaved draft laid
+    /// over it, so a changed service can be tested before it replaces the old one.
     private var editedProfile: APIProfile {
-        var profile = settings.profiles[safeEditingIndex]
-        if let draft = keyDraft { profile.apiKey = draft }
-        return profile
+        draft?.resolved(over: storedProfile) ?? storedProfile
     }
 
     private var isEditedSlotAvailable: Bool {

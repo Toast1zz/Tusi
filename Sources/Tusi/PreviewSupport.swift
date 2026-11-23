@@ -40,6 +40,9 @@ extension AppDelegate {
                 APIProfile(baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-preview", model: "deepseek/deepseek-chat"),
                 APIProfile(baseURL: "http://127.0.0.1:11434/v1", apiKey: "", model: "qwen2.5:7b"),
             ]
+            // Saves through the page path so the endpoint history menu has entries.
+            settings.commitProfile(settings.profiles[0], at: 0)
+            settings.commitProfile(settings.profiles[1], at: 1)
             panelState.showSettings = true
             if preview == "update-available" {
                 panelState.settingsSection = .general

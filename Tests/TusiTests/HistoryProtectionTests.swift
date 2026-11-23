@@ -105,4 +105,39 @@ final class HistoryProtectionTests: XCTestCase {
         XCTAssertEqual(e.history.map(\.input), ["good"])
         XCTAssertNil(e.persistenceError)
     }
+
+    func testUntrustedHistoryCanRetryReadAndMergeInMemoryRecords() async throws {
+        let existing = TranslationEngine.Record(
+            id: UUID(), input: "old", output: "older", sourceLabel: "中",
+            source: .chinese, target: .english, tone: .standard, timestamp: Date(timeIntervalSince1970: 100)
+        )
+        let existingData = try JSONEncoder().encode([existing])
+        var failRead = true
+        var writtenData: Data?
+        let storage = TranslationStorage(
+            read: { url in
+                guard url.lastPathComponent == "history.json" else { return nil }
+                if failRead { throw CocoaError(.fileReadNoPermission) }
+                return existingData
+            },
+            write: { data, url in
+                if url.lastPathComponent == "history.json" { writtenData = data }
+            }
+        )
+        let e = TranslationEngine(settings: settings(), storage: storage, clipboard: .init(write: { _ in true }), stream: { _, _, _, _, _ in
+            AsyncThrowingStream { $0.yield("Hello"); $0.finish() }
+        })
+        XCTAssertTrue(e.historyFileUntrusted)
+        e.input = "你好"
+        e.translate()
+        try await settle { e.state == .done }
+        XCTAssertNil(writtenData)
+
+        failRead = false
+        e.retryLoadHistory()
+        XCTAssertFalse(e.historyFileUntrusted)
+        XCTAssertNil(e.persistenceError)
+        XCTAssertEqual(e.history.map(\.input), ["你好", "old"])
+        XCTAssertNotNil(writtenData)
+    }
 }

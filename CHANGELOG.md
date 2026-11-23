@@ -2,6 +2,24 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-11-23
+
+### Added
+
+- Service pages in Settings now include a Fetch Models action that queries `/models` (including public gateways without an API key) and lets you pick a model from a dropdown.
+- Base URL fields on online service pages remember up to 10 recent endpoints in a dropdown, with an option to clear the history.
+
+### Changed
+
+- Editing any field on a service page now stages a page-wide draft and saves together via the header Save button (`⌘S` or Return), with confirmation tied to Keychain persistence when an API key changed.
+
+### Fixed
+
+- Smart quotes keep their opening/closing orientation when Chinese quotation marks sit directly next to Latin letters, numbers, or inline code spans, and inline code spans starting with three or more backticks no longer disable quote conversion for the rest of the text.
+- Hiding the panel while recording a shortcut (or awaiting bare-key confirmation) cancels recording immediately so the global summon hotkey stays responsive.
+- Hovering a translation's provenance label now shows the model and host captured when that result was produced rather than live slot settings.
+- When the history file fails to load, Settings offers Retry and Clear History actions and the History view retains Clear History so recovery is possible without translating first.
+
 ## [1.20.2] - 2026-11-10
 
 ### Fixed

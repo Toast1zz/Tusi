@@ -611,7 +611,7 @@ struct TranslatorView: View {
                 ResultProvenance(
                     label: versionLabel(shown),
                     afterFailover: shown.afterFailover,
-                    detail: slotTooltip(shown.slot)
+                    detail: Self.versionTooltip(shown) { slotTooltip(shown.slot) }
                 )
                 .layoutPriority(-1)
             }
@@ -855,7 +855,7 @@ struct TranslatorView: View {
                 .trackBottomEdge($historyIsAtBottom)
             }
 
-            if !days.isEmpty || engine.canUndoHistoryDeletion {
+            if !days.isEmpty || engine.canUndoHistoryDeletion || engine.historyFileUntrusted {
                 historyFooter
                     .padding(.top, days.isEmpty ? 0 : Self.historyFooterGap)
             }
@@ -868,7 +868,7 @@ struct TranslatorView: View {
     /// Clear History, where the click just was, until history is left.
     private var historyFooter: some View {
         HStack(spacing: 12) {
-            if engine.history.isEmpty {
+            if engine.history.isEmpty && !engine.historyFileUntrusted {
                 Text(L("历史已清空"))
                     .foregroundStyle(.tertiary)
             }
@@ -879,7 +879,7 @@ struct TranslatorView: View {
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
             }
-            if !engine.history.isEmpty {
+            if !engine.history.isEmpty || engine.historyFileUntrusted {
                 // Nothing is left to browse, so clearing goes straight back to the
                 // translator; its undo follows there (see `clearedHistoryNotice`).
                 Button(L("清空历史")) {
@@ -967,6 +967,15 @@ struct TranslatorView: View {
     /// the result — otherwise the provenance label and the notices start 5pt to the left
     /// of the two blocks of text they are talking about.
     private static let resultNoticeInset: CGFloat = 5
+
+    /// Names the provider behind a finished result from its captured snapshot, falling back
+    /// to the current slot config only for legacy records that predate snapshot metadata.
+    static func versionTooltip(_ version: TranslationEngine.ResultVersion, fallback: () -> String) -> String {
+        let model = version.model.trimmingCharacters(in: .whitespaces)
+        let host = version.host.trimmingCharacters(in: .whitespaces)
+        let snapshot = [model, host].filter { !$0.isEmpty }.joined(separator: " · ")
+        return snapshot.isEmpty ? fallback() : snapshot
+    }
 
     /// Names the slot a finished result came from. Host and model, not base URL: the
     /// label should say which machine answered, not reprint a configuration line.

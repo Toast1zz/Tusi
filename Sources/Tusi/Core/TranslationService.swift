@@ -83,6 +83,7 @@ enum TranslationService {
     }
 
     private static let maxSSELineBytes = 256 * 1024
+    private static let maxModelListBytes = 2 * 1024 * 1024
     private static let redirectDelegate = RedirectPolicyDelegate()
     private static let productionSession = makeSecureSession(
         timeoutIntervalForRequest: 60,
@@ -601,6 +602,74 @@ enum TranslationService {
             latencyMilliseconds: Int(Date().timeIntervalSince(start) * 1000),
             outputProtocol: await protocolRegistry.resolve(for: config)
         )
+    }
+
+    /// The OpenAI-compatible model list next to the chat endpoint (`…/v1/models`), under
+    /// the same URL and HTTPS rules. A missing key is not an error here: some gateways
+    /// list their models publicly, and the ones that don't answer 401.
+    static func modelsEndpoint(for config: APIConfig) throws -> URL {
+        let chat = try endpoint(for: config)
+        guard var components = URLComponents(url: chat, resolvingAgainstBaseURL: false) else {
+            throw TranslationError.invalidURL
+        }
+        components.path = String(components.path.dropLast("/chat/completions".count)) + "/models"
+        guard let url = components.url else { throw TranslationError.invalidURL }
+        return url
+    }
+
+    static func listModels(config: APIConfig) async throws -> [String] {
+        var request = URLRequest(url: try modelsEndpoint(for: config))
+        request.timeoutInterval = 10
+        let apiKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if config.requiresAuth, !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let status = (response as? HTTPURLResponse)?.statusCode else {
+            throw TranslationError.invalidResponse
+        }
+        let ok = (200..<300).contains(status)
+        let limit = ok ? Self.maxModelListBytes : 8192
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > limit {
+                if ok { throw TranslationError.invalidResponse }
+                break
+            }
+        }
+        guard ok else {
+            throw TranslationError.http(status, parseErrorMessage(String(decoding: data, as: UTF8.self)))
+        }
+        return try parseModelList(data)
+    }
+
+    /// OpenAI's `{"data":[{"id":…}]}` first, then the shapes gateways drift into: a bare
+    /// array, a `models` key, entries named by `name` or given as plain strings. One
+    /// malformed entry drops that entry, not the list.
+    static func parseModelList(_ data: Data) throws -> [String] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            throw TranslationError.invalidResponse
+        }
+        let entries: [Any]
+        if let array = json as? [Any] {
+            entries = array
+        } else if let object = json as? [String: Any],
+                  let array = (object["data"] ?? object["models"]) as? [Any] {
+            entries = array
+        } else {
+            throw TranslationError.invalidResponse
+        }
+        var seen = Set<String>()
+        return entries
+            .compactMap { entry -> String? in
+                if let id = entry as? String { return id }
+                guard let object = entry as? [String: Any] else { return nil }
+                return (object["id"] ?? object["name"] ?? object["model"]) as? String
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     private static func parseErrorMessage(_ body: String) -> String {
