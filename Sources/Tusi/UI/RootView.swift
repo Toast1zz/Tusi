@@ -18,7 +18,7 @@ struct ShortcutsHeightKey: PreferenceKey {
     }
 }
 
-/// Which of the three pages is on screen. A single value, rather than the two booleans
+/// Which of the four pages is on screen. A single value, rather than the booleans
 /// it is derived from, so one `.motion(.page, value:)` drives the whole push — the
 /// slide, the panel height, and every fade inside both pages — on one timeline.
 enum Page: Hashable {
@@ -103,7 +103,11 @@ struct RootView: View {
             if !showing { engine.historyClosed() }
         }
         .onChange(of: panelState.showSettings) { _, showing in
-            if showing { engine.discardHistoryUndo() }
+            if showing {
+                engine.discardHistoryUndo()
+            } else {
+                engine.retranslateIfConfigurationChanged()
+            }
         }
         // No background or corner radius here: PanelContainerView draws them from the
         // window's bounds.

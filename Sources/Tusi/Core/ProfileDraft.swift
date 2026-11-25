@@ -7,12 +7,18 @@ import Foundation
 /// keeps following the store (the local model picker, a Keychain read that lands late)
 /// instead of the draft writing a stale copy back over it on save.
 struct ProfileDraft: Equatable {
-    let base: APIProfile
+    private(set) var base: APIProfile
     var edited: APIProfile
 
     init(_ profile: APIProfile) {
         base = profile
         edited = profile
+    }
+
+    /// Reconciles an asynchronous store selection change without wiping other unsaved fields.
+    mutating func acceptStoreModel(_ model: String) {
+        base.model = model
+        edited.model = model
     }
 
     /// `stored` with only the fields the user changed laid over it.

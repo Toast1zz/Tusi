@@ -233,9 +233,9 @@ final class UpdateChecker: ObservableObject {
     /// after "+" is dropped from both sides per semver: "1.6.0+build.5" equals
     /// "1.6.0", never "newer".
     private static func splitVersion(_ version: String) -> (core: String, prerelease: String) {
-        let trimmed = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        guard let dash = trimmed.firstIndex(of: "-") else { return (stripBuildMetadata(trimmed), "") }
-        return (stripBuildMetadata(String(trimmed[..<dash])), stripBuildMetadata(String(trimmed[dash...].dropFirst())))
+        let withoutBuild = stripBuildMetadata(version.trimmingCharacters(in: CharacterSet(charactersIn: "vV ")))
+        guard let dash = withoutBuild.firstIndex(of: "-") else { return (withoutBuild, "") }
+        return (String(withoutBuild[..<dash]), String(withoutBuild[dash...].dropFirst()))
     }
 
     private static func stripBuildMetadata(_ component: String) -> String {

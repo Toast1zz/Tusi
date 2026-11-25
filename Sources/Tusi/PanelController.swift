@@ -258,6 +258,10 @@ final class PanelController: NSObject, NSWindowDelegate {
             }
         }
 
+        if settings.saveHistoryEnabled, settings.historyRetention != .never {
+            engine.pruneExpiredHistory()
+        }
+
         if !hasShownOnce {
             hasShownOnce = true
             if !settings.isConfigured {

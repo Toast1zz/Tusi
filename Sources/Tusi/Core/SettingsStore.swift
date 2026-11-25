@@ -125,6 +125,11 @@ final class SettingsStore: ObservableObject {
     /// second time returns the same corrupt bytes, and the only way out is re-entering
     /// the key. Drives whether Settings offers a retry.
     @Published private(set) var keychainErrorIsRetryable = false
+    /// Monotonic save/failure counters so the UI can distinguish a fresh result even
+    /// when a retry reproduces an identical error message or succeeds immediately.
+    @Published private(set) var keychainSaveRevision: UInt = 0
+    @Published private(set) var keychainFailureRevision: UInt = 0
+    var hasCredentialStorage: Bool { credentialStorage != nil }
 
     private let keychainSave = Debouncer(delay: .milliseconds(250))
     private var pendingKeychainKeys: [Int: String]?
@@ -200,8 +205,15 @@ final class SettingsStore: ObservableObject {
     }
     @Published var jevAPIKey: String {
         didSet {
-            guard jevAPIKey != oldValue, credentialStorage != nil, !applyingLoadedKeys,
-                  loadedKeys?[Self.jevKeyIndex] != jevAPIKey else { return }
+            guard jevAPIKey != oldValue, credentialStorage != nil, !applyingLoadedKeys else { return }
+            if let loadedKeys, (loadedKeys[Self.jevKeyIndex] ?? "") == jevAPIKey {
+                pendingKeychainKeys?.removeValue(forKey: Self.jevKeyIndex)
+                if pendingKeychainKeys?.isEmpty == true {
+                    pendingKeychainKeys = nil
+                }
+                scheduleKeychainSave()
+                return
+            }
             if pendingKeychainKeys == nil { pendingKeychainKeys = [:] }
             pendingKeychainKeys?[Self.jevKeyIndex] = jevAPIKey
             scheduleKeychainSave()
@@ -538,8 +550,15 @@ final class SettingsStore: ObservableObject {
             if pendingKeychainKeys == nil { pendingKeychainKeys = [:] }
             for (offset, profile) in profiles.enumerated() {
                 if !previous.indices.contains(offset) || previous[offset].apiKey != profile.apiKey {
-                    pendingKeychainKeys?[offset] = profile.apiKey
+                    if let loadedKeys, (loadedKeys[offset] ?? "") == profile.apiKey {
+                        pendingKeychainKeys?.removeValue(forKey: offset)
+                    } else {
+                        pendingKeychainKeys?[offset] = profile.apiKey
+                    }
                 }
+            }
+            if pendingKeychainKeys?.isEmpty == true {
+                pendingKeychainKeys = nil
             }
             scheduleKeychainSave()
         }
@@ -593,9 +612,11 @@ final class SettingsStore: ObservableObject {
             applyLoadedKeys(merged)
             keychainError = nil
             keychainErrorIsRetryable = false
+            keychainSaveRevision &+= 1
         } catch {
             keychainError = error.localizedDescription
             keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
+            keychainFailureRevision &+= 1
             Log.keychain.error("keychain save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -621,6 +642,7 @@ final class SettingsStore: ObservableObject {
         } catch {
             keychainError = error.localizedDescription
             keychainErrorIsRetryable = Self.isRetryableKeychainFailure(error)
+            keychainFailureRevision &+= 1
             Log.keychain.error("keychain reload failed: \(error.localizedDescription, privacy: .public)")
             return
         }
@@ -670,12 +692,18 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Editing
 
+    func commitJevAPIKey(_ key: String) {
+        jevAPIKey = key
+        flushPendingSaves()
+    }
+
     /// Saves a service page: the whole profile at once, the way it was tested. The
     /// endpoint it replaces and the one it saves both go into the history.
     func commitProfile(_ profile: APIProfile, at index: Int) {
         guard profiles.indices.contains(index) else { return }
         let previous = profiles[index]
         profiles[index] = profile
+        flushPendingSaves()
         guard index != Self.localProfileIndex else { return }
         recordEndpoint(previous.baseURL)
         recordEndpoint(profile.baseURL)
@@ -698,6 +726,18 @@ final class SettingsStore: ObservableObject {
     /// history entry.
     static func endpointIdentity(_ baseURL: String) -> String {
         var value = TranslationService.normalizedBaseURLString(baseURL).lowercased()
+        if var components = URLComponents(string: value) {
+            components.scheme = components.scheme?.lowercased()
+            components.host = components.host?.lowercased()
+            let scheme = components.scheme
+            if (scheme == "https" && components.port == 443) || (scheme == "http" && components.port == 80) {
+                components.port = nil
+            }
+            while components.path.hasSuffix("/") { components.path.removeLast() }
+            if let normalized = components.string {
+                value = normalized
+            }
+        }
         while value.hasSuffix("/") { value.removeLast() }
         return value
     }

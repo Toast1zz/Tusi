@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 private struct ResultHeightKey: PreferenceKey {
@@ -282,8 +283,13 @@ struct TranslatorView: View {
             inputFocused = true
             guard selectAll else { return }
             Task { @MainActor in
-                await Task.yield()
-                (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectAll(nil)
+                for _ in 0..<3 {
+                    await Task.yield()
+                    if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+                        textView.selectAll(nil)
+                        break
+                    }
+                }
             }
         }
         // The picker is a transient choice row; a page change (history/settings) is a
@@ -574,9 +580,11 @@ struct TranslatorView: View {
                 }
                 if engine.outputLanguageMismatch {
                     notice(L("结果语言与目标不符"), systemImage: "exclamationmark.triangle")
-                } else if engine.interrupted {
+                }
+                if engine.interrupted {
                     notice(L("已停止"), systemImage: "stop.circle")
-                } else if engine.outputCapped {
+                }
+                if engine.outputCapped {
                     notice(L("结果过长，已截断"), systemImage: "scissors")
                 } else if engine.restoredFromTruncatedHistory {
                     notice(L("历史仅保留部分内容"), systemImage: "scissors")
@@ -1149,8 +1157,7 @@ private struct HistoryRecordRow: View {
 }
 
 private extension View {
-    /// Keeps a "user is at the bottom of the scroll view" flag current. macOS 14 has no
-    /// ScrollGeometry, so there the flag stays at its initial value.
+    /// Keeps a "user is at the bottom of the scroll view" flag current across macOS 14+.
     @ViewBuilder
     func trackBottomEdge(_ isAtBottom: Binding<Bool>) -> some View {
         if #available(macOS 15.0, *) {
@@ -1161,7 +1168,96 @@ private extension View {
                 isAtBottom.wrappedValue = distanceToBottom < 4
             }
         } else {
-            self
+            background(LegacyScrollBottomObserver(isAtBottom: isAtBottom))
         }
+    }
+}
+
+@MainActor
+private struct LegacyScrollBottomObserver: NSViewRepresentable {
+    let isAtBottom: Binding<Bool>
+
+    @MainActor
+    final class Coordinator {
+        var cancellables = Set<AnyCancellable>()
+        weak var observedClipView: NSClipView?
+        let isAtBottom: Binding<Bool>
+
+        init(isAtBottom: Binding<Bool>) {
+            self.isAtBottom = isAtBottom
+        }
+
+        func attach(from probe: NSView) {
+            Task { @MainActor [weak self, weak probe] in
+                guard let self, let probe,
+                      let scrollView = self.enclosingScrollView(of: probe) else { return }
+                let clipView = scrollView.contentView
+                if self.observedClipView !== clipView {
+                    self.observedClipView = clipView
+                    self.cancellables.removeAll()
+                    clipView.postsBoundsChangedNotifications = true
+                    clipView.postsFrameChangedNotifications = true
+                    NotificationCenter.default.publisher(for: NSView.boundsDidChangeNotification, object: clipView)
+                        .merge(with: NotificationCenter.default.publisher(for: NSView.frameDidChangeNotification, object: clipView))
+                        .sink { [weak self, weak scrollView] _ in
+                            Task { @MainActor [weak self, weak scrollView] in
+                                guard let self, let scrollView else { return }
+                                self.update(scrollView: scrollView)
+                            }
+                        }
+                        .store(in: &self.cancellables)
+                    if let docView = scrollView.documentView {
+                        docView.postsFrameChangedNotifications = true
+                        NotificationCenter.default.publisher(for: NSView.frameDidChangeNotification, object: docView)
+                            .sink { [weak self, weak scrollView] _ in
+                                Task { @MainActor [weak self, weak scrollView] in
+                                    guard let self, let scrollView else { return }
+                                    self.update(scrollView: scrollView)
+                                }
+                            }
+                            .store(in: &self.cancellables)
+                    }
+                }
+                self.update(scrollView: scrollView)
+            }
+        }
+
+        private func enclosingScrollView(of view: NSView) -> NSScrollView? {
+            var current: NSView? = view
+            while let node = current {
+                if let scrollView = node as? NSScrollView { return scrollView }
+                current = node.superview
+            }
+            return nil
+        }
+
+        private func update(scrollView: NSScrollView) {
+            guard let docView = scrollView.documentView else { return }
+            let clipBounds = scrollView.contentView.bounds
+            let distanceToBottom: CGFloat
+            if docView.isFlipped {
+                distanceToBottom = docView.bounds.height - clipBounds.maxY
+            } else {
+                distanceToBottom = clipBounds.minY
+            }
+            let atBottom = max(0, distanceToBottom) < 4
+            if isAtBottom.wrappedValue != atBottom {
+                isAtBottom.wrappedValue = atBottom
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isAtBottom: isAtBottom)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.attach(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.attach(from: nsView)
     }
 }

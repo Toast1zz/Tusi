@@ -15,7 +15,7 @@ final class ModelArgumentRegressionTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = dir.appendingPathComponent("test.gguf")
-        try Data().write(to: model)
+        try Data("GGUF".utf8).write(to: model)
         let plist = dir.appendingPathComponent("service.plist")
         let config: [String: Any] = ["Label": "com.tusi.llamaserver", "ProgramArguments": ["/fake/llama-server", "--host", "127.0.0.1", "--port", "8080", "--model", model.path]]
         try PropertyListSerialization.data(fromPropertyList: config, format: .xml, options: 0).write(to: plist)

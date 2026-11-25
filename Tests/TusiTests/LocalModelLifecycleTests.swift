@@ -46,7 +46,7 @@ final class LocalModelLifecycleTests: IsolatedPersistenceTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         addTeardownBlock { try FileManager.default.removeItem(at: directory) }
-        for name in ["A.gguf", "B.gguf"] { try Data().write(to: directory.appendingPathComponent(name)) }
+        for name in ["A.gguf", "B.gguf"] { try Data("GGUF".utf8).write(to: directory.appendingPathComponent(name)) }
         let plist = directory.appendingPathComponent("service.plist")
         let config: [String: Any] = ["Label": "com.tusi.llamaserver", "KeepAlive": true, "RunAtLoad": true,
             "ProgramArguments": ["/bin/llama-server", "--host", "127.0.0.1", "--port", "8080",

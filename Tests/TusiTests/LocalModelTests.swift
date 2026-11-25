@@ -44,13 +44,15 @@ final class LocalModelTests: XCTestCase {
         XCTAssertThrowsError(try LocalModelService.arguments(for: model, original: ["llama-server", "-m", "old"]))
     }
 
-    func testDiscoveryExcludesProjectorsAndDirectories() throws {
+    func testDiscoveryExcludesProjectorsDirectoriesAndInvalidGGUFFiles() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         for name in ["Hy-MT2.gguf", "MiLMMT.gguf", "mmproj-F16.gguf", "notes.txt"] {
-            try Data().write(to: directory.appendingPathComponent(name))
+            try Data("GGUF".utf8).write(to: directory.appendingPathComponent(name))
         }
+        try Data().write(to: directory.appendingPathComponent("empty.gguf"))
+        try Data("HTML".utf8).write(to: directory.appendingPathComponent("corrupt.gguf"))
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("folder.gguf"), withIntermediateDirectories: true)
         XCTAssertEqual(try LocalTranslationModel.discover(in: directory).map(\.id), ["Hy-MT2.gguf", "MiLMMT.gguf"])
     }

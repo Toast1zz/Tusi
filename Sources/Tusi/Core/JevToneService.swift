@@ -23,6 +23,17 @@ enum JevToneService {
         timeoutIntervalForResource: 15
     )
 
+    #if DEBUG
+    nonisolated(unsafe) static var sessionOverride: URLSession?
+    #endif
+
+    private static var defaultSession: URLSession {
+        #if DEBUG
+        if let override = sessionOverride { return override }
+        #endif
+        return productionSession
+    }
+
     private struct Request: Encodable {
         let model = "jev-latest"
         let state: String
@@ -48,13 +59,13 @@ enum JevToneService {
         let probabilities: [String: Double]
     }
 
-    static func testConnection(key: String, session: URLSession = productionSession) async throws -> Int {
+    static func testConnection(key: String, session: URLSession = defaultSession) async throws -> Int {
         let start = ProcessInfo.processInfo.systemUptime
         _ = try await evaluate(text: "Please review the attached document.", key: key, session: session)
         return Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)
     }
 
-    static func classify(text: String, key: String, session: URLSession = productionSession) async throws -> Tone {
+    static func classify(text: String, key: String, session: URLSession = defaultSession) async throws -> Tone {
         let answer = try await evaluate(text: text, key: key, session: session)
         guard let tone = Tone(rawValue: answer.choice), tone != .automatic,
               let probability = answer.probabilities[answer.choice], probability >= 0.7,

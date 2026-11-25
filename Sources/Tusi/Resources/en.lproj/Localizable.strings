@@ -46,7 +46,6 @@
 "自动检查更新" = "Check for updates automatically";
 "选择目标语言" = "Choose target language";
 "互换" = "Swap";
-"本地模型" = "Local";
 "独立 slot，手动触发翻译时才会用到" = "A standalone slot — only used when you trigger it manually";
 "用本地模型翻译这次" = "Translate this with the local model";
 

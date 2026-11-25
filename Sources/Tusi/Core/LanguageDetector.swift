@@ -190,8 +190,16 @@ enum LanguageDetector {
         case .han:
             return han == 0 && (kana + hangul > 0 || latin >= 3)
         case .japanese:
-            // Kanji-only Japanese is legitimate, so han > 0 is never a mismatch here;
-            // only an all-Latin or Hangul result is.
+            // Short Kanji-only phrases (e.g. addresses/nouns) are valid Japanese, whereas a
+            // clause-length Chinese output with zero Kana indicates the model replied in Chinese.
+            if kana == 0, han >= 16 {
+                recognizer.reset()
+                recognizer.processString(sample)
+                if let dominant = recognizer.dominantLanguage,
+                   dominant == .simplifiedChinese || dominant == .traditionalChinese {
+                    return true
+                }
+            }
             return kana == 0 && han == 0 && (hangul > 0 || latin >= 3)
         case .hangul:
             return hangul == 0 && (han >= 4 || latin >= 3)

@@ -191,17 +191,19 @@ struct SettingsView: View {
             cancelTests()
             cancelJevTest()
         }
-        .onChange(of: settings.keychainError) { oldError, newError in
-            if newError != nil {
-                savedFlashTask?.cancel()
-                savedFlash = false
-            } else if oldError != nil, awaitingKeychainSave {
-                awaitingKeychainSave = false
-                triggerSavedFlash()
-            }
+        .onChange(of: settings.keychainSaveRevision) { _, _ in
+            guard awaitingKeychainSave else { return }
+            awaitingKeychainSave = false
+            triggerSavedFlash()
         }
-        .onChange(of: localModels.selectedID) { _, _ in
-            if isEditingLocalSlot { draft = nil }
+        .onChange(of: settings.keychainFailureRevision) { _, _ in
+            savedFlashTask?.cancel()
+            savedFlash = false
+        }
+        .onChange(of: localModels.selectedID) { _, newID in
+            guard isEditingLocalSlot, !newID.isEmpty, var current = draft else { return }
+            current.acceptStoreModel(newID)
+            draft = current.edited == storedProfile ? nil : current
         }
         .onChange(of: settings.jevAPIKey) { _, _ in
             cancelJevTest()
@@ -747,15 +749,19 @@ struct SettingsView: View {
         guard pageDirty else { return }
         let keyChanged = isEditingJev || editedProfile.apiKey != storedProfile.apiKey
         if isEditingJev {
-            if let key = jevKeyDraft { settings.jevAPIKey = key }
+            if let key = jevKeyDraft { settings.commitJevAPIKey(key) }
             jevKeyDraft = nil
         } else {
             settings.commitProfile(editedProfile, at: safeEditingIndex)
             draft = nil
         }
-        awaitingKeychainSave = keyChanged
-        if !keyChanged || settings.keychainError == nil {
+        if !keyChanged || !settings.hasCredentialStorage || settings.keychainError == nil {
+            awaitingKeychainSave = false
             triggerSavedFlash()
+        } else {
+            awaitingKeychainSave = true
+            savedFlashTask?.cancel()
+            savedFlash = false
         }
     }
 
@@ -852,6 +858,7 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .help(settings.commandLabel(L("返回"), action: .close))
+        .accessibilityLabel(L("返回"))
     }
 
     /// Label left, switch right, as one native control.
@@ -905,6 +912,7 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .help("刷新模型列表")
+                .accessibilityLabel(L("刷新模型列表"))
                 .disabled(localModels.isSwitching)
             }
             Picker("本地模型", selection: Binding(
@@ -1110,6 +1118,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .accessibilityLabel(L("自动检查更新"))
             }
 
             if case .available(let version, let url) = updateChecker.state {

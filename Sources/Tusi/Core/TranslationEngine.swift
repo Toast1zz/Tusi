@@ -312,13 +312,22 @@ final class TranslationEngine: ObservableObject {
         self.draftPersistenceEnabled = draftPersistenceEnabled ?? !settings.isPreview
         loadHistory()
         loadDraft()
-        Publishers.CombineLatest(settings.$tone, settings.$extraInstruction)
-            .dropFirst().receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in
-                guard let self, !self.restoringHistory, let request = self.request,
-                      request.selectedTone != self.settings.tone || request.extra != self.settings.extraInstruction else { return }
-                self.translate()
-            }.store(in: &preferences)
+        settings.$tone
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, !self.restoringHistory else { return }
+                if let request = self.request, request.selectedTone != self.settings.tone {
+                    self.translate()
+                } else if self.state == .done, let restoredTone = self.restoredRecordTone, restoredTone != self.settings.tone {
+                    self.translate()
+                }
+            }
+            .store(in: &preferences)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.pruneExpiredHistory() }
+            .store(in: &preferences)
         settings.$saveHistoryEnabled.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.historyPreferenceChanged() }.store(in: &preferences)
         settings.$historyRetention.dropFirst().receive(on: RunLoop.main)
@@ -474,6 +483,7 @@ final class TranslationEngine: ObservableObject {
         versions.removeAll()
         shownVersion = 0
         request = nil
+        restoredRecordTone = nil
         resolvedTone = nil
         toneDecisionNote = nil
         currentStageIndex = 0
@@ -509,6 +519,7 @@ final class TranslationEngine: ObservableObject {
     }
 
     private var request: RequestContext?
+    private var restoredRecordTone: Tone?
     /// Which stage of `request.route` produced what is on screen. Escalation asks for
     /// the next stage above this one; failover already happened inside it.
     private var currentStageIndex = 0
@@ -554,6 +565,10 @@ final class TranslationEngine: ObservableObject {
     /// nothing, and there is no 300ms window every ordinary ⏎ has to wait out.
     func submit() {
         if let request, request.selectedTone != settings.tone || request.extra != settings.extraInstruction {
+            translate()
+            return
+        }
+        if state == .done, let restoredRecordTone, restoredRecordTone != settings.tone {
             translate()
             return
         }
@@ -1138,7 +1153,7 @@ final class TranslationEngine: ObservableObject {
         if escalating {
             escalating = false
             pending = OutputBuffer()
-            applyShownVersion(playingSound: false)
+            applyShownVersion(playingSound: false, autoCopying: false)
             state = .done
             return
         }
@@ -1258,7 +1273,7 @@ final class TranslationEngine: ObservableObject {
 
     /// Publishes `versions[shownVersion]` as the visible result and, when auto-copy is
     /// on and the result is clean, onto the pasteboard.
-    private func applyShownVersion(playingSound: Bool) {
+    private func applyShownVersion(playingSound: Bool, autoCopying: Bool = true) {
         guard versions.indices.contains(shownVersion) else { return }
         let version = versions[shownVersion]
         // Publish exactly once. The view deliberately keeps showing the skeleton until
@@ -1270,7 +1285,7 @@ final class TranslationEngine: ObservableObject {
         // A capped or wrong-language result is not a clean completion: silently putting
         // it on the pasteboard is the actual harm the flag exists to prevent.
         let clean = !version.capped && !version.languageMismatch
-        if clean, settings.autoCopy, !output.isEmpty {
+        if clean, autoCopying, settings.autoCopy, !output.isEmpty {
             if copyToPasteboard() {
                 flashCopied(auto: true)
             } else {
@@ -1317,6 +1332,13 @@ final class TranslationEngine: ObservableObject {
         saveHistory()
     }
 
+    func retranslateIfConfigurationChanged() {
+        guard !restoringHistory, let request else { return }
+        if request.selectedTone != settings.tone || request.extra != settings.extraInstruction {
+            translate()
+        }
+    }
+
     /// Restores a history record into the input/output area. The user is going back
     /// to an earlier point and should start a fresh conversation turn.
     func restoreHistory(_ record: Record) {
@@ -1328,7 +1350,7 @@ final class TranslationEngine: ObservableObject {
         sourceLabel = record.sourceLabel
         source = record.source
         target = record.target
-        settings.tone = record.tone
+        restoredRecordTone = record.tone
         versions = record.versions
         shownVersion = versions.firstIndex { $0.text == record.output } ?? max(0, versions.count - 1)
         interrupted = false
@@ -1358,7 +1380,9 @@ final class TranslationEngine: ObservableObject {
         loadHistory()
         if !inMemory.isEmpty {
             let existing = Set(history.map(\.id))
-            history = Array((inMemory.filter { !existing.contains($0.id) } + history).prefix(Self.historyCapacity))
+            let combined = (inMemory.filter { !existing.contains($0.id) } + history)
+                .sorted { $0.timestamp > $1.timestamp }
+            history = Array(combined.prefix(Self.historyCapacity))
             if !historyFileUntrusted { saveHistory() }
         }
     }

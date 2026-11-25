@@ -3,13 +3,14 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     // Not private: PreviewSupport.swift's debug scenarios drive these directly.
     var panelController: PanelController!
     var cancellables = Set<AnyCancellable>()
     private var hotkey: HotkeyManager?
     private var sessionObserver: NSObjectProtocol?
+    private var rollbackSummonCombo: KeyCombo?
 
     let settings = SettingsStore()
     let panelState = PanelState()
@@ -88,7 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             // Finish the property write before a rejected registration rolls it back.
             .receive(on: RunLoop.main)
-            .sink { [weak self] combo in self?.registerSummonHotkey(combo) }
+            .sink { [weak self] combo in
+                guard let self else { return }
+                if let rollback = self.rollbackSummonCombo, combo == rollback {
+                    self.rollbackSummonCombo = nil
+                    return
+                }
+                self.rollbackSummonCombo = nil
+                self.registerSummonHotkey(combo)
+            }
             .store(in: &cancellables)
 
         // The status menu is rebuilt on every right-click, so a found update surfaces
@@ -175,9 +184,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: L("退出 Tusi"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
+        menu.delegate = self
         statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        statusItem.menu = nil
+        if let button = statusItem.button {
+            button.performClick(nil)
+        } else {
+            statusItem.menu = nil
+        }
+    }
+
+    nonisolated func menuDidClose(_ menu: NSMenu) {
+        let closedID = ObjectIdentifier(menu)
+        Task { @MainActor [weak self] in
+            if let current = self?.statusItem.menu, ObjectIdentifier(current) == closedID {
+                self?.statusItem.menu = nil
+            }
+        }
     }
 
     @objc private func openPanel() {
@@ -213,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !ok, let previousCombo, settings.shortcut(.summon) != previousCombo {
             // The Carbon registration is the source of truth. If the new combo is
             // rejected, keep Settings aligned with the combo HotkeyManager restored.
+            rollbackSummonCombo = previousCombo
             settings.setShortcut(previousCombo, for: .summon)
         }
         panelState.globalHotkeyFailed = !ok

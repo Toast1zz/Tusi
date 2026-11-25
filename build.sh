@@ -254,9 +254,18 @@ for arg in "$@"; do
             DO_OPEN=1
             ;;
         install)
-            # Debug loop: install into /Applications.
+            # Debug loop: install into /Applications without clobbering a running bundle mid-flight.
+            if pgrep -x Tusi >/dev/null 2>&1; then
+                osascript -e 'tell application id "com.tusi.app" to quit' >/dev/null 2>&1 || killall Tusi >/dev/null 2>&1 || true
+                for _ in {1..20}; do
+                    pgrep -x Tusi >/dev/null 2>&1 || break
+                    sleep 0.1
+                done
+            fi
+            rm -rf /Applications/Tusi.app.new
+            cp -R "$APP" /Applications/Tusi.app.new
             rm -rf /Applications/Tusi.app
-            cp -R "$APP" /Applications/Tusi.app
+            mv /Applications/Tusi.app.new /Applications/Tusi.app
             INSTALLED=1
             echo "✓ 已安装到 /Applications/Tusi.app"
             keychain_partition_hint

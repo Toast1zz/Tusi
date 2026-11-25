@@ -60,24 +60,22 @@ enum ManagedProcess {
         handle.readabilityHandler = { file in
             buffer.append(file.availableData)
         }
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            exited.signal()
+        }
         defer {
+            process.terminationHandler = nil
             handle.readabilityHandler = nil
             try? handle.close()
         }
 
         try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            usleep(50_000)
-        }
-        if process.isRunning {
+        if exited.wait(timeout: .now() + timeout) == .timedOut, process.isRunning {
             process.terminate()
-            let killBy = Date().addingTimeInterval(terminateGrace)
-            while process.isRunning, Date() < killBy {
-                usleep(50_000)
-            }
-            if process.isRunning {
+            if exited.wait(timeout: .now() + terminateGrace) == .timedOut, process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 1)
             }
         }
         process.waitUntilExit()

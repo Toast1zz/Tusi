@@ -10,8 +10,16 @@ struct LocalTranslationModel: Identifiable, Equatable, Sendable {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
             .filter { $0.pathExtension.lowercased() == "gguf"
                 && !$0.lastPathComponent.lowercased().contains("mmproj")
-                && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+                && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+                && hasGGUFMagic($0) }
             .map { Self(url: $0) }.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+    }
+
+    private static func hasGGUFMagic(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 4) else { return false }
+        return header == Data([0x47, 0x47, 0x55, 0x46]) // "GGUF"
     }
 }
 
@@ -102,9 +110,15 @@ final class LocalModelManager: ObservableObject {
         models = (try? await service.catalog()) ?? []
         selectedID = (try? await service.selectedModel().id) ?? ""
         if let settings, !selectedID.isEmpty {
-            settings.profiles[SettingsStore.localProfileIndex].model = selectedID
-            settings.profiles[SettingsStore.localProfileIndex].baseURL = "http://127.0.0.1:8080/v1"
-            settings.profiles[SettingsStore.localProfileIndex].outputProtocolPreference = .plainText
+            var local = settings.profiles[SettingsStore.localProfileIndex]
+            local.model = selectedID
+            if local.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                local.baseURL = "http://127.0.0.1:8080/v1"
+                local.outputProtocolPreference = .plainText
+            }
+            if settings.profiles[SettingsStore.localProfileIndex] != local {
+                settings.profiles[SettingsStore.localProfileIndex] = local
+            }
         }
     }
 

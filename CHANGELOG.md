@@ -2,6 +2,24 @@
 
 All notable changes to Tusi are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.1] - 2026-11-25
+
+### Changed
+
+- Editing Additional Instructions in Settings no longer triggers background re-translations on intermediate keystrokes; changes take effect once when returning to the translator or pressing Return.
+- `./build.sh install` now quits any running Tusi instance cleanly and swaps `/Applications/Tusi.app` atomically.
+
+### Fixed
+
+- SSE streams that use CRLF (`\r\n`) line endings now complete cleanly at `data: [DONE]` instead of failing with an invalid-response error.
+- Smart quotes preserve opening/closing orientation across CJK single quotes following Latin words, nested quotes, dashes (`—`, `–`, `-`), Chinese ellipses (`……`), and unclosed quotes separated by blank lines.
+- Saving service or Jev API keys flushes Keychain writes synchronously so the saved indicator and Keychain errors stay aligned, and reverting a key edit clears stale pending writes.
+- Selecting a local model in the picker updates only the model field of an open draft and preserves custom local endpoints and output-protocol settings.
+- Stopping an in-flight online second opinion no longer re-copies the previous translation to the clipboard, inspecting a history entry no longer overwrites the global default tone, and co-occurring result status notices are no longer mutually hidden.
+- Update version comparison strips `+` build metadata before splitting `-` prereleases, and redirect handling blocks `HTTPS` to `HTTP` scheme downgrades.
+- Local model discovery verifies the 4-byte `GGUF` header so empty or corrupt `.gguf` files are ignored, and helper process execution wakes via termination signals rather than polling.
+- Result and history scroll views track the bottom edge on macOS 14, icon-only controls and the automatic update switch expose VoiceOver labels, and duplicate `"本地模型"` entries in `Localizable.strings` are removed.
+
 ## [1.21.0] - 2026-11-23
 
 ### Added

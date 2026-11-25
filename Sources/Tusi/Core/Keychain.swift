@@ -131,6 +131,13 @@ enum Keychain {
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            let retryStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            guard retryStatus == errSecSuccess else {
+                throw KeychainError.operationFailed(retryStatus)
+            }
+            return
+        }
         guard addStatus == errSecSuccess else {
             throw KeychainError.operationFailed(addStatus)
         }

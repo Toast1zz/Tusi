@@ -54,26 +54,42 @@ enum SmartQuotes {
             let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
             switch character {
             case "\"":
-                let opening = isOpening(previous: previous, next: next, isOpen: doubleIsOpen)
+                let opening = !doubleIsOpen
                 doubleIsOpen = opening
-                result.append(opening ? "\u{201C}" : "\u{201D}")
+                let emitted: Character = opening ? "\u{201C}" : "\u{201D}"
+                result.append(emitted)
+                previous = emitted
             case "'":
-                // A straight quote between Latin word characters is an apostrophe, not a
-                // quote mark: don’t, it’s, teams’ — never a nesting delimiter.
-                if let previous, (previous.isLetter || previous.isNumber), !isCJK(previous),
-                   !(next.map(isCJK) ?? false) {
-                    result.append("\u{2019}")
-                } else if let next, next.isNumber, !(previous.map { $0.isLetter || $0.isNumber } ?? false) {
-                    result.append("\u{2019}")  // elision: the ’90s
+                let prevIsLatin = previous.map(isLatinWordChar) ?? false
+                let nextIsLatin = next.map(isLatinWordChar) ?? false
+                let emitted: Character
+                // Keep intraword apostrophes (don’t, it’s, O’Neill) and unpaired leading/trailing
+                // apostrophes (the ’90s, teams’) out of quote pairing state.
+                if prevIsLatin && nextIsLatin {
+                    emitted = "\u{2019}"
+                } else if !singleIsOpen, let next, next.isNumber, !prevIsLatin,
+                          !hasClosingSingleQuoteForToken(in: characters, codeFlags: codeFlags, from: index + 1) {
+                    emitted = "\u{2019}"
+                } else if !singleIsOpen, prevIsLatin, !(next.map(isCJK) ?? false) {
+                    emitted = "\u{2019}"
                 } else {
-                    let opening = isOpening(previous: previous, next: next, isOpen: singleIsOpen)
+                    let opening = !singleIsOpen
                     singleIsOpen = opening
-                    result.append(opening ? "\u{2018}" : "\u{2019}")
+                    emitted = opening ? "\u{2018}" : "\u{2019}"
                 }
+                result.append(emitted)
+                previous = emitted
             default:
                 result.append(character)
+                previous = character
+                // Reset quote parity across blank lines so an unclosed quote never
+                // inverts later paragraphs.
+                if character.isNewline,
+                   isFollowedByBlankLine(in: characters, codeFlags: codeFlags, after: index) {
+                    doubleIsOpen = false
+                    singleIsOpen = false
+                }
             }
-            previous = character
             index += 1
         }
         return result
@@ -135,14 +151,33 @@ enum SmartQuotes {
         return flags
     }
 
-    /// Latin text puts a space before an opening quote, so the preceding character settles
-    /// it. CJK text doesn't — 他说“你好” has the quote flush against the character — so there
-    /// the only reliable signal is whether a quote is currently open.
-    private static func isOpening(previous: Character?, next: Character?, isOpen: Bool) -> Bool {
-        guard let previous else { return true }
-        if isCJK(previous) || (next.map(isCJK) ?? false) { return !isOpen }
-        if previous.isWhitespace { return true }
-        return "([{<\u{201C}\u{2018}—–-".contains(previous)
+    private static func isLatinWordChar(_ character: Character) -> Bool {
+        (character.isLetter || character.isNumber) && !isCJK(character)
+    }
+
+    private static func hasClosingSingleQuoteForToken(
+        in characters: [Character],
+        codeFlags: [Bool],
+        from start: Int
+    ) -> Bool {
+        var cursor = start
+        while cursor < characters.count, !codeFlags[cursor], isLatinWordChar(characters[cursor]) {
+            cursor += 1
+        }
+        return cursor < characters.count && !codeFlags[cursor] && characters[cursor] == "'"
+    }
+
+    private static func isFollowedByBlankLine(
+        in characters: [Character],
+        codeFlags: [Bool],
+        after newlineIndex: Int
+    ) -> Bool {
+        var cursor = newlineIndex + 1
+        while cursor < characters.count, !codeFlags[cursor],
+              characters[cursor] == " " || characters[cursor] == "\t" {
+            cursor += 1
+        }
+        return cursor < characters.count && !codeFlags[cursor] && characters[cursor].isNewline
     }
 
     private static func isCJK(_ character: Character) -> Bool {

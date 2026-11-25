@@ -63,27 +63,90 @@ final class MotionConventionTests: XCTestCase {
     /// Strips `//` comments and string literals so a rule matches real code, not prose
     /// about the rule. (Half this file's own subject matter is discussed in comments in
     /// the very files being scanned.)
-    private func code(_ line: String) -> String {
-        var out = ""
-        var inString = false
-        var previous: Character?
-        var index = line.startIndex
-        while index < line.endIndex {
-            let character = line[index]
-            if character == "\"", previous != "\\" {
-                inString.toggle()
-                index = line.index(after: index)
-                previous = character
-                continue
+    /// Strips `//` comments, `/* ... */` block comments (including nested), single-line
+    /// string literals, and `"""..."""` multiline string literals so rules match real code.
+    private static func strippedLines(from lines: [String]) -> [String] {
+        var blockCommentDepth = 0
+        var inMultilineString = false
+        var cleaned: [String] = []
+        cleaned.reserveCapacity(lines.count)
+
+        for line in lines {
+            var out = ""
+            var inString = false
+            var index = line.startIndex
+
+            while index < line.endIndex {
+                let nextIndex = line.index(after: index)
+
+                if blockCommentDepth > 0 {
+                    if line[index] == "/", nextIndex < line.endIndex, line[nextIndex] == "*" {
+                        blockCommentDepth += 1
+                        index = line.index(after: nextIndex)
+                        continue
+                    }
+                    if line[index] == "*", nextIndex < line.endIndex, line[nextIndex] == "/" {
+                        blockCommentDepth -= 1
+                        index = line.index(after: nextIndex)
+                        continue
+                    }
+                    index = nextIndex
+                    continue
+                }
+
+                if inMultilineString {
+                    if line[index...].hasPrefix("\"\"\"") {
+                        let prev = index > line.startIndex ? line[line.index(before: index)] : nil
+                        if prev != "\\" {
+                            inMultilineString = false
+                            index = line.index(index, offsetBy: 3)
+                            continue
+                        }
+                    }
+                    index = nextIndex
+                    continue
+                }
+
+                if inString {
+                    if line[index] == "\\" {
+                        if nextIndex < line.endIndex {
+                            index = line.index(after: nextIndex)
+                            continue
+                        }
+                    } else if line[index] == "\"" {
+                        inString = false
+                    }
+                    index = nextIndex
+                    continue
+                }
+
+                if line[index] == "/", nextIndex < line.endIndex {
+                    if line[nextIndex] == "/" { break }
+                    if line[nextIndex] == "*" {
+                        blockCommentDepth = 1
+                        index = line.index(after: nextIndex)
+                        continue
+                    }
+                }
+
+                if line[index...].hasPrefix("\"\"\"") {
+                    inMultilineString = true
+                    index = line.index(index, offsetBy: 3)
+                    continue
+                }
+
+                if line[index] == "\"" {
+                    inString = true
+                    index = nextIndex
+                    continue
+                }
+
+                out.append(line[index])
+                index = nextIndex
             }
-            if !inString, character == "/", line.index(after: index) < line.endIndex, line[line.index(after: index)] == "/" {
-                break
-            }
-            if !inString { out.append(character) }
-            previous = character
-            index = line.index(after: index)
+            cleaned.append(out)
         }
-        return out
+        return cleaned
     }
 
     private func scan(
@@ -93,9 +156,10 @@ final class MotionConventionTests: XCTestCase {
     ) throws -> [Violation] {
         var violations: [Violation] = []
         for file in try swiftSources() where !skipped.contains(file.name) {
-            for (index, line) in file.lines.enumerated() {
-                guard predicate(code(line)), !isExcepted(file.lines, index) else { continue }
-                violations.append(Violation(file: file.path, line: index + 1, text: line, rule: rule))
+            let cleanedLines = Self.strippedLines(from: file.lines)
+            for (index, cleaned) in cleanedLines.enumerated() {
+                guard predicate(cleaned), !isExcepted(file.lines, index) else { continue }
+                violations.append(Violation(file: file.path, line: index + 1, text: file.lines[index], rule: rule))
             }
         }
         return violations
@@ -190,5 +254,20 @@ final class MotionConventionTests: XCTestCase {
             Self.expectedExceptionCount,
             "The number of `motion-exception:` escape hatches changed. Each one opts a call site out of the motion system, so adding or removing one should be a deliberate, explained change — update `expectedExceptionCount` in the same commit that justifies it."
         )
+    }
+
+    func testScannerStripsMultilineStringsAndBlockComments() {
+        let sample = [
+            "/* nested /* withAnimation { } */ still comment",
+            ".snappy */",
+            "let prompt = \"\"\"",
+            "withAnimation(.easeInOut)",
+            "\"\"\"",
+            "let actual = foo()"
+        ]
+        let stripped = Self.strippedLines(from: sample)
+        XCTAssertFalse(stripped.joined(separator: "\n").contains("withAnimation"))
+        XCTAssertFalse(stripped.joined(separator: "\n").contains(".snappy"))
+        XCTAssertTrue(stripped.last?.contains("let actual = foo()") == true)
     }
 }

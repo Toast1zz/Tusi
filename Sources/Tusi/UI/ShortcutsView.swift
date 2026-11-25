@@ -80,6 +80,7 @@ struct ShortcutsView: View {
             }
             .buttonStyle(.plain)
             .help(settings.commandLabel(L("返回"), action: .close))
+            .accessibilityLabel(L("返回"))
 
             Text("快捷键")
                 .font(Theme.title)
@@ -154,6 +155,7 @@ struct ShortcutsView: View {
                 }
                 .buttonStyle(.plain)
                 .help(L("清除此快捷键"))
+                .accessibilityLabel(L("清除此快捷键"))
                 .opacity(revealed ? 1 : 0)
                 .allowsHitTesting(revealed)
             }
@@ -171,6 +173,7 @@ struct ShortcutsView: View {
                 // key SwiftUI would auto-generate for an interpolated LocalizedStringKey
                 // by hand (in Localizable.strings) is easy to get subtly wrong.
                 .help(String(format: L("恢复默认 %@"), action.defaultCombo.display))
+                .accessibilityLabel(String(format: L("恢复默认 %@"), action.defaultCombo.display))
                 .opacity(revealed ? 1 : 0)
                 .allowsHitTesting(revealed)
             }

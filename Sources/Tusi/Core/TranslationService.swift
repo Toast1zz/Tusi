@@ -452,6 +452,7 @@ enum TranslationService {
                         for try await byte in bytes {
                             try Task.checkCancellation()
                             if byte == 0x0A {
+                                if lineData.last == 0x0D { lineData.removeLast() }
                                 if try handle(lineData) { break }
                                 lineData.removeAll(keepingCapacity: true)
                             } else {
@@ -462,6 +463,7 @@ enum TranslationService {
                             }
                         }
                         if !parser.sawDone, !lineData.isEmpty {
+                            if lineData.last == 0x0D { lineData.removeLast() }
                             _ = try handle(lineData)
                         }
                         if let payload = try parser.finish(host: config.displayHost) {
@@ -719,9 +721,9 @@ enum TranslationService {
         }
 
         mutating func process(_ rawLine: String) throws -> LineResult {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard line.hasPrefix("data:") else { return LineResult() }
-            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
             if payload == "[DONE]" {
                 sawDone = true
                 return LineResult(done: true)
@@ -871,6 +873,11 @@ enum TranslationService {
 final class RedirectPolicyDelegate: NSObject, URLSessionTaskDelegate {
     static func request(original: URLRequest, redirected: URLRequest) -> URLRequest? {
         guard let originalURL = original.url, let redirectedURL = redirected.url else {
+            return nil
+        }
+        // Never allow an HTTPS endpoint to downgrade a request to plaintext HTTP.
+        if originalURL.scheme?.lowercased() == "https",
+           redirectedURL.scheme?.lowercased() != "https" {
             return nil
         }
 
